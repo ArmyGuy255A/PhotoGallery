@@ -1,0 +1,37 @@
+﻿@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>@ViewData["Title"] - PhotoGallery</title>
+    <meta charset="utf-8"/>
+    <base href="./">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <link href="https://cdn.jsdelivr.net/npm/@@coreui/coreui-pro@5.10.0/dist/css/coreui.min.css" rel="stylesheet" integrity="sha384-iFYnumxmAfPWEvBBHVgQ1pcH7Bj9XLrhznQ6DpVFtF3dGwlEAqe4cmd4NY4cJALM" crossorigin="anonymous">
+
+    <link rel="stylesheet" href="~/css/site.css"/>
+</head>
+
+<body>
+@await Html.PartialAsync("_SidebarPartial")
+<div class="wrapper d-flex flex-column min-vh-100 layout-with-sidebar bg-light">
+    @await Html.PartialAsync("_NavbarPartial")
+
+    <div class="body flex-grow-1 px-3">
+        <div class="container-lg">
+            @await Html.PartialAsync("_BreadcrumbPartial")
+            @RenderBody()
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div>© 2025 PhotoGallery</div>
+        <div class="ms-auto">Powered by <a href="https://coreui.io/">CoreUI</a></div>
+    </footer>
+</div>
+@await Html.PartialAsync("_ScriptsPartial")
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

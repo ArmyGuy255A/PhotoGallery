@@ -1,0 +1,12 @@
+.sidenav-container {
+  flex: 1;
+  height: 100%;
+  display: flex;
+
+  mat-sidenav-content {
+    background-color: red;
+    height: 100%;
+    width: 100%;
+    padding: 16px;
+  }
+}

@@ -1,0 +1,22 @@
+﻿<!DOCTYPE html>
+
+<html>
+<head>
+    <title>Login!</title>
+</head>
+<body>
+<div>
+    @* Show a button to login via Google using Bootstrap v5.3.3*@
+    @* The asp.net button should hit the "https://localhost:7034/api/auth/external-login" endpoint via a  POST request *@
+    @* using the following data: *@
+    @* { *@
+    @* "Provider": "Google", *@
+    @* "IdToken" : "a JWT issued by Google" *@
+    @* } *@
+    <h2>Login</h2>
+
+    <a class="btn btn-primary" asp-controller="Login" asp-action="GoogleLogin">Login with Google</a>
+
+</div>
+</body>
+</html>

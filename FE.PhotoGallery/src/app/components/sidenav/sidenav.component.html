@@ -1,0 +1,13 @@
+<mat-sidenav-container class="sidenav-container">
+  <mat-sidenav mode="over" [opened]="globalStateService.sidebarOpen" fixedTopGap="50" fixedInViewport="true">
+    <mat-nav-list>
+      @for (mod of globalStateService.modules; track mod) {
+        <a mat-list-item>{{ mod }}</a>
+      }
+    </mat-nav-list>
+  </mat-sidenav>
+
+  <mat-sidenav-content >
+    <router-outlet />
+  </mat-sidenav-content>
+</mat-sidenav-container>

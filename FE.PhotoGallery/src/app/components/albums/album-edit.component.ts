@@ -1,0 +1,304 @@
+import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { ActivatedRoute, Router } from '@angular/router';
+import { ReactiveFormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
+import { environment } from '../../../environments/environment';
+
+@Component({
+  selector: 'app-album-edit',
+  standalone: true,
+  imports: [CommonModule, ReactiveFormsModule],
+  template: `
+    <div class="edit-album-container">
+      <div class="card">
+        <div class="card-header">
+          <h1>Edit Album</h1>
+          <p class="subtitle">Update your album details</p>
+        </div>
+
+        <div class="loading" *ngIf="isLoading">
+          <p>Loading album...</p>
+        </div>
+
+        <form [formGroup]="albumForm" (ngSubmit)="onSubmit()" class="form" *ngIf="!isLoading">
+          <div class="form-group">
+            <label for="title">Album Title *</label>
+            <input
+              id="title"
+              type="text"
+              formControlName="title"
+              placeholder="e.g., Summer Vacation 2024"
+              class="form-input"
+              [class.error]="isFieldInvalid('title')"
+            />
+            <span class="error-message" *ngIf="isFieldInvalid('title')">
+              Album title is required and must be at least 3 characters
+            </span>
+          </div>
+
+          <div class="form-group">
+            <label for="description">Description</label>
+            <textarea
+              id="description"
+              formControlName="description"
+              placeholder="Optional: Add a description for this album"
+              class="form-textarea"
+              rows="4"
+            ></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" (click)="onCancel()" class="btn btn-secondary">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary" [disabled]="albumForm.invalid || isSubmitting">
+              <span *ngIf="!isSubmitting">Save Changes</span>
+              <span *ngIf="isSubmitting">Saving...</span>
+            </button>
+          </div>
+
+          <div class="error-alert" *ngIf="errorMessage">
+            <strong>Error:</strong> {{ errorMessage }}
+          </div>
+
+          <div class="success-alert" *ngIf="successMessage">
+            <strong>Success!</strong> {{ successMessage }}
+          </div>
+        </form>
+      </div>
+    </div>
+  `,
+  styles: [`
+    .edit-album-container {
+      min-height: 100vh;
+      background: #f5f7fa;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 16px rgba(0, 0, 0, 0.1);
+      max-width: 500px;
+      width: 100%;
+      padding: 32px;
+    }
+
+    .card-header {
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .card-header h1 {
+      margin: 0 0 8px 0;
+      font-size: 24px;
+      color: #333;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: #999;
+      font-size: 14px;
+    }
+
+    .loading {
+      padding: 24px;
+      text-align: center;
+      color: #999;
+    }
+
+    .form {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .form-group label {
+      font-weight: 500;
+      color: #333;
+      font-size: 14px;
+    }
+
+    .form-input,
+    .form-textarea {
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+
+    .form-input:focus,
+    .form-textarea:focus {
+      outline: none;
+      border-color: #3498db;
+      box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+    }
+
+    .form-input.error,
+    .form-textarea.error {
+      border-color: #e74c3c;
+    }
+
+    .error-message {
+      font-size: 12px;
+      color: #e74c3c;
+    }
+
+    .form-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.3s;
+    }
+
+    .btn-primary {
+      background: #3498db;
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: #2980b9;
+    }
+
+    .btn-primary:disabled {
+      background: #bdc3c7;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: #ecf0f1;
+      color: #333;
+    }
+
+    .btn-secondary:hover {
+      background: #d5dbdb;
+    }
+
+    .error-alert {
+      padding: 12px;
+      background: #fadbd8;
+      color: #922b21;
+      border-left: 4px solid #e74c3c;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .success-alert {
+      padding: 12px;
+      background: #d5f4e6;
+      color: #186a3b;
+      border-left: 4px solid #27ae60;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+  `]
+})
+export class AlbumEditComponent implements OnInit {
+  albumForm!: FormGroup;
+  isLoading = true;
+  isSubmitting = false;
+  errorMessage = '';
+  successMessage = '';
+  albumId: string = '';
+
+  constructor(
+    private fb: FormBuilder,
+    private route: ActivatedRoute,
+    private router: Router,
+    private http: HttpClient
+  ) {
+    this.albumForm = this.fb.group({
+      title: ['', [Validators.required, Validators.minLength(3)]],
+      description: ['']
+    });
+  }
+
+  ngOnInit(): void {
+    this.route.params.subscribe(params => {
+      this.albumId = params['id'];
+      if (this.albumId) {
+        this.loadAlbum();
+      }
+    });
+  }
+
+  loadAlbum(): void {
+    const apiUrl = environment.apiUrl || '';
+    this.http.get<any>(`${apiUrl}/api/albums/${this.albumId}`).subscribe({
+      next: (album) => {
+        this.albumForm.patchValue({
+          title: album.title,
+          description: album.description || ''
+        });
+        this.isLoading = false;
+      },
+      error: (error) => {
+        console.error('Error loading album:', error);
+        this.errorMessage = 'Failed to load album. Please try again.';
+        this.isLoading = false;
+      }
+    });
+  }
+
+  isFieldInvalid(fieldName: string): boolean {
+    const field = this.albumForm.get(fieldName);
+    return !!(field && field.invalid && (field.dirty || field.touched));
+  }
+
+  onSubmit(): void {
+    if (this.albumForm.invalid) {
+      this.errorMessage = 'Please fill in all required fields';
+      return;
+    }
+
+    this.isSubmitting = true;
+    this.errorMessage = '';
+    this.successMessage = '';
+
+    const formData = this.albumForm.value;
+    const apiUrl = environment.apiUrl || '';
+    const endpoint = `${apiUrl}/api/albums/${this.albumId}`;
+
+    this.http.put(endpoint, formData).subscribe({
+      next: () => {
+        this.isSubmitting = false;
+        this.successMessage = 'Album updated successfully!';
+        setTimeout(() => {
+          this.router.navigate(['/dashboard']);
+        }, 1000);
+      },
+      error: (error) => {
+        this.isSubmitting = false;
+        console.error('Error updating album:', error);
+        const errorMsg = error?.error?.message || error?.error || error?.message || 'Failed to update album. Please try again.';
+        this.errorMessage = String(errorMsg);
+      }
+    });
+  }
+
+  onCancel(): void {
+    this.router.navigate(['/dashboard']);
+  }
+}

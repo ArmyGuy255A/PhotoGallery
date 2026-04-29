@@ -1,0 +1,117 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore ./PhotoGallery/PhotoGallery.csproj
+    
+    - name: Build
+      run: dotnet build ./PhotoGallery/PhotoGallery.csproj --no-restore --configuration Release
+    
+    - name: Run unit tests
+      run: dotnet test ./PhotoGallery.Tests/PhotoGallery.Tests.csproj --no-restore --verbosity normal
+    
+    - name: Publish
+      run: dotnet publish ./PhotoGallery/PhotoGallery.csproj -c Release -o ./publish
+
+  build-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: 'FE.PhotoGallery/package-lock.json'
+    
+    - name: Install dependencies
+      run: cd FE.PhotoGallery && npm ci
+    
+    - name: Build
+      run: cd FE.PhotoGallery && npm run build
+    
+    - name: Run unit tests
+      run: cd FE.PhotoGallery && npm test -- --watch=false
+      continue-on-error: true
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-build
+        path: FE.PhotoGallery/dist/
+
+  lint-backend:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Analyze code style
+      run: dotnet build ./PhotoGallery/PhotoGallery.csproj --no-restore /p:TreatWarningsAsErrors=true
+      continue-on-error: true
+
+  build-docker:
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build backend Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./PhotoGallery
+        file: ./PhotoGallery/Dockerfile.backend
+        push: false
+        tags: photogallery-backend:${{ github.sha }}
+    
+    - name: Build frontend Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./FE.PhotoGallery
+        file: ./FE.PhotoGallery/Dockerfile
+        push: false
+        tags: photogallery-frontend:${{ github.sha }}
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Scan for vulnerabilities
+      run: dotnet list ./PhotoGallery/PhotoGallery.csproj package --vulnerable --include-transitive
+      continue-on-error: true
