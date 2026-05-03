@@ -4,6 +4,7 @@ namespace PhotoGallery.Interfaces;
 
 /// <summary>
 /// Repository for accessing processing queue data
+/// Reference: D003 (Image Processing with Compression Profiles)
 /// </summary>
 public interface IProcessingQueueRepository : IRepository<ProcessingQueue>
 {
@@ -20,10 +21,10 @@ public interface IProcessingQueueRepository : IRepository<ProcessingQueue>
     /// <summary>
     /// Mark a job as completed
     /// </summary>
-    Task MarkCompleteAsync(string processingQueueId);
+    Task MarkCompleteAsync(Guid processingQueueId);
 
     /// <summary>
     /// Mark a job as failed with error message
     /// </summary>
-    Task MarkFailedAsync(string processingQueueId, string errorMessage);
+    Task MarkFailedAsync(Guid processingQueueId, string errorMessage);
 }

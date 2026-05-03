@@ -4,6 +4,10 @@ using PhotoGallery.Models;
 
 namespace PhotoGallery.Data.Configurations;
 
+/// <summary>
+/// Entity Framework configuration for ProcessingQueue.
+/// Reference: D003 (Image Processing with Compression Profiles)
+/// </summary>
 public class ProcessingQueueConfiguration : IEntityTypeConfiguration<ProcessingQueue>
 {
     public void Configure(EntityTypeBuilder<ProcessingQueue> builder)
@@ -11,24 +15,41 @@ public class ProcessingQueueConfiguration : IEntityTypeConfiguration<ProcessingQ
         builder.HasKey(pq => pq.Id);
 
         builder.Property(pq => pq.Id)
-            .HasMaxLength(36);
+            .ValueGeneratedOnAdd();
 
-        builder.Property(pq => pq.PhotoId);
+        builder.Property(pq => pq.PhotoId)
+            .IsRequired();
 
         builder.Property(pq => pq.Status)
             .HasConversion<int>()
             .HasDefaultValue(ProcessingStatus.Pending);
 
+        builder.Property(pq => pq.CreatedAt)
+            .HasDefaultValueSql("GETUTCDATE()")
+            .IsRequired();
+
+        builder.Property(pq => pq.CompletedAt)
+            .IsRequired(false);
+
         builder.Property(pq => pq.ErrorMessage)
-            .HasMaxLength(500);
+            .HasMaxLength(500)
+            .IsRequired(false);
 
         builder.HasOne(pq => pq.Photo)
             .WithMany()
             .HasForeignKey(pq => pq.PhotoId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.HasMany(pq => pq.Items)
+            .WithOne(item => item.ProcessingQueue)
+            .HasForeignKey(item => item.ProcessingQueueId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Indexes for common queries
         builder.HasIndex(pq => pq.Status);
         builder.HasIndex(pq => pq.PhotoId).IsUnique();
-        builder.HasIndex(pq => pq.QueuedDate);
+        builder.HasIndex(pq => pq.CreatedAt);
+        builder.HasIndex(pq => pq.Status)
+            .HasFilter("[Status] = 0 OR [Status] = 1"); // Index for Pending or Processing
     }
 }

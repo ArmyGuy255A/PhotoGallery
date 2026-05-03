@@ -59,14 +59,14 @@ public class ImageProcessingService : IImageProcessor
             if (existing != null)
             {
                 _logger.LogInformation("Photo {PhotoId} is already queued", photoId);
-                return existing.Id;
+                return existing.Id.ToString();
             }
 
             var queueEntry = new ProcessingQueue { PhotoId = photoGuid };
             await queueRepo.AddAsync(queueEntry);
             
             _logger.LogInformation("Photo {PhotoId} queued for processing", photoId);
-            return queueEntry.Id;
+            return queueEntry.Id.ToString();
         }
     }
 

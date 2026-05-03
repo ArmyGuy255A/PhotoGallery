@@ -5,9 +5,13 @@ using PhotoGallery.Models;
 
 namespace PhotoGallery.Data.Repositories;
 
+/// <summary>
+/// Repository for ProcessingQueue entities.
+/// Reference: D003 (Image Processing with Compression Profiles)
+/// </summary>
 public class ProcessingQueueRepository : Repository<ProcessingQueue>, IProcessingQueueRepository
 {
-    private readonly ApplicationDbContext _context;
+    private new readonly ApplicationDbContext _context; // Use 'new' to shadow base class _context
 
     public ProcessingQueueRepository(ApplicationDbContext context) : base(context)
     {
@@ -18,36 +22,34 @@ public class ProcessingQueueRepository : Repository<ProcessingQueue>, IProcessin
     {
         return await _context.ProcessingQueues
             .Where(pq => pq.Status == ProcessingStatus.Pending)
-            .OrderBy(pq => pq.QueuedDate)
+            .Include(pq => pq.Items)
+            .OrderBy(pq => pq.CreatedAt)
             .ToListAsync();
     }
 
     public async Task<ProcessingQueue?> GetByPhotoIdAsync(Guid photoId)
     {
         return await _context.ProcessingQueues
+            .Include(pq => pq.Items)
             .FirstOrDefaultAsync(pq => pq.PhotoId == photoId);
     }
 
-    public async Task MarkCompleteAsync(string processingQueueId)
+    public async Task MarkCompleteAsync(Guid processingQueueId)
     {
         var item = await _context.ProcessingQueues.FindAsync(processingQueueId);
         if (item != null)
         {
-            item.Status = ProcessingStatus.Complete;
-            item.ProcessedDate = DateTime.UtcNow;
+            item.MarkComplete();
             await _context.SaveChangesAsync();
         }
     }
 
-    public async Task MarkFailedAsync(string processingQueueId, string errorMessage)
+    public async Task MarkFailedAsync(Guid processingQueueId, string errorMessage)
     {
         var item = await _context.ProcessingQueues.FindAsync(processingQueueId);
         if (item != null)
         {
-            item.Status = ProcessingStatus.Error;
-            item.ErrorMessage = errorMessage;
-            item.ProcessedDate = DateTime.UtcNow;
-            item.RetryCount++;
+            item.MarkError(errorMessage);
             await _context.SaveChangesAsync();
         }
     }

@@ -274,16 +274,15 @@ public class ProcessingQueueTests
         // Arrange & Act
         var queueItem = new ProcessingQueue
         {
-            Id = Guid.NewGuid().ToString(),
+            Id = Guid.NewGuid(),
             PhotoId = Guid.NewGuid(),
             Status = ProcessingStatus.Pending,
-            QueuedDate = DateTime.UtcNow,
-            RetryCount = 0
+            CreatedAt = DateTime.UtcNow
         };
 
         // Assert
         Assert.Equal(ProcessingStatus.Pending, queueItem.Status);
-        Assert.Null(queueItem.ProcessedDate);
+        Assert.Null(queueItem.CompletedAt);
         Assert.Null(queueItem.ErrorMessage);
     }
 
@@ -293,14 +292,14 @@ public class ProcessingQueueTests
         // Arrange
         var queueItem = new ProcessingQueue
         {
-            Id = Guid.NewGuid().ToString(),
+            Id = Guid.NewGuid(),
             PhotoId = Guid.NewGuid(),
             Status = ProcessingStatus.Pending,
-            QueuedDate = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow
         };
 
         // Act
-        queueItem.Status = ProcessingStatus.Processing;
+        queueItem.MarkProcessing();
 
         // Assert
         Assert.Equal(ProcessingStatus.Processing, queueItem.Status);
@@ -312,19 +311,18 @@ public class ProcessingQueueTests
         // Arrange
         var queueItem = new ProcessingQueue
         {
-            Id = Guid.NewGuid().ToString(),
+            Id = Guid.NewGuid(),
             PhotoId = Guid.NewGuid(),
             Status = ProcessingStatus.Pending,
-            QueuedDate = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow
         };
 
         // Act
-        queueItem.Status = ProcessingStatus.Complete;
-        queueItem.ProcessedDate = DateTime.UtcNow;
+        queueItem.MarkComplete();
 
         // Assert
         Assert.Equal(ProcessingStatus.Complete, queueItem.Status);
-        Assert.NotNull(queueItem.ProcessedDate);
+        Assert.NotNull(queueItem.CompletedAt);
     }
 
     [Fact]
@@ -333,21 +331,17 @@ public class ProcessingQueueTests
         // Arrange
         var queueItem = new ProcessingQueue
         {
-            Id = Guid.NewGuid().ToString(),
+            Id = Guid.NewGuid(),
             PhotoId = Guid.NewGuid(),
             Status = ProcessingStatus.Pending,
-            QueuedDate = DateTime.UtcNow,
-            RetryCount = 0
+            CreatedAt = DateTime.UtcNow
         };
 
         // Act
-        queueItem.Status = ProcessingStatus.Error;
-        queueItem.ErrorMessage = "Image format not supported";
-        queueItem.RetryCount = 1;
+        queueItem.MarkError("Image format not supported");
 
         // Assert
         Assert.Equal(ProcessingStatus.Error, queueItem.Status);
         Assert.Equal("Image format not supported", queueItem.ErrorMessage);
-        Assert.Equal(1, queueItem.RetryCount);
     }
 }
