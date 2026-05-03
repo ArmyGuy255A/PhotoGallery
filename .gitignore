@@ -161,6 +161,7 @@ Desktop.ini
 *~
 *.swp
 Logs/
+PhotoGallery/Logs/
 
 # PowerShell temporary files
 *.ps1.bak
