@@ -119,6 +119,9 @@ builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRe
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
 
+// Register consistency checker for validating photo processing completion
+builder.Services.AddScoped<PhotoConsistencyChecker>();
+
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>();
