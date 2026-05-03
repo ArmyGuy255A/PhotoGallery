@@ -36,6 +36,7 @@ Step-by-step guides for developers and operational procedures.
 
 | Document | Purpose | Audience | Links |
 |----------|---------|----------|-------|
+| **⚡ [PRE-IMPLEMENTATION-CHECKLIST.md](./Guides/PRE-IMPLEMENTATION-CHECKLIST.md)** | **MANDATORY checklist before every implementation** | **ALL developers** | 🔗 [TDD Workflow](./Guides/TDD_WORKFLOW.md) • [Design Decisions](./Architecture/DESIGN_DECISIONS.md) |
 | **[TDD_WORKFLOW.md](./Guides/TDD_WORKFLOW.md)** | Complete TDD process guide | Developers | 🔗 [Quick Reference](./Guides/TDD_QUICK_REFERENCE.md) • [Implementation](./Guides/TDD_IMPLEMENTATION_SUMMARY.md) • [Ready to Use](./Guides/TDD_READY_TO_USE.md) • [Design Decisions](./Architecture/DESIGN_DECISIONS.md) |
 | **[TDD_QUICK_REFERENCE.md](./Guides/TDD_QUICK_REFERENCE.md)** | TDD cheat sheet | Developers | 🔗 [Full Workflow](./Guides/TDD_WORKFLOW.md) • [Implementation](./Guides/TDD_IMPLEMENTATION_SUMMARY.md) |
 | **[TDD_IMPLEMENTATION_SUMMARY.md](./Guides/TDD_IMPLEMENTATION_SUMMARY.md)** | TDD overview and benefits | Tech Leads | 🔗 [Workflow](./Guides/TDD_WORKFLOW.md) • [Quick Ref](./Guides/TDD_QUICK_REFERENCE.md) • [Ready to Use](./Guides/TDD_READY_TO_USE.md) |
@@ -63,6 +64,12 @@ Key reference files in project root.
 
 ## 🔄 How Documentation is Used
 
+### ⚡ FOR EVERYONE (Before Any Implementation)
+1. **MANDATORY**: Read `Guides/PRE-IMPLEMENTATION-CHECKLIST.md`
+2. **Complete EVERY checklist item** before writing code
+3. **Consult skills** in order specified by checklist
+4. **Never skip** this step—even for simple features
+
 ### For Architects
 1. **Before making any design decision**, check `Architecture/DESIGN_DECISIONS.md`
 2. **If new decision needed**, consult with user and get approval
@@ -70,12 +77,13 @@ Key reference files in project root.
 4. **Update related documents** (`API_DESIGN.md`, `DATABASE_SCHEMA.md`, etc.)
 
 ### For Backend Developers
-1. **Before implementing**, check `Architecture/DESIGN_DECISIONS.md`
-2. **Follow TDD workflow** from `Guides/TDD_WORKFLOW.md`
-3. **Write tests** that validate design from documentation
-4. **Run all tests** before committing
-5. **Consult architect** for SOLID/DRY validation
-6. **Commit** with reference to design decision
+1. **Before implementing**, complete `Guides/PRE-IMPLEMENTATION-CHECKLIST.md`
+2. **Check `Architecture/DESIGN_DECISIONS.md` for existing patterns**
+3. **Follow TDD workflow** from `Guides/TDD_WORKFLOW.md`
+4. **Write tests** that validate design from documentation
+5. **Run all tests** before committing
+6. **Consult architect** for SOLID/DRY validation
+7. **Commit** with reference to design decision
 
 ### For All Skills
 1. **Always reference** `Architecture/DESIGN_DECISIONS.md` before proposing changes
@@ -83,6 +91,7 @@ Key reference files in project root.
 3. **Never propose** changes that conflict with approved decisions
 4. **Ask user** for design decisions when unclear
 5. **Update documentation** when design changes approved
+6. **Consult PRE-IMPLEMENTATION-CHECKLIST** before every work session
 
 ---
 

@@ -49,11 +49,12 @@ You are the backend developer building PhotoGallery's core business logic, data 
 9. **Documentation** - Update Architecture/ when design changes
 
 **Before writing ANY code**, read these IN THIS ORDER:
-1. **Documentation/Architecture/DESIGN_DECISIONS.md** - Understand existing patterns
-2. **photogallery-architect-skill** - Ask for design if unclear
-3. **photogallery-tdd-unit-testing** - Design test cases FIRST
-4. **clean-architecture-guide** - Understand the three layers and dependency flow
-5. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
+1. **Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md** - MANDATORY checklist for every task
+2. **Documentation/Architecture/DESIGN_DECISIONS.md** - Understand existing patterns
+3. **photogallery-architect-skill** - Ask for design if unclear
+4. **photogallery-tdd-unit-testing** - Design test cases FIRST
+5. **clean-architecture-guide** - Understand the three layers and dependency flow
+6. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
 
 ## The Mandatory Development Workflow
 

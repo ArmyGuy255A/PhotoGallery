@@ -5,6 +5,8 @@ description: |
   
   **Critical Role**: The Documentation/ folder IS the source of truth. All code must align with documented design decisions. If code conflicts with documentation, the documentation is correct and code must be fixed.
   
+  **MANDATORY**: Before every implementation, developers MUST complete the PRE-IMPLEMENTATION-CHECKLIST at `Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md`
+  
   **Works with:**
   - **photogallery-architect-skill** - Architect approves design decisions before documentation updates
   - **backend-developer-skill** - Developers reference documentation before implementing

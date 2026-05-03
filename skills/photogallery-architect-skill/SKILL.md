@@ -19,8 +19,11 @@ description: |
   4. Ensure code matches documented design patterns
   5. Consult this skill whenever creating new services, entities, or patterns
   6. Validate that TDD unit tests properly validate the documented design
+  7. **MANDATORY: Follow the PRE-IMPLEMENTATION-CHECKLIST** (Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md) before every implementation
   
   Do NOT skip this skill—even if you think the code is simple. Better to validate early than find architectural debt later.
+  
+  **Before your next implementation**, read: `Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md`
 ---
 
 # PhotoGallery Architect Skill
