@@ -12,9 +12,14 @@ using PhotoGallery.Models;
 using PhotoGallery.Services;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
+using Serilog;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Serilog
+builder.Host.UseSerilog((context, configuration) =>
+    configuration.ReadFrom.Configuration(context.Configuration));
 
 // Configure listening URLs (defaults to 5105, or use ASPNETCORE_URLS env var if set)
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
@@ -121,6 +126,9 @@ builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
 
 // Register consistency checker for validating photo processing completion
 builder.Services.AddScoped<PhotoConsistencyChecker>();
+
+// Register background service for photo processing
+builder.Services.AddHostedService<PhotoProcessingWorker>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()

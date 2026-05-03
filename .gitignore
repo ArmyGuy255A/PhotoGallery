@@ -160,6 +160,7 @@ Desktop.ini
 *.backup
 *~
 *.swp
+Logs/
 
 # PowerShell temporary files
 *.ps1.bak
