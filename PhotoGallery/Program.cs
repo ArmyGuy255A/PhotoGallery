@@ -114,6 +114,7 @@ builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
 builder.Services.AddScoped<IPhotoRepository, PhotoRepository>();
 builder.Services.AddScoped<IAccessCodeRepository, AccessCodeRepository>();
 builder.Services.AddScoped<IProcessingQueueRepository, ProcessingQueueRepository>();
+builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRepository>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
