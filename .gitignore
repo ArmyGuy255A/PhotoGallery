@@ -206,3 +206,5 @@ playwright-report/
 !appsettings.*.template.json
 !.env.template
 !.env.*.templatetemp/
+PhotoGallery.code-workspace
+*.lscache
