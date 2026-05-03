@@ -16,8 +16,7 @@ namespace PhotoGallery.Services.Processing;
 /// </summary>
 public class ImageProcessingService : IImageProcessor
 {
-    private readonly IProcessingQueueRepository _queueRepository;
-    private readonly IProcessingQueueItemRepository _itemRepository;
+    private readonly IServiceProvider _serviceProvider;
     private readonly IStorageProvider _storageProvider;
     private readonly ILogger<ImageProcessingService> _logger;
     private CancellationTokenSource? _processingCts;
@@ -32,13 +31,11 @@ public class ImageProcessingService : IImageProcessor
     };
 
     public ImageProcessingService(
-        IProcessingQueueRepository queueRepository,
-        IProcessingQueueItemRepository itemRepository,
+        IServiceProvider serviceProvider,
         IStorageProvider storageProvider,
         ILogger<ImageProcessingService> logger)
     {
-        _queueRepository = queueRepository;
-        _itemRepository = itemRepository;
+        _serviceProvider = serviceProvider;
         _storageProvider = storageProvider;
         _logger = logger;
     }
@@ -48,9 +45,13 @@ public class ImageProcessingService : IImageProcessor
     {
         try
         {
+            using var scope = _serviceProvider.CreateScope();
+            var queueRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueRepository>();
+            var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+
             var queue = new ProcessingQueue { PhotoId = photoId };
-            await _queueRepository.AddAsync(queue);
-            await _queueRepository.SaveChangesAsync();
+            await queueRepository.AddAsync(queue);
+            await queueRepository.SaveChangesAsync();
 
             // Create 4 processing items (one for each quality)
             var qualities = new[] { QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High };
@@ -64,9 +65,9 @@ public class ImageProcessingService : IImageProcessor
                     Status = ProcessingStatus.Pending,
                     CreatedAt = DateTime.UtcNow
                 };
-                await _itemRepository.AddAsync(item);
+                await itemRepository.AddAsync(item);
             }
-            await _itemRepository.SaveChangesAsync();
+            await itemRepository.SaveChangesAsync();
 
             _logger.LogInformation("Queued photo {PhotoId} for processing with 4 quality versions", photoId);
             return queue.Id.ToString();
@@ -91,7 +92,10 @@ public class ImageProcessingService : IImageProcessor
     {
         try
         {
-            var pendingItems = await _itemRepository.GetPendingItemsAsync();
+            using var scope = _serviceProvider.CreateScope();
+            var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+
+            var pendingItems = await itemRepository.GetPendingItemsAsync();
 
             foreach (var item in pendingItems)
             {
@@ -100,28 +104,28 @@ public class ImageProcessingService : IImageProcessor
 
                 try
                 {
-                    await ProcessQualityAsync(item, cancellationToken);
-                    await _itemRepository.MarkCompleteAsync(item.Id);
+                    await ProcessQualityAsync(item, itemRepository, cancellationToken);
+                    await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error processing item {ItemId} (photo {PhotoId}, quality {Quality})", 
                         item.Id, item.PhotoId, item.Quality);
-                    await _itemRepository.MarkFailedAsync(item.Id, ex.Message);
+                    await itemRepository.MarkFailedAsync(item.Id, ex.Message);
 
                     // Increment retry if possible
                     if (item.CanRetry)
                     {
                         item.IncrementRetry(ex.Message);
-                        await _itemRepository.UpdateAsync(item);
-                        await _itemRepository.SaveChangesAsync();
+                        await itemRepository.UpdateAsync(item);
+                        await itemRepository.SaveChangesAsync();
                     }
                 }
             }
 
             // Process items ready for retry
-            var retryItems = await _itemRepository.GetReadyForRetryAsync();
+            var retryItems = await itemRepository.GetReadyForRetryAsync();
             foreach (var item in retryItems)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -130,24 +134,24 @@ public class ImageProcessingService : IImageProcessor
                 try
                 {
                     item.Status = ProcessingStatus.Pending;
-                    await _itemRepository.UpdateAsync(item);
-                    await _itemRepository.SaveChangesAsync();
+                    await itemRepository.UpdateAsync(item);
+                    await itemRepository.SaveChangesAsync();
 
-                    await ProcessQualityAsync(item, cancellationToken);
-                    await _itemRepository.MarkCompleteAsync(item.Id);
+                    await ProcessQualityAsync(item, itemRepository, cancellationToken);
+                    await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
                         item.PhotoId, item.Quality, item.RetryCount + 1);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Retry failed for item {ItemId}", item.Id);
-                    await _itemRepository.MarkFailedAsync(item.Id, ex.Message);
+                    await itemRepository.MarkFailedAsync(item.Id, ex.Message);
 
                     if (item.CanRetry)
                     {
                         item.IncrementRetry(ex.Message);
-                        await _itemRepository.UpdateAsync(item);
-                        await _itemRepository.SaveChangesAsync();
+                        await itemRepository.UpdateAsync(item);
+                        await itemRepository.SaveChangesAsync();
                     }
                 }
             }
@@ -159,12 +163,12 @@ public class ImageProcessingService : IImageProcessor
     }
 
     /// <summary>Process a single quality version of a photo</summary>
-    private async Task ProcessQualityAsync(ProcessingQueueItem item, CancellationToken cancellationToken)
+    private async Task ProcessQualityAsync(ProcessingQueueItem item, IProcessingQueueItemRepository itemRepository, CancellationToken cancellationToken)
     {
         // Mark as processing
         item.Status = ProcessingStatus.Processing;
-        await _itemRepository.UpdateAsync(item);
-        await _itemRepository.SaveChangesAsync();
+        await itemRepository.UpdateAsync(item);
+        await itemRepository.SaveChangesAsync();
 
         // Get original from storage
         var originalPath = $"photogallery/{item.PhotoId}/original.jpg";
@@ -210,11 +214,15 @@ public class ImageProcessingService : IImageProcessor
     {
         try
         {
-            var queue = await _queueRepository.GetByIdAsync(queueId);
+            using var scope = _serviceProvider.CreateScope();
+            var queueRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueRepository>();
+            var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+
+            var queue = await queueRepository.GetByIdAsync(queueId);
             if (queue == null)
                 return new Dictionary<string, object> { { "error", "Queue not found" } };
 
-            var items = await _itemRepository.GetByQueueIdAsync(queueId);
+            var items = await itemRepository.GetByQueueIdAsync(queueId);
 
             var completedCount = items.Count(i => i.Status == ProcessingStatus.Complete);
             var totalCount = items.Count();
@@ -249,7 +257,10 @@ public class ImageProcessingService : IImageProcessor
     {
         try
         {
-            var item = await _itemRepository.GetByIdAsync(itemId);
+            using var scope = _serviceProvider.CreateScope();
+            var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+
+            var item = await itemRepository.GetByIdAsync(itemId);
             if (item == null)
                 throw new ArgumentException($"Item {itemId} not found");
 
@@ -258,8 +269,8 @@ public class ImageProcessingService : IImageProcessor
 
             item.Status = ProcessingStatus.Pending;
             item.LastError = null;
-            await _itemRepository.UpdateAsync(item);
-            await _itemRepository.SaveChangesAsync();
+            await itemRepository.UpdateAsync(item);
+            await itemRepository.SaveChangesAsync();
 
             _logger.LogInformation("Reset item {ItemId} for retry", itemId);
         }
@@ -273,7 +284,9 @@ public class ImageProcessingService : IImageProcessor
     /// <summary>Get items ready for retry</summary>
     public async Task<IEnumerable<ProcessingQueueItem>> GetReadyForRetryAsync()
     {
-        return await _itemRepository.GetReadyForRetryAsync();
+        using var scope = _serviceProvider.CreateScope();
+        var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+        return await itemRepository.GetReadyForRetryAsync();
     }
 
     /// <summary>Start the background processing worker</summary>
