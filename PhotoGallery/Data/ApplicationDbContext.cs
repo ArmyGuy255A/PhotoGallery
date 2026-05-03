@@ -19,6 +19,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<AccessCode> AccessCodes { get; set; }
     public DbSet<UserAccessLog> UserAccessLogs { get; set; }
     public DbSet<ProcessingQueue> ProcessingQueues { get; set; }
+    public DbSet<ProcessingQueueItem> ProcessingQueueItems { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {

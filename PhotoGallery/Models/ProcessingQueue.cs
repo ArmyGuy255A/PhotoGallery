@@ -91,6 +91,12 @@ public class ProcessingQueueItem
     /// <summary>Unique identifier for this quality processing item</summary>
     public Guid Id { get; set; } = Guid.NewGuid();
     
+    /// <summary>Foreign key to the Photo being processed (direct link)</summary>
+    public Guid PhotoId { get; set; }
+    
+    /// <summary>Navigation property to the Photo being processed</summary>
+    public Photo? Photo { get; set; }
+    
     /// <summary>Foreign key to the parent ProcessingQueue</summary>
     public Guid ProcessingQueueId { get; set; }
     
@@ -121,6 +127,9 @@ public class ProcessingQueueItem
     /// <summary>When this item was created</summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     
+    /// <summary>When this item was completed successfully</summary>
+    public DateTime? CompletedAt { get; set; }
+    
     /// <summary>When this item was last updated</summary>
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     
@@ -128,17 +137,18 @@ public class ProcessingQueueItem
     public bool CanRetry => RetryCount < MaxRetries;
     
     /// <summary>Increment retry count and calculate exponential backoff for next retry</summary>
-    public void IncrementRetry()
+    /// <param name="errorMessage">The error message from the failed attempt</param>
+    public void IncrementRetry(string errorMessage)
     {
+        LastError = errorMessage;
         RetryCount++;
-        if (CanRetry)
-        {
-            // Exponential backoff: 2^retryCount seconds
-            // Retry 1: 2 seconds
-            // Retry 2: 4 seconds
-            // Retry 3: 8 seconds
-            var secondsToWait = Math.Pow(2, RetryCount);
-            NextRetryTime = DateTime.UtcNow.AddSeconds(secondsToWait);
-        }
+        
+        // Calculate exponential backoff: 2^retryCount seconds
+        // Retry 1: 2 seconds (2^1)
+        // Retry 2: 4 seconds (2^2)
+        // Retry 3: 8 seconds (2^3)
+        // This is calculated BEFORE we check CanRetry, so we know when to retry next even if we've hit max retries
+        var secondsToWait = Math.Pow(2, RetryCount);
+        NextRetryTime = DateTime.UtcNow.AddSeconds(secondsToWait);
     }
 }
