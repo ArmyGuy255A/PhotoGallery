@@ -1,12 +1,16 @@
-import { Component, Input, Output, EventEmitter, OnInit } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
+import { interval, Subject, takeUntil, switchMap, filter } from 'rxjs';
 
 interface UploadFile {
   file: File;
   progress: number;
-  status: 'pending' | 'uploading' | 'complete' | 'error';
+  status: 'pending' | 'uploading' | 'complete' | 'error' | 'processing';
   errorMessage?: string;
+  photoId?: string;
+  processingProgress?: number;
+  processingStatus?: string;
 }
 
 @Component({
@@ -78,7 +82,16 @@ interface UploadFile {
                 *ngIf="item.status === 'uploading'"
                 class="spinner-border spinner-border-sm text-primary"
               ></span>
+              <span
+                *ngIf="item.status === 'processing'"
+                class="spinner-border spinner-border-sm text-warning"
+                [title]="'Processing: ' + (item.processingProgress || 0) + '%'"
+              ></span>
             </div>
+            <!-- Processing status -->
+            <small *ngIf="item.status === 'processing'" class="text-warning d-block mt-1">
+              🔄 Processing... {{ item.processingProgress || 0 }}% ({{ item.processingStatus || 'Starting' }})
+            </small>
             <small *ngIf="item.errorMessage" class="text-danger d-block mt-1">
               {{ item.errorMessage }}
             </small>
@@ -90,6 +103,7 @@ interface UploadFile {
           <strong>Upload Summary:</strong>
           <p class="mb-0">
             {{ successCount }} photo(s) uploaded successfully,
+            {{ processingCount }} processing,
             {{ errorCount }} failed
           </p>
         </div>
@@ -190,6 +204,10 @@ interface UploadFile {
       background: #3498db;
     }
 
+    .text-warning {
+      color: #f39c12;
+    }
+
     .spinner-border {
       display: inline-block;
       width: 1rem;
@@ -274,7 +292,7 @@ interface UploadFile {
     }
   `]
 })
-export class PhotoUploadComponent implements OnInit {
+export class PhotoUploadComponent implements OnInit, OnDestroy {
   @Input() albumId: string = '';
   @Output() uploadComplete = new EventEmitter<any>();
 
@@ -283,11 +301,21 @@ export class PhotoUploadComponent implements OnInit {
   isUploading = false;
   uploadCompleteFlag = false;
   successCount = 0;
+  processingCount = 0;
   errorCount = 0;
+  private destroy$ = new Subject<void>();
+  private pollStop$ = new Subject<void>();
 
   constructor(private photoService: PhotoService) {}
 
   ngOnInit() {}
+
+  ngOnDestroy() {
+    this.destroy$.next();
+    this.destroy$.complete();
+    this.pollStop$.next();
+    this.pollStop$.complete();
+  }
 
   onDragOver(event: DragEvent) {
     event.preventDefault();
@@ -338,6 +366,7 @@ export class PhotoUploadComponent implements OnInit {
     this.isUploading = true;
     this.uploadCompleteFlag = false;
     this.successCount = 0;
+    this.processingCount = 0;
     this.errorCount = 0;
 
     // Upload files in parallel
@@ -353,9 +382,16 @@ export class PhotoUploadComponent implements OnInit {
     this.photoService.uploadPhoto(this.albumId, item.file).subscribe({
       next: (response: any) => {
         console.log(`[PhotoUpload] Upload success for ${item.file.name}:`, response);
-        item.status = 'complete';
+        item.photoId = response.successfulUploads?.[0]?.photoId;
+        item.status = 'processing';
         item.progress = 100;
-        this.successCount++;
+        item.processingProgress = 0;
+        this.processingCount++;
+        
+        // Start polling for processing status
+        if (item.photoId) {
+          this.startProcessingStatusPoll(item);
+        }
         this.checkUploadComplete();
       },
       error: (error: any) => {
@@ -368,15 +404,51 @@ export class PhotoUploadComponent implements OnInit {
     });
   }
 
+  private startProcessingStatusPoll(item: UploadFile) {
+    if (!item.photoId) return;
+
+    interval(2000) // Poll every 2 seconds
+      .pipe(
+        takeUntil(this.destroy$),
+        filter(() => item.status === 'processing'),
+        switchMap(() => this.photoService.getPhotoProcessingStatus(item.photoId!))
+      )
+      .subscribe({
+        next: (status: any) => {
+          item.processingProgress = status.percentComplete || 0;
+          item.processingStatus = this.getProcessingStatusText(status);
+          
+          if (status.percentComplete === 100) {
+            item.status = 'complete';
+            this.processingCount--;
+            this.successCount++;
+            console.log(`[PhotoUpload] Processing complete for ${item.file.name}`);
+            this.checkUploadComplete();
+          }
+        },
+        error: (error: any) => {
+          console.log(`[PhotoUpload] Error polling status:`, error);
+          // Don't fail on polling errors - just keep trying
+        }
+      });
+  }
+
+  private getProcessingStatusText(status: any): string {
+    const items = status.items || [];
+    const completed = items.filter((i: any) => i.Status === 'Complete').length;
+    return `${completed}/${items.length} qualities`;
+  }
+
   private checkUploadComplete() {
     const allDone = this.uploadFiles.every(
       f => f.status === 'complete' || f.status === 'error'
     );
-    if (allDone) {
+    if (allDone && this.uploadFiles.length > 0) {
       this.isUploading = false;
       this.uploadCompleteFlag = true;
       this.uploadComplete.emit({
         successCount: this.successCount,
+        processingCount: this.processingCount,
         errorCount: this.errorCount
       });
     }
