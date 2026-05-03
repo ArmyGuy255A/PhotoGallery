@@ -4,6 +4,7 @@ description: |
   Architecture validation and design expert for PhotoGallery. Use this skill to review proposed code changes for compliance with SOLID principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion) and DRY (Don't Repeat Yourself) principles. Validates that code follows established PhotoGallery patterns: interface-based abstractions, factory patterns for multiple implementations, dependency injection, code-first EF Core migrations, and proper separation of concerns (services handle business logic, controllers handle HTTP).
   
   **Works with other skills:**
+  - Consult **photogallery-tdd-unit-testing** to review test design and ensure tests validate SOLID compliance
   - Consult **clean-architecture-guide** for layering decisions (Domain/Infrastructure/Presentation)
   - Consult **coreui-expert-skill** to validate that UI components follow CoreUI patterns
   - Consult **photogallery-auth-skill** for auth-related architectural decisions
@@ -17,6 +18,7 @@ description: |
   - Adding features that could impact existing architecture
   - You think "this might be similar to existing code"
   - The Backend Developer or Frontend Developer agent is proposing changes
+  - Reviewing test design to ensure tests validate architecture
   
   Do NOT skip this skill—even if you think the code is simple. Better to validate early than find architectural debt later.
 ---
@@ -29,24 +31,26 @@ This skill works as part of a integrated skills ecosystem:
 
 | Skill | Purpose | When to Use Together |
 |-------|---------|---------------------|
+| **photogallery-tdd-unit-testing** | Test design patterns, xUnit patterns, mocking strategies | Before code is written; validates tests properly validate behavior and architecture |
 | **clean-architecture-guide** | How to structure code into Domain/Infrastructure/Presentation layers | Before designing entities or services; confirms layering is correct |
 | **photogallery-auth-skill** | Authentication and authorization patterns, OAuth, JWT, roles | When auth-related code is proposed; validates secure design |
 | **coreui-expert-skill** | UI component patterns, responsive design, accessibility | When frontend code is proposed; validates UI patterns follow CoreUI |
-| **backend-developer-skill** | End-to-end guide for backend development phases | Dispatch for backend implementation; calls architect for validation |
+| **backend-developer-skill** | End-to-end guide for backend development phases WITH TDD | Dispatch for backend implementation; calls architect for validation AFTER tests pass |
 | **frontend-developer-skill** | End-to-end guide for frontend development phases | Dispatch for frontend implementation; calls architect for validation |
 | **qa-quality-control-skill** | E2E testing, Playwright, workflow validation | After features implemented; validates end-to-end flows work |
 
-**Typical Workflow:**
-1. Backend Developer Agent starts creating entities
-2. Calls this Architect Skill to validate SOLID/DRY compliance
-3. References clean-architecture-guide for layering decisions
-4. After entity design approved, implements services and APIs
-5. Calls Architect Skill again for code review
-6. Once backend complete, Frontend Developer Agent starts building UI
-7. Calls Architect Skill to validate component/service structure
-8. References coreui-expert-skill for UI patterns
-9. Once features complete, QA Quality Control Agent writes E2E tests
-10. Uses playwright-testing-skill to validate workflows
+**Typical Workflow (TDD-First):**
+1. Backend Developer Agent consults TDD Skill to design test cases
+2. Backend Developer Agent writes xUnit tests in PhotoGallery.Tests (RED phase)
+3. Backend Developer Agent writes minimal code to pass tests (GREEN phase)
+4. Backend Developer Agent calls Architect Skill to validate SOLID/DRY compliance on production code
+5. If architect approves, Backend Developer Agent refactors while keeping tests green (REFACTOR phase)
+6. Tests verify no regressions introduced
+7. Once backend complete and tests passing, Frontend Developer Agent starts building UI
+8. Calls Architect Skill to validate component/service structure
+9. References coreui-expert-skill for UI patterns
+10. Once features complete, QA Quality Control Agent writes E2E tests
+11. Uses playwright-testing-skill to validate workflows
 
 ## Your Role
 
@@ -56,6 +60,7 @@ You are the architecture guardian for PhotoGallery. Your job is to ensure every 
 3. Using established **PhotoGallery patterns** consistently
 4. Catching **anti-patterns** before they spread
 5. Enabling **future extensibility** without breaking existing code
+6. **Validating that tests exist** and properly validate the architecture
 
 ## How to Use This Skill
 

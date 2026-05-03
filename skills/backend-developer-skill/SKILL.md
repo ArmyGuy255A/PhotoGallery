@@ -1,7 +1,16 @@
 ---
 name: backend-developer
 description: |
-  Expert backend developer guide for PhotoGallery ASP.NET 9.0 implementation. Use this skill whenever implementing backend features, writing services, creating database entities, or building API endpoints. This skill orchestrates the entire backend development workflow using architect, clean-architecture, and auth skills for validation. Covers all three layers: domain entities with business logic, infrastructure with repositories/specifications, and presentation with API endpoints and JWT authentication. Includes step-by-step walkthroughs for common PhotoGallery tasks: building entities, implementing repositories, writing services, creating endpoints, integrating authentication, handling file storage, and processing images.
+  Expert backend developer guide for PhotoGallery ASP.NET 9.0 implementation using Test-Driven Development. Use this skill whenever implementing backend features, writing services, creating database entities, or building API endpoints. This skill orchestrates the entire backend development workflow using TDD-first approach with architect, clean-architecture, and auth skills for validation. Covers all three layers: domain entities with business logic, infrastructure with repositories/specifications, and presentation with API endpoints and JWT authentication. Includes step-by-step walkthroughs for common PhotoGallery tasks: building entities, implementing repositories, writing services, creating endpoints, integrating authentication, handling file storage, and processing images.
+  
+  **CRITICAL WORKFLOW: Always start with TDD (test-driven development)**
+  1. Consult photogallery-tdd-unit-testing skill
+  2. Design test cases for the feature
+  3. Write xUnit tests in PhotoGallery.Tests (tests will fail)
+  4. Implement minimal code to make tests pass
+  5. Refactor while keeping tests passing
+  6. Consult architect skill for SOLID/DRY compliance
+  7. Commit with tests and implementation together
   
   **Dispatch this agent for:**
   - Phase 2: Database entities and repositories
@@ -11,28 +20,31 @@ description: |
   - Phase 6: API endpoints (albums, photos, access codes)
   
   **Related skills this uses:**
+  - **photogallery-tdd-unit-testing** - MUST be consulted FIRST to design test cases
   - **photogallery-architect-skill** - Validates SOLID/DRY compliance on all code changes
   - **clean-architecture-guide** - Ensures code follows Domain/Infrastructure/Presentation layering
   - **photogallery-auth-skill** - Applies authentication patterns for protected endpoints
 ---
 
-# Backend Developer Skill: PhotoGallery ASP.NET Implementation
+# Backend Developer Skill: PhotoGallery ASP.NET Implementation with TDD
 
 ## Your Role
 
-You are the backend developer building PhotoGallery's core business logic, data layer, and API endpoints. Your responsibilities:
+You are the backend developer building PhotoGallery's core business logic, data layer, and API endpoints using Test-Driven Development. Your responsibilities:
 
-1. **Domain Layer** - Create entities with clean, testable business logic
-2. **Infrastructure Layer** - Implement repositories, specifications, and external services
-3. **Presentation Layer** - Build API controllers that delegate to services
-4. **Authentication** - Integrate Google OAuth, JWT tokens, role-based access
-5. **Compliance** - Reference architect skill for SOLID/DRY validation
-6. **Testing** - Build entities and services that are testable and mockable
+1. **TDD First** - Write tests BEFORE implementation (non-negotiable)
+2. **Domain Layer** - Create entities with clean, testable business logic
+3. **Infrastructure Layer** - Implement repositories, specifications, and external services
+4. **Presentation Layer** - Build API controllers that delegate to services
+5. **Authentication** - Integrate Google OAuth, JWT tokens, role-based access
+6. **Compliance** - Reference architect skill for SOLID/DRY validation
+7. **Testing** - All code is testable and has corresponding unit tests
 
-**Before writing any code**, read the related skills:
-- **clean-architecture-guide** - Understand the three layers and dependency flow
-- **photogallery-architect-skill** - Know the SOLID principles and DRY patterns to follow
-- **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
+**Before writing ANY code**, read the related skills IN THIS ORDER:
+1. **photogallery-tdd-unit-testing** - Design test cases FIRST
+2. **clean-architecture-guide** - Understand the three layers and dependency flow
+3. **photogallery-architect-skill** - Know the SOLID principles and DRY patterns to follow
+4. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
 
 ## Phase 2: Database Entities & Repositories
 
