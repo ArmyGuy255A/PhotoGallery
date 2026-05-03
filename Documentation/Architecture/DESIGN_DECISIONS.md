@@ -181,55 +181,89 @@ public class StorageProviderFactory
 
 ---
 
-## D003: Image Processing with Compression Profiles
+## D003: Image Processing with Compression Profiles & Per-Quality Tracking
 
 **Status**: ✅ Approved  
-**Date**: Phase 5 (2026-04-25)  
+**Date**: Phase 5 (2026-04-25); Enhanced Phase 12 (2026-05-03)  
 **Approved By**: User  
 **Related**: [System Architecture](./SYSTEM_ARCHITECTURE.md)
 
 ### Context
-Users need multiple quality versions of photos (high/medium/low/raw) for different use cases. Processing should be asynchronous (user doesn't wait for processing).
+Users need multiple quality versions of photos (high/medium/low/thumbnail) for different use cases. Processing should be asynchronous (user doesn't wait). System must track processing progress per quality, retry failed processing, and maintain consistency between database and storage.
 
 ### Decision
-- **Profiles**: 4 compression profiles (High=50%, Medium=75%, Low=85%, Raw=100%)
-- **Queue**: ProcessingQueue entity tracks pending photos
-- **Worker**: Background thread polls queue every 5 seconds
-- **Storage**: All versions stored as separate files with quality name
-- **Path**: `photogallery/{album}/{photo}/high.jpg`, etc.
-- **Status**: Pending → Processing → Complete → Error
+- **Profiles**: 4 compression profiles (Thumbnail=200x200, Low=800x800, Medium=1920x1920, High=3840x3840)
+- **Queue**: ProcessingQueue entity tracks complete photo processing job
+- **Quality Tracking**: ProcessingQueueItem tracks each individual quality (Thumbnail, Low, Medium, High) with separate status
+- **Worker**: Background thread polls queue every 5 seconds, processes one item at a time
+- **Storage**: All versions stored as separate files: `photogallery/{album}/{photo}/{quality}.jpg`
+- **Retry Logic**: Failed items auto-retry up to 3 times with exponential backoff
+- **Status**: Queue = Pending → Processing → Complete → Error; Each Quality Item = Pending → Processing → Complete → Error
+- **Consistency**: Consistency checker runs hourly to verify all 4 qualities exist for each complete photo
 
 ### Rationale
-- Multiple profiles support different download use cases (email, web, print)
+- Per-quality tracking shows which versions are complete (enables partial processing visibility)
+- Separate ProcessingQueueItem entities allow independent retry and status tracking
+- Multiple profiles support different download use cases (email, web, print, thumbnail previews)
 - Asynchronous processing improves user experience (upload returns immediately)
-- Queue enables retry logic (failed photos can be retried)
+- Retry logic with backoff prevents transient failures from losing photos
+- Consistency checker prevents storage/database mismatch (critical data integrity)
 - Background worker uses dedicated thread (doesn't block API)
-- Compression profiles centralized (easy to adjust percentages)
+- Compression profiles centralized (easy to adjust percentages without code changes)
 
 ### Implications
-- Upload returns immediately with processing job ID
-- Client polls for processing status
-- All versions of same photo stored separately
-- Failed processing can be retried
+- Upload returns immediately with job ID
+- Client can poll for per-quality progress (`GET /api/photos/{id}/processing-status`)
+- All versions of same photo stored separately and tracked individually
+- Failed processing automatically retries (improves reliability)
+- Consistency checker alerts if photos missing versions
+- Storage and database always in sync (no orphaned files or missing data)
 - Image processing is abstracted (can use different libraries)
 
 ### Implementation
+**Database Schema:**
+```sql
+ProcessingQueue
+  - Id: Guid (PK)
+  - PhotoId: Guid (FK)
+  - CreatedAt: DateTime
+  - CompletedAt: DateTime (nullable)
+  - Status: enum (Pending, Processing, Complete, Error)
+  - ErrorMessage: string (nullable)
+
+ProcessingQueueItem
+  - Id: Guid (PK)
+  - ProcessingQueueId: Guid (FK)
+  - Quality: enum (Thumbnail, Low, Medium, High)
+  - Status: enum (Pending, Processing, Complete, Error)
+  - RetryCount: int (0-3)
+  - LastError: string (nullable)
+  - Attempts: int
+  - NextRetryTime: DateTime (nullable)
+```
+
 **Files:**
-- `PhotoGallery/Models/ProcessingQueue.cs` - Queue entity
+- `PhotoGallery/Models/ProcessingQueue.cs` - Main queue entity
+- `PhotoGallery/Models/ProcessingQueueItem.cs` - Per-quality tracking (NEW)
 - `PhotoGallery/Services/Processing/ImageProcessingService.cs` - Queue worker
 - `PhotoGallery/Services/Processing/CompressionProfile.cs` - Profile definitions
-- `PhotoGallery/Controllers/PhotosController.cs` - Upload endpoint
+- `PhotoGallery/Services/Processing/PhotoConsistencyChecker.cs` - Validates storage integrity (NEW)
+- `PhotoGallery/Controllers/PhotosController.cs` - Upload & status endpoints
 - `PhotoGallery/Data/Configurations/ProcessingQueueConfiguration.cs` - EF configuration
+- `PhotoGallery/Data/Configurations/ProcessingQueueItemConfiguration.cs` - EF configuration (NEW)
 
 **Tests:**
 - `PhotoGallery.Tests/ImageProcessingTests.cs` - Processing logic
 - `PhotoGallery.Tests/ProcessingQueueTests.cs` - Queue entity and status transitions
+- `PhotoGallery.Tests/ProcessingQueueItemTests.cs` - Per-quality tracking (NEW)
 - `PhotoGallery.Tests/CompressionProfileTests.cs` - Profile validation
+- `PhotoGallery.Tests/RetryLogicTests.cs` - Retry with backoff behavior (NEW)
+- `PhotoGallery.Tests/PhotoConsistencyCheckerTests.cs` - Storage integrity validation (NEW)
 
-### Example: Queuing a Photo
+### Example: Queuing & Tracking Photo Processing
 
 ```csharp
-// Upload endpoint queues photo
+// Upload endpoint queues photo with per-quality tracking
 [HttpPost("api/photos/albums/{albumId}")]
 public async Task<IActionResult> UploadPhotos(Guid albumId, IFormFile file)
 {
@@ -238,16 +272,96 @@ public async Task<IActionResult> UploadPhotos(Guid albumId, IFormFile file)
     
     // Queue for processing (returns job ID immediately)
     var jobId = await imageProcessor.QueuePhotoAsync(photo.Id);
+    // Creates: ProcessingQueue with status=Pending
+    // Creates: 4 x ProcessingQueueItem (Thumbnail, Low, Medium, High, each status=Pending)
     
     return Ok(new { jobId, status = "queued" });
 }
 
-// Client polls for status
-[HttpGet("api/photos/processing-status/{jobId}")]
-public async Task<IActionResult> GetProcessingStatus(Guid jobId)
+// Client polls for detailed per-quality progress
+[HttpGet("api/photos/{photoId}/processing-status")]
+public async Task<IActionResult> GetProcessingStatus(Guid photoId)
 {
-    var status = await processingQueue.GetStatusAsync(jobId);
-    return Ok(new { status, progress = "50%", estimatedTime = "30s" });
+    var queue = await processingQueue.GetByPhotoIdAsync(photoId);
+    
+    return Ok(new
+    {
+        jobId = queue.Id,
+        overallStatus = queue.Status, // Pending, Processing, Complete, Error
+        qualities = new
+        {
+            thumbnail = new { status = "complete", retries = 0 },
+            low = new { status = "complete", retries = 0 },
+            medium = new { status = "complete", retries = 0 },
+            high = new { status = "processing", retries = 1, estimatedSeconds = 15 }
+        },
+        progress = "75%", // 3 of 4 complete
+        createdAt = queue.CreatedAt,
+        completedAt = queue.CompletedAt
+    });
+}
+
+// Background worker processes queue items with retry logic
+public class ImageProcessingWorker
+{
+    public async Task ProcessQueueAsync()
+    {
+        while (true)
+        {
+            var pendingItems = await processingQueue.GetPendingItemsAsync();
+            
+            foreach (var item in pendingItems)
+            {
+                try
+                {
+                    // Process single quality
+                    await ProcessQualityAsync(item);
+                    item.MarkComplete();
+                }
+                catch (Exception ex)
+                {
+                    // Auto-retry with backoff
+                    if (item.RetryCount < 3)
+                    {
+                        item.IncrementRetry();
+                        item.NextRetryTime = DateTime.UtcNow.AddSeconds(
+                            Math.Pow(2, item.RetryCount)); // Exponential backoff
+                    }
+                    else
+                    {
+                        item.MarkError(ex.Message);
+                    }
+                }
+            }
+            
+            await Task.Delay(5000); // Poll every 5 seconds
+        }
+    }
+}
+
+// Consistency checker ensures no orphaned photos
+public class PhotoConsistencyChecker
+{
+    public async Task CheckConsistencyAsync()
+    {
+        var incompletePhotos = await processingQueue.GetCompletePhotosAsync();
+        
+        foreach (var photo in incompletePhotos)
+        {
+            var qualities = new[] { "thumbnail", "low", "medium", "high" };
+            var missingQualities = new List<string>();
+            
+            foreach (var quality in qualities)
+            {
+                var path = $"photogallery/{photo.AlbumId}/{photo.Id}/{quality}.jpg";
+                if (!await storage.ExistsAsync(path))
+                    missingQualities.Add(quality);
+            }
+            
+            if (missingQualities.Count > 0)
+                logger.Error($"Photo {photo.Id} missing: {string.Join(", ", missingQualities)}");
+        }
+    }
 }
 ```
 
