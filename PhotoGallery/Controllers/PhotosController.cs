@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using PhotoGallery.Data.Repositories;
+using PhotoGallery.Enums;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services.Processing;
@@ -20,6 +22,7 @@ public class PhotosController : ControllerBase
     private readonly IRepository<Photo> _photoRepository;
     private readonly IRepository<Album> _albumRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
+    private readonly IProcessingQueueItemRepository _queueItemRepository;
     private readonly ILogger<PhotosController> _logger;
 
     public PhotosController(
@@ -28,6 +31,7 @@ public class PhotosController : ControllerBase
         IRepository<Photo> photoRepository,
         IRepository<Album> albumRepository,
         IRepository<PhotoVersion> photoVersionRepository,
+        IProcessingQueueItemRepository queueItemRepository,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -35,6 +39,7 @@ public class PhotosController : ControllerBase
         _photoRepository = photoRepository;
         _albumRepository = albumRepository;
         _photoVersionRepository = photoVersionRepository;
+        _queueItemRepository = queueItemRepository;
         _logger = logger;
     }
 
@@ -266,28 +271,35 @@ public class PhotosController : ControllerBase
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
-        // Get photo versions to count progress
-        var versions = await _photoVersionRepository.GetAllAsync();
-        var photoVersions = versions.Where(v => v.PhotoId == photoGuid).ToList();
+        // Get all processing queue items for this photo
+        var allItems = await _queueItemRepository.GetAllAsync();
+        var photoItems = allItems.Where(i => i.PhotoId == photoGuid).ToList();
         
-        // Determine completion percentage
-        var expectedVersions = 4; // high, medium, low, raw
-        var completedVersions = photoVersions.Count;
-        var percentComplete = expectedVersions > 0 ? (completedVersions * 100) / expectedVersions : 0;
+        // Count completed versions
+        var completedItems = photoItems.Where(i => i.Status == ProcessingStatus.Complete).ToList();
+        var hasThumbnail = completedItems.Any(i => i.Quality == QualityType.Thumbnail);
+        var hasLow = completedItems.Any(i => i.Quality == QualityType.Low);
+        var hasMedium = completedItems.Any(i => i.Quality == QualityType.Medium);
+        var hasHigh = completedItems.Any(i => i.Quality == QualityType.High);
+        
+        var completedVersions = (hasThumbnail ? 1 : 0) + (hasLow ? 1 : 0) + (hasMedium ? 1 : 0) + (hasHigh ? 1 : 0);
+        var totalVersions = 4;
+        var percentComplete = totalVersions > 0 ? (completedVersions * 100) / totalVersions : 0;
+        var status = completedVersions == totalVersions ? "Complete" : "Processing";
 
         return Ok(new ProcessingStatusDto
         {
             PhotoId = photoId,
-            Status = photo.ProcessingStatus.ToString(),
+            Status = status,
             CompletedVersions = completedVersions,
-            TotalVersions = expectedVersions,
+            TotalVersions = totalVersions,
             PercentComplete = percentComplete,
             ProcessingStartedAt = photo.ProcessingStartedAt,
-            ProcessingCompletedAt = photo.ProcessingCompletedAt,
-            HasThumbnail = photo.HasThumbnail,
-            HasLow = photo.HasLow,
-            HasMedium = photo.HasMedium,
-            HasHigh = photo.HasHigh
+            ProcessingCompletedAt = completedVersions == totalVersions ? DateTime.UtcNow : null,
+            HasThumbnail = hasThumbnail,
+            HasLow = hasLow,
+            HasMedium = hasMedium,
+            HasHigh = hasHigh
         });
     }
 }
