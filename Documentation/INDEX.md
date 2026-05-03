@@ -1,46 +1,57 @@
-# PhotoGallery Documentation Index
+# 📚 PhotoGallery Documentation Index
 
 This folder serves as the **persistent memory** for all design decisions, architectural patterns, and implementation guidance for the PhotoGallery project. All skills consult this documentation before making changes.
 
-**Key Principle**: Documentation = Source of Truth for Design Decisions
+**🔑 Key Principle**: Documentation = Source of Truth for Design Decisions
 
 ---
 
 ## 📁 Folder Structure
 
-### 🏗️ **Architecture** - Design Decisions & Patterns
+### 🏗️ **[Architecture/](./Architecture/)** - Design Decisions & Patterns
 Core architectural decisions, patterns, and system design. This is the source of truth for how things should be built.
 
-- `DESIGN_DECISIONS.md` - All approved design decisions with rationale
-- `SYSTEM_ARCHITECTURE.md` - System overview and component relationships
-- `DATABASE_SCHEMA.md` - Entity relationships and database design
-- `API_DESIGN.md` - REST API patterns and conventions
-- `STORAGE_LAYER.md` - Storage provider abstraction (MinIO/Azure)
+| Document | Purpose | Links |
+|----------|---------|-------|
+| **[DESIGN_DECISIONS.md](./Architecture/DESIGN_DECISIONS.md)** | All approved design decisions with rationale | ↔️ Core reference for all features |
+| **[SYSTEM_ARCHITECTURE.md](./Architecture/SYSTEM_ARCHITECTURE.md)** | System overview and component relationships | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [Database Schema](./Architecture/DATABASE_SCHEMA.md) • [API Design](./Architecture/API_DESIGN.md) |
+| **[DATABASE_SCHEMA.md](./Architecture/DATABASE_SCHEMA.md)** | Entity relationships and database design | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [System Architecture](./Architecture/SYSTEM_ARCHITECTURE.md) |
+| **[API_DESIGN.md](./Architecture/API_DESIGN.md)** | REST API patterns and conventions | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [Authentication](./Architecture/AUTHENTICATION.md) |
+| **[STORAGE_LAYER.md](./Architecture/STORAGE_LAYER.md)** | Storage provider abstraction (MinIO/Azure) | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [System Architecture](./Architecture/SYSTEM_ARCHITECTURE.md) |
+| **[AUTHENTICATION.md](./Architecture/AUTHENTICATION.md)** | OAuth 2.0 and JWT implementation | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [API Design](./Architecture/API_DESIGN.md) |
 
-### 📊 **Phase-Reports** - Phase Completion & Status
+### 📊 **[Phase-Reports/](./Phase-Reports/)** - Phase Completion & Status
 Completed phase reports showing what was implemented and why.
 
-- `Phase-1-5-Foundations.md` - Authentication, storage, image processing
-- `Phase-6-10-UI-Development.md` - Frontend components and features
-- `Phase-11-Refinements.md` - Bug fixes and refinements
-- `Phase-12-Photo-Upload.md` - Photo upload infrastructure and TDD
-- (Future phases)
+| Document | Phase | Key Changes |
+|----------|-------|------------|
+| **[PHASE_12_SUMMARY.md](./Phase-Reports/PHASE_12_SUMMARY.md)** | 12 | Photo upload infrastructure, TDD workflow, storage paths | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [Guides](./Guides/) |
+| **[E2E_TESTING_COMPLETE.md](./Phase-Reports/E2E_TESTING_COMPLETE.md)** | E2E | End-to-end testing verification | 🔗 [Phase 12](./Phase-Reports/PHASE_12_SUMMARY.md) |
+| **[TESTING_SUMMARY.md](./Phase-Reports/TESTING_SUMMARY.md)** | Testing | Test coverage and results | 🔗 [Guides](./Guides/) |
+| **[COMPLETION_SUMMARY.md](./Phase-Reports/COMPLETION_SUMMARY.md)** | Summary | Overall project status | 🔗 [All Phases](./Phase-Reports/) |
+| Other Reports | Archive | Historical fixes and setup | 🔗 [Index](./Phase-Reports/) |
 
-### 📚 **Guides** - How-To and Process Documentation
+### 📚 **[Guides/](./Guides/)** - How-To and Process Documentation
 Step-by-step guides for developers and operational procedures.
 
-- `TDD_WORKFLOW.md` - Test-Driven Development workflow
-- `TDD_QUICK_REFERENCE.md` - TDD cheat sheet
-- `TDD_IMPLEMENTATION_SUMMARY.md` - TDD overview and benefits
-- `TDD_READY_TO_USE.md` - Getting started with TDD
+| Document | Purpose | Audience | Links |
+|----------|---------|----------|-------|
+| **[TDD_WORKFLOW.md](./Guides/TDD_WORKFLOW.md)** | Complete TDD process guide | Developers | 🔗 [Quick Reference](./Guides/TDD_QUICK_REFERENCE.md) • [Implementation](./Guides/TDD_IMPLEMENTATION_SUMMARY.md) • [Ready to Use](./Guides/TDD_READY_TO_USE.md) • [Design Decisions](./Architecture/DESIGN_DECISIONS.md) |
+| **[TDD_QUICK_REFERENCE.md](./Guides/TDD_QUICK_REFERENCE.md)** | TDD cheat sheet | Developers | 🔗 [Full Workflow](./Guides/TDD_WORKFLOW.md) • [Implementation](./Guides/TDD_IMPLEMENTATION_SUMMARY.md) |
+| **[TDD_IMPLEMENTATION_SUMMARY.md](./Guides/TDD_IMPLEMENTATION_SUMMARY.md)** | TDD overview and benefits | Tech Leads | 🔗 [Workflow](./Guides/TDD_WORKFLOW.md) • [Quick Ref](./Guides/TDD_QUICK_REFERENCE.md) • [Ready to Use](./Guides/TDD_READY_TO_USE.md) |
+| **[TDD_READY_TO_USE.md](./Guides/TDD_READY_TO_USE.md)** | Getting started with TDD | New Developers | 🔗 [Quick Reference](./Guides/TDD_QUICK_REFERENCE.md) • [Workflow](./Guides/TDD_WORKFLOW.md) |
+| **[DOCKER_SETUP.md](./Guides/DOCKER_SETUP.md)** | Docker configuration | DevOps | 🔗 [Startup](./Startup/) |
+| **[CI_CD_SETUP.md](./Guides/CI_CD_SETUP.md)** | CI/CD pipeline | DevOps | 🔗 [Docker Setup](./Guides/DOCKER_SETUP.md) |
 
-### 🚀 **Startup** - Deployment & Operations
+### 🚀 **[Startup/](./Startup/)** - Deployment & Operations
 How to start, configure, and deploy the application.
 
-- `STARTUP_GUIDE.md` - How to start the application locally
-- `STARTUP_SCRIPTS_COMPLETE.md` - Startup script documentation
-- `STARTUP_SCRIPTS_VISUAL_GUIDE.md` - Visual walkthrough
-- `START_SCRIPTS_README.md` - Script usage
+| Document | Purpose | Links |
+|----------|---------|-------|
+| **[STARTUP_GUIDE.md](./Startup/STARTUP_GUIDE.md)** | How to start the application locally | 🔗 [Scripts](./Startup/STARTUP_SCRIPTS_COMPLETE.md) • [Docker](./Guides/DOCKER_SETUP.md) |
+| **[STARTUP_SCRIPTS_COMPLETE.md](./Startup/STARTUP_SCRIPTS_COMPLETE.md)** | Startup script documentation | 🔗 [Visual Guide](./Startup/STARTUP_SCRIPTS_VISUAL_GUIDE.md) • [Main Guide](./Startup/STARTUP_GUIDE.md) |
+| **[STARTUP_SCRIPTS_VISUAL_GUIDE.md](./Startup/STARTUP_SCRIPTS_VISUAL_GUIDE.md)** | Visual walkthrough | 🔗 [Scripts](./Startup/STARTUP_SCRIPTS_COMPLETE.md) • [README](./Startup/START_SCRIPTS_README.md) |
+| **[START_SCRIPTS_README.md](./Startup/START_SCRIPTS_README.md)** | Script usage and options | 🔗 [Complete Guide](./Startup/STARTUP_SCRIPTS_COMPLETE.md) |
 
 ### 📋 **Root Level** - Project Overview
 Key reference files in project root.
