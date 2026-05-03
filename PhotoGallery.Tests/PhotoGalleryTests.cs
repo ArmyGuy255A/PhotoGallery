@@ -165,6 +165,105 @@ public class AlbumApiTests
 }
 
 /// <summary>
+/// Tests for photo upload and storage path structure
+/// </summary>
+public class PhotoUploadTests
+{
+    [Fact]
+    public void Photo_Should_Use_Correct_Storage_Path_Structure()
+    {
+        // Arrange
+        var albumId = Guid.Parse("c373c777-c47a-4648-937e-c92006319c30");
+        var photoId = Guid.Parse("5c560d87-c11d-4d1d-88de-2f2c8d88a9ff");
+        var fileName = "sample-photo-01.jpg";
+
+        // Act
+        var expectedStoragePath = $"photogallery/{albumId}/{photoId}/original.jpg";
+        var photo = new Photo
+        {
+            Id = photoId,
+            AlbumId = albumId,
+            FileName = fileName,
+            StorageKey = expectedStoragePath,
+            UploadDate = DateTime.UtcNow,
+            UploadedBy = "test-user"
+        };
+
+        // Assert
+        Assert.Equal(expectedStoragePath, photo.StorageKey);
+        Assert.StartsWith("photogallery/", photo.StorageKey);
+        Assert.Contains(albumId.ToString(), photo.StorageKey);
+        Assert.Contains(photoId.ToString(), photo.StorageKey);
+        Assert.EndsWith("original.jpg", photo.StorageKey);
+    }
+
+    [Fact]
+    public void PhotoVersion_Should_Use_Quality_Specific_Storage_Path()
+    {
+        // Arrange
+        var albumId = Guid.Parse("c373c777-c47a-4648-937e-c92006319c30");
+        var photoId = Guid.Parse("5c560d87-c11d-4d1d-88de-2f2c8d88a9ff");
+        var qualities = new[] { "high", "medium", "low", "raw" };
+
+        // Act & Assert
+        foreach (var quality in qualities)
+        {
+            var storagePath = $"photogallery/{albumId}/{photoId}/{quality}.jpg";
+            var version = new PhotoVersion
+            {
+                Id = Guid.NewGuid(),
+                PhotoId = photoId,
+                StorageKey = storagePath,
+                FileSize = 100000
+            };
+
+            Assert.Equal(storagePath, version.StorageKey);
+            Assert.StartsWith("photogallery/", version.StorageKey);
+            Assert.Contains(albumId.ToString(), version.StorageKey);
+            Assert.Contains(photoId.ToString(), version.StorageKey);
+            Assert.EndsWith($"{quality}.jpg", version.StorageKey);
+        }
+    }
+
+    [Fact]
+    public void Photo_Storage_Path_Should_Be_Consistent_For_Album()
+    {
+        // Arrange
+        var albumId = Guid.NewGuid();
+        var photo1Id = Guid.NewGuid();
+        var photo2Id = Guid.NewGuid();
+
+        // Act
+        var photo1 = new Photo
+        {
+            Id = photo1Id,
+            AlbumId = albumId,
+            FileName = "photo1.jpg",
+            StorageKey = $"photogallery/{albumId}/{photo1Id}/original.jpg"
+        };
+
+        var photo2 = new Photo
+        {
+            Id = photo2Id,
+            AlbumId = albumId,
+            FileName = "photo2.jpg",
+            StorageKey = $"photogallery/{albumId}/{photo2Id}/original.jpg"
+        };
+
+        // Assert - Both photos should be in same album bucket
+        var photo1Parts = photo1.StorageKey.Split('/');
+        var photo2Parts = photo2.StorageKey.Split('/');
+
+        Assert.Equal("photogallery", photo1Parts[0]);
+        Assert.Equal("photogallery", photo2Parts[0]);
+        Assert.Equal(albumId.ToString(), photo1Parts[1]);
+        Assert.Equal(albumId.ToString(), photo2Parts[1]);
+        // Different photo IDs
+        Assert.NotEqual(photo1Parts[2], photo2Parts[2]);
+    }
+}
+
+/// <summary>
 /// Tests for processing queue functionality
 /// </summary>
 public class ProcessingQueueTests

@@ -205,4 +205,4 @@ playwright-report/
 # These should be included to help setup
 !appsettings.*.template.json
 !.env.template
-!.env.*.template
+!.env.*.templatetemp/
