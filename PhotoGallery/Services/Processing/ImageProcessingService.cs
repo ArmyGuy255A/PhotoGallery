@@ -95,8 +95,10 @@ public class ImageProcessingService : IImageProcessor
             using var scope = _serviceProvider.CreateScope();
             var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
             var photoRepository = scope.ServiceProvider.GetRequiredService<IPhotoRepository>();
+            var urlService = scope.ServiceProvider.GetRequiredService<PhotoVersionUrlService>();
 
             var pendingItems = await itemRepository.GetPendingItemsAsync();
+            var processedPhotos = new HashSet<Guid>();
 
             foreach (var item in pendingItems)
             {
@@ -108,6 +110,7 @@ public class ImageProcessingService : IImageProcessor
                     await ProcessQualityAsync(item, itemRepository, photoRepository, cancellationToken);
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
+                    processedPhotos.Add(item.PhotoId);
                 }
                 catch (Exception ex)
                 {
@@ -142,6 +145,7 @@ public class ImageProcessingService : IImageProcessor
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
                         item.PhotoId, item.Quality, item.RetryCount + 1);
+                    processedPhotos.Add(item.PhotoId);
                 }
                 catch (Exception ex)
                 {
@@ -154,6 +158,30 @@ public class ImageProcessingService : IImageProcessor
                         await itemRepository.UpdateAsync(item);
                         await itemRepository.SaveChangesAsync();
                     }
+                }
+            }
+
+            // Generate pre-signed URLs for all processed photos
+            foreach (var photoId in processedPhotos)
+            {
+                try
+                {
+                    // Check if all quality items are complete for this photo
+                    var queueId = (await itemRepository.GetByPhotoIdAsync(photoId)).FirstOrDefault()?.ProcessingQueueId;
+                    if (queueId.HasValue)
+                    {
+                        var allItems = await itemRepository.GetByQueueIdAsync(queueId.Value);
+                        if (allItems.All(i => i.Status == ProcessingStatus.Complete))
+                        {
+                            _logger.LogDebug("All qualities complete for photo {PhotoId}. Generating pre-signed URLs...", photoId);
+                            await urlService.GeneratePhotoVersionUrlsAsync(photoId);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error generating pre-signed URLs for photo {PhotoId}", photoId);
+                    // Don't fail the entire queue if URL generation fails
                 }
             }
         }

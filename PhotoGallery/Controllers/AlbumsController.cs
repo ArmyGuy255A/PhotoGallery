@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
+using PhotoGallery.Services;
 using System.Security.Claims;
 
 namespace PhotoGallery.Controllers;
@@ -17,17 +18,20 @@ public class AlbumsController : ControllerBase
     private readonly IAlbumRepository _albumRepository;
     private readonly IRepository<Photo> _photoRepository;
     private readonly IAccessCodeRepository _accessCodeRepository;
+    private readonly PhotoVersionUrlService _urlService;
     private readonly ILogger<AlbumsController> _logger;
 
     public AlbumsController(
         IAlbumRepository albumRepository,
         IRepository<Photo> photoRepository,
         IAccessCodeRepository accessCodeRepository,
+        PhotoVersionUrlService urlService,
         ILogger<AlbumsController> logger)
     {
         _albumRepository = albumRepository;
         _photoRepository = photoRepository;
         _accessCodeRepository = accessCodeRepository;
+        _urlService = urlService;
         _logger = logger;
     }
 
@@ -187,7 +191,7 @@ public class AlbumsController : ControllerBase
     /// Get all photos in an album
     /// </summary>
     /// <param name="albumId">Album ID</param>
-    /// <returns>List of photos in the album</returns>
+    /// <returns>List of photos in the album with pre-signed URLs</returns>
     [HttpGet("{albumId}/photos")]
     public async Task<ActionResult<List<PhotoListDto>>> GetAlbumPhotos(string albumId)
     {
@@ -206,16 +210,32 @@ public class AlbumsController : ControllerBase
             return Forbid();
 
         var allPhotos = await _photoRepository.GetAllAsync();
-        var albumPhotos = allPhotos
-            .Where(p => p.AlbumId == albumGuid)
-            .Select(p => new PhotoListDto
+        var albumPhotos = new List<PhotoListDto>();
+
+        foreach (var p in allPhotos.Where(x => x.AlbumId == albumGuid))
+        {
+            var photoDto = new PhotoListDto
             {
                 Id = p.Id.ToString(),
                 FileName = p.FileName,
                 UploadDate = p.UploadDate,
                 UploadedBy = p.UploadedBy
-            })
-            .ToList();
+            };
+
+            try
+            {
+                // Get pre-signed URLs for Thumbnail and Medium
+                photoDto.ThumbnailUrl = await _urlService.GetPhotoVersionUrlAsync(p.Id, Enums.QualityType.Thumbnail);
+                photoDto.MediumUrl = await _urlService.GetPhotoVersionUrlAsync(p.Id, Enums.QualityType.Medium);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to get pre-signed URLs for photo {PhotoId}", p.Id);
+                // Continue without URLs - they may not be generated yet
+            }
+
+            albumPhotos.Add(photoDto);
+        }
 
         _logger.LogInformation("Retrieved {PhotoCount} photos from album {AlbumId}", albumPhotos.Count, albumGuid);
         return Ok(albumPhotos);
@@ -435,6 +455,8 @@ public class PhotoListDto
     public string FileName { get; set; } = string.Empty;
     public DateTime UploadDate { get; set; }
     public string UploadedBy { get; set; } = string.Empty;
+    public string? ThumbnailUrl { get; set; }
+    public string? MediumUrl { get; set; }
 }
 
 /// <summary>

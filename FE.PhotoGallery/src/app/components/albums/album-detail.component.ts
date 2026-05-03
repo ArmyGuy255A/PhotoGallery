@@ -11,7 +11,10 @@ interface Photo {
   id: string;
   fileName: string;
   uploadDate: string;
+  uploadedBy?: string;
   processingStatus?: string;
+  thumbnailUrl?: string;
+  mediumUrl?: string;
 }
 
 interface AccessCode {
@@ -73,7 +76,8 @@ interface Album {
                   <span *ngIf="photo.processingStatus === 'Failed'">✗</span>
                 </div>
                 <div class="photo-placeholder">
-                  <svg viewBox="0 0 24 24">
+                  <img *ngIf="photo.thumbnailUrl" [src]="photo.thumbnailUrl" alt="{{ photo.fileName }}" class="photo-image">
+                  <svg *ngIf="!photo.thumbnailUrl" viewBox="0 0 24 24">
                     <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
                   </svg>
                 </div>
@@ -309,6 +313,13 @@ interface Album {
       display: flex;
       align-items: center;
       justify-content: center;
+      overflow: hidden;
+    }
+
+    .photo-image {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
 
     .photo-placeholder svg {

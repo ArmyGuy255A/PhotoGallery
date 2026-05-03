@@ -9,6 +9,8 @@ export interface Photo {
   fileName: string;
   uploadDate: Date;
   uploadedBy: string;
+  thumbnailUrl?: string;
+  mediumUrl?: string;
 }
 
 export interface CompressionProfile {
