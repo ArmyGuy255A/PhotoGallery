@@ -1,14 +1,17 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { PhotoUploadComponent } from './photo-upload.component';
+import { Subject } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 
 interface Photo {
   id: string;
   fileName: string;
   uploadDate: string;
-  uploadedBy: string;
+  processingStatus?: string;
 }
 
 interface AccessCode {
@@ -16,8 +19,6 @@ interface AccessCode {
   code: string;
   expirationDate: string | null;
   createdDate: string;
-  createdBy: string;
-  isExpired: boolean;
 }
 
 interface Album {
@@ -32,7 +33,7 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, PhotoUploadComponent],
   template: `
     <div class="album-detail-container">
       <header class="detail-header">
@@ -51,14 +52,26 @@ interface Album {
             <p class="meta">Created on {{ (album.createdDate | date: 'short') }} by {{ album.createdBy }}</p>
           </section>
 
+          <!-- Photo Upload Section -->
+          <section class="upload-section">
+            <app-photo-upload 
+              [albumId]="albumId"
+              (uploadComplete)="onUploadComplete($event)">
+            </app-photo-upload>
+          </section>
+
           <section class="photos-section">
             <div class="section-header">
               <h2>Photos ({{ photos.length }})</h2>
-              <button routerLink="/albums/{{ album.id }}/upload" class="action-btn">+ Upload Photos</button>
             </div>
 
             <div class="photos-grid" *ngIf="photos.length > 0">
               <div *ngFor="let photo of photos" class="photo-card">
+                <div class="photo-status-badge" [ngClass]="getStatusClass(photo)">
+                  <span *ngIf="photo.processingStatus === 'Complete'">✓</span>
+                  <span *ngIf="photo.processingStatus === 'Processing'">⟳</span>
+                  <span *ngIf="photo.processingStatus === 'Failed'">✗</span>
+                </div>
                 <div class="photo-placeholder">
                   <svg viewBox="0 0 24 24">
                     <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
@@ -70,8 +83,7 @@ interface Album {
             </div>
 
             <div class="empty-message" *ngIf="photos.length === 0">
-              <p>No photos yet. Upload some photos to get started.</p>
-              <button routerLink="/albums/{{ album.id }}/upload" class="action-btn">Upload Photos</button>
+              <p>No photos yet. Upload some photos to get started above.</p>
             </div>
           </section>
 
@@ -85,23 +97,26 @@ interface Album {
               <table>
                 <thead>
                   <tr>
-                    <th>Code</th>
-                    <th>Expiration Date</th>
-                    <th>Created</th>
+                    <th>Access Code</th>
                     <th>Status</th>
-                    <th>Action</th>
+                    <th>Expiration</th>
+                    <th>Created</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr *ngFor="let code of accessCodes" [class.expired]="code.isExpired">
-                    <td class="code">{{ code.code }}</td>
-                    <td>{{ (code.expirationDate | date: 'short') || 'Never' }}</td>
-                    <td>{{ (code.createdDate | date: 'short') }}</td>
+                  <tr *ngFor="let code of accessCodes">
+                    <td class="code-cell">
+                      <code>{{ code.code }}</code>
+                      <button class="copy-btn" (click)="copyToClipboard(code.code)" title="Copy code">📋</button>
+                    </td>
                     <td>
-                      <span class="badge" [class.active]="!code.isExpired" [class.expired]="code.isExpired">
-                        {{ code.isExpired ? 'Expired' : 'Active' }}
+                      <span class="status-badge" [ngClass]="getCodeStatus(code)">
+                        {{ getCodeStatus(code) === 'active' ? 'Active' : 'Expired' }}
                       </span>
                     </td>
+                    <td>{{ code.expirationDate ? (code.expirationDate | date: 'short') : 'Never' }}</td>
+                    <td>{{ code.createdDate | date: 'short' }}</td>
                     <td>
                       <button class="delete-btn" (click)="deleteAccessCode(code.id)">Delete</button>
                     </td>
@@ -111,43 +126,56 @@ interface Album {
             </div>
 
             <div class="empty-message" *ngIf="accessCodes.length === 0">
-              <p>No access codes yet. Generate one to share this album with others.</p>
-              <button (click)="createAccessCode()" class="action-btn">Generate Code</button>
+              <p>No access codes yet. Create one to share this album with clients.</p>
+            </div>
+          </section>
+
+          <section class="admin-stats" *ngIf="isAdmin">
+            <div class="stat-item">
+              <label>Total Photos</label>
+              <span class="stat-value">{{ photos.length }}</span>
+            </div>
+            <div class="stat-item">
+              <label>Active Codes</label>
+              <span class="stat-value">{{ getActiveCodes() }}</span>
             </div>
           </section>
         </div>
 
-        <div class="error" *ngIf="errorMessage">
-          <p>{{ errorMessage }}</p>
+        <div class="error-message" *ngIf="errorMessage">
+          {{ errorMessage }}
         </div>
       </main>
     </div>
   `,
   styles: [`
     .album-detail-container {
-      min-height: 100vh;
-      background: #f5f7fa;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
     }
 
     .detail-header {
-      background: white;
-      padding: 24px;
-      border-bottom: 1px solid #e0e6ed;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 30px;
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 15px;
     }
 
     .back-btn {
-      padding: 8px 16px;
-      background: #ecf0f1;
+      background: none;
       border: none;
-      border-radius: 4px;
+      color: #0066cc;
       cursor: pointer;
-      margin-bottom: 12px;
-      font-size: 14px;
-      transition: background 0.3s;
+      font-size: 16px;
+      padding: 5px 10px;
     }
 
     .back-btn:hover {
-      background: #d5dbdb;
+      background: #f0f0f0;
+      border-radius: 4px;
     }
 
     .detail-header h1 {
@@ -156,44 +184,50 @@ interface Album {
       color: #333;
     }
 
-    .detail-content {
-      padding: 32px;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
     .loading {
-      padding: 24px;
       text-align: center;
-      color: #999;
+      padding: 40px;
+      color: #666;
     }
 
     .album-info {
-      background: white;
-      padding: 24px;
+      background: #f9f9f9;
       border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-      margin-bottom: 32px;
+      padding: 20px;
+      margin-bottom: 30px;
     }
 
     .description {
       font-size: 16px;
-      color: #666;
-      margin: 0 0 12px 0;
-      line-height: 1.6;
+      color: #333;
+      margin: 0 0 10px 0;
     }
 
     .meta {
-      font-size: 13px;
+      font-size: 14px;
       color: #999;
       margin: 0;
+    }
+
+    .upload-section {
+      margin-bottom: 40px;
+      padding: 20px;
+      background: #f0f8ff;
+      border-radius: 8px;
+      border: 1px dashed #0066cc;
+    }
+
+    .photos-section,
+    .access-codes-section,
+    .admin-stats {
+      margin-bottom: 40px;
     }
 
     .section-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
     }
 
     .section-header h2 {
@@ -203,204 +237,277 @@ interface Album {
     }
 
     .action-btn {
-      padding: 10px 20px;
-      background: #27ae60;
+      background: #0066cc;
       color: white;
       border: none;
+      padding: 10px 20px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 14px;
-      transition: background 0.3s;
     }
 
     .action-btn:hover {
-      background: #229954;
-    }
-
-    .photos-section {
-      margin-bottom: 40px;
+      background: #0052a3;
     }
 
     .photos-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 16px;
+      gap: 15px;
     }
 
     .photo-card {
       background: white;
+      border: 1px solid #e0e0e0;
       border-radius: 8px;
-      padding: 16px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-      text-align: center;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      position: relative;
     }
 
-    .photo-placeholder {
-      width: 100px;
-      height: 100px;
-      background: #ecf0f1;
-      border-radius: 8px;
+    .photo-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .photo-status-badge {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 12px;
+      font-size: 12px;
+      color: white;
+      z-index: 10;
+    }
+
+    .photo-status-badge.complete {
+      background: #4caf50;
+    }
+
+    .photo-status-badge.processing {
+      background: #ff9800;
+    }
+
+    .photo-status-badge.failed {
+      background: #f44336;
+    }
+
+    .photo-status-badge.pending {
+      background: #9e9e9e;
+    }
+
+    .photo-placeholder {
+      width: 100%;
+      height: 120px;
+      background: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .photo-placeholder svg {
-      width: 50px;
-      height: 50px;
-      fill: #bdc3c7;
+      width: 60px;
+      height: 60px;
+      fill: #ccc;
     }
 
     .photo-card h3 {
-      margin: 0 0 8px 0;
+      margin: 10px;
       font-size: 14px;
       color: #333;
       word-break: break-word;
     }
 
     .photo-meta {
-      margin: 0;
+      margin: 0 10px 10px;
       font-size: 12px;
       color: #999;
     }
 
     .empty-message {
-      background: white;
-      padding: 32px;
-      border-radius: 8px;
       text-align: center;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    }
-
-    .empty-message p {
+      padding: 40px;
       color: #999;
-      margin: 0 0 16px 0;
-    }
-
-    .access-codes-section {
-      margin-bottom: 40px;
+      background: #f9f9f9;
+      border-radius: 8px;
+      border: 1px dashed #e0e0e0;
     }
 
     .codes-table {
-      background: white;
-      border-radius: 8px;
-      overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    }
-
-    table {
       width: 100%;
       border-collapse: collapse;
     }
 
-    thead {
-      background: #f9f9f9;
-      border-bottom: 1px solid #e0e6ed;
+    .codes-table table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
 
-    th {
-      padding: 12px 16px;
+    .codes-table thead {
+      background: #f5f5f5;
+      border-bottom: 2px solid #e0e0e0;
+    }
+
+    .codes-table th {
+      padding: 15px;
       text-align: left;
       font-weight: 600;
-      color: #666;
-      font-size: 13px;
-    }
-
-    td {
-      padding: 12px 16px;
-      border-bottom: 1px solid #e0e6ed;
+      color: #333;
       font-size: 14px;
     }
 
-    tr:last-child td {
-      border-bottom: none;
+    .codes-table td {
+      padding: 15px;
+      border-bottom: 1px solid #e0e0e0;
+      font-size: 14px;
     }
 
-    td.code {
+    .code-cell {
       font-family: monospace;
-      font-weight: 600;
-      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
 
-    .badge {
+    .code-cell code {
+      background: #f5f5f5;
+      padding: 5px 10px;
+      border-radius: 4px;
+      color: #0066cc;
+    }
+
+    .copy-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      padding: 2px 5px;
+    }
+
+    .copy-btn:hover {
+      transform: scale(1.2);
+    }
+
+    .status-badge {
       display: inline-block;
-      padding: 4px 12px;
-      border-radius: 12px;
+      padding: 5px 12px;
+      border-radius: 20px;
       font-size: 12px;
       font-weight: 600;
     }
 
-    .badge.active {
-      background: #d5f4e6;
-      color: #186a3b;
+    .status-badge.active {
+      background: #c8e6c9;
+      color: #2e7d32;
     }
 
-    .badge.expired {
-      background: #fadbd8;
-      color: #922b21;
+    .status-badge.expired {
+      background: #ffcccc;
+      color: #c62828;
     }
 
     .delete-btn {
-      padding: 6px 12px;
-      background: #e74c3c;
+      background: #f44336;
       color: white;
       border: none;
+      padding: 6px 12px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
-      transition: background 0.3s;
     }
 
     .delete-btn:hover {
-      background: #c0392b;
+      background: #d32f2f;
     }
 
-    .error {
-      padding: 16px;
-      background: #fadbd8;
-      border-left: 4px solid #e74c3c;
-      color: #922b21;
-      border-radius: 4px;
+    .admin-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+    }
+
+    .stat-item {
+      background: white;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .stat-item label {
+      display: block;
+      font-size: 14px;
+      color: #999;
+      margin-bottom: 10px;
+    }
+
+    .stat-value {
+      display: block;
+      font-size: 32px;
+      font-weight: bold;
+      color: #333;
+    }
+
+    .error-message {
+      background: #ffebee;
+      color: #c62828;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 20px;
+      border-left: 4px solid #c62828;
     }
   `]
 })
-export class AlbumDetailComponent implements OnInit {
+export class AlbumDetailComponent implements OnInit, OnDestroy {
+  albumId: string = '';
   album: Album | null = null;
   photos: Photo[] = [];
   accessCodes: AccessCode[] = [];
   isLoading = true;
   errorMessage = '';
-  albumId: string = '';
+  isAdmin = false;
+
+  private destroy$ = new Subject<void>();
 
   constructor(
     private route: ActivatedRoute,
-    private router: Router,
     private http: HttpClient
   ) {}
 
   ngOnInit(): void {
-    this.route.params.subscribe(params => {
+    this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       this.albumId = params['id'];
-      if (this.albumId) {
-        this.loadAlbumDetails();
-      }
+      this.loadAlbum();
+      this.loadPhotos();
+      this.loadAccessCodes();
     });
   }
 
-  loadAlbumDetails(): void {
-    this.isLoading = true;
-    const apiUrl = environment.apiUrl || '';
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
 
-    this.http.get<Album>(`${apiUrl}/api/albums/${this.albumId}`).subscribe({
-      next: (album) => {
-        this.album = album;
-        this.loadPhotos();
-        this.loadAccessCodes();
+  loadAlbum(): void {
+    const apiUrl = environment.apiUrl || '';
+    this.http.get<Album>(`${apiUrl}/api/albums/${this.albumId}`).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (data) => {
+        this.album = data;
+        this.isLoading = false;
       },
       error: (error) => {
         console.error('Error loading album:', error);
-        this.errorMessage = 'Failed to load album. Please try again.';
+        this.errorMessage = 'Failed to load album details.';
         this.isLoading = false;
       }
     });
@@ -408,40 +515,36 @@ export class AlbumDetailComponent implements OnInit {
 
   loadPhotos(): void {
     const apiUrl = environment.apiUrl || '';
-    this.http.get<Photo[]>(`${apiUrl}/api/albums/${this.albumId}/photos`).subscribe({
-      next: (photos) => {
-        this.photos = photos || [];
+    this.http.get<Photo[]>(`${apiUrl}/api/albums/${this.albumId}/photos`).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (data) => {
+        this.photos = data || [];
       },
       error: (error) => {
         console.error('Error loading photos:', error);
-        this.photos = [];
       }
     });
   }
 
   loadAccessCodes(): void {
     const apiUrl = environment.apiUrl || '';
-    this.http.get<AccessCode[]>(`${apiUrl}/api/albums/${this.albumId}/access-codes`).subscribe({
-      next: (codes) => {
-        this.accessCodes = codes || [];
-        this.isLoading = false;
+    this.http.get<AccessCode[]>(`${apiUrl}/api/albums/${this.albumId}/access-codes`).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (data) => {
+        this.accessCodes = data || [];
       },
       error: (error) => {
         console.error('Error loading access codes:', error);
-        this.accessCodes = [];
-        this.isLoading = false;
       }
     });
   }
 
   createAccessCode(): void {
     const apiUrl = environment.apiUrl || '';
-    const request = {
-      expiresForever: false,
-      expirationDays: 30
-    };
+    const defaultExpiration = new Date();
+    defaultExpiration.setDate(defaultExpiration.getDate() + 30);
 
-    this.http.post<any>(`${apiUrl}/api/albums/${this.albumId}/access-codes`, request).subscribe({
+    this.http.post(`${apiUrl}/api/albums/${this.albumId}/access-codes`, {
+      expirationDate: defaultExpiration
+    }).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         console.log('Access code created successfully');
         this.loadAccessCodes();
@@ -459,7 +562,7 @@ export class AlbumDetailComponent implements OnInit {
     }
 
     const apiUrl = environment.apiUrl || '';
-    this.http.delete(`${apiUrl}/api/albums/${this.albumId}/access-codes/${codeId}`).subscribe({
+    this.http.delete(`${apiUrl}/api/albums/${this.albumId}/access-codes/${codeId}`).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         console.log('Access code deleted successfully');
         this.loadAccessCodes();
@@ -468,6 +571,38 @@ export class AlbumDetailComponent implements OnInit {
         console.error('Error deleting access code:', error);
         this.errorMessage = 'Failed to delete access code. Please try again.';
       }
+    });
+  }
+
+  onUploadComplete(event: any): void {
+    console.log('Upload completed:', event);
+    this.loadPhotos();
+  }
+
+  getStatusClass(photo: Photo): string {
+    if (!photo.processingStatus) return 'pending';
+    
+    const status = photo.processingStatus.toLowerCase();
+    if (status === 'complete') return 'complete';
+    if (status === 'processing') return 'processing';
+    if (status === 'failed') return 'failed';
+    return 'pending';
+  }
+
+  getCodeStatus(code: AccessCode): string {
+    if (!code.expirationDate) return 'active';
+    const expiration = new Date(code.expirationDate);
+    return expiration > new Date() ? 'active' : 'expired';
+  }
+
+  getActiveCodes(): number {
+    return this.accessCodes.filter(code => this.getCodeStatus(code) === 'active').length;
+  }
+
+  copyToClipboard(text: string): void {
+    navigator.clipboard.writeText(text).then(() => {
+      console.log('Copied to clipboard:', text);
+      alert('Access code copied to clipboard!');
     });
   }
 }

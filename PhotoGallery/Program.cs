@@ -16,6 +16,10 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configure listening URLs (defaults to 5105, or use ASPNETCORE_URLS env var if set)
+var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
+builder.WebHost.UseUrls(urls);
+
 // Add services to the container.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ??
                        throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
@@ -90,7 +94,18 @@ builder.Services.AddScoped<IExternalAuthService, ExternalAuthService>();
 
 // Register storage provider based on configuration
 builder.Services.AddSingleton<IStorageProvider>(sp =>
-    StorageProviderFactory.Create(builder.Configuration, sp));
+{
+    try
+    {
+        return StorageProviderFactory.Create(builder.Configuration, sp);
+    }
+    catch (Exception ex)
+    {
+        var logger = sp.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Failed to create storage provider. Check your storage configuration.");
+        throw;
+    }
+});
 
 // Register repositories
 builder.Services.AddScoped<ApplicationDbContextInitializer>();

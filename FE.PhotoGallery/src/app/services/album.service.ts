@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 export interface Album {
   id: string;
@@ -29,7 +30,7 @@ export interface UpdateAlbumRequest {
   providedIn: 'root'
 })
 export class AlbumService {
-  private readonly API_URL = '/api/albums';
+  private readonly API_URL = `${environment.apiUrl}/api/albums`;
 
   constructor(private http: HttpClient) {}
 

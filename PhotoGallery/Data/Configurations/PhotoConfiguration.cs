@@ -22,6 +22,10 @@ public class PhotoConfiguration : IEntityTypeConfiguration<Photo>
             .HasMaxLength(256)
             .IsRequired();
 
+        builder.Property(p => p.ProcessingStatus)
+            .HasConversion<int>()
+            .HasDefaultValue(PhotoProcessingStatus.Pending);
+
         builder.Property(p => p.RowVersion)
             .HasDefaultValue(new byte[] { 1 });
 
@@ -35,7 +39,13 @@ public class PhotoConfiguration : IEntityTypeConfiguration<Photo>
             .HasForeignKey(pv => pv.PhotoId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.HasMany(p => p.PhotoFiles)
+            .WithOne(pf => pf.Photo)
+            .HasForeignKey(pf => pf.PhotoId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.HasIndex(p => p.AlbumId);
         builder.HasIndex(p => p.StorageKey).IsUnique();
+        builder.HasIndex(p => p.ProcessingStatus);
     }
 }

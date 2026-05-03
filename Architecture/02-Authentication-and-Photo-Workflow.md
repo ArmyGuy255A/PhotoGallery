@@ -1,9 +1,10 @@
+```mermaid
 sequenceDiagram
     participant User as Admin User
     participant Angular as Angular Frontend
     participant BE as Backend API
     participant OAuth as Google OAuth
-    participant DB as Database
+    participant DB as DatabaseVSCVT-7F2FACD9-4DEE-42D5-8D5F-FF097380671A
     participant Storage as Minio/Azure Storage
     
     rect rgb(200, 220, 255)
@@ -86,3 +87,4 @@ sequenceDiagram
     BE-->>Angular: 59. Return file to browser
     Angular-->>Visitor: 60. Browser downloads photo
     end
+```

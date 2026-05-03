@@ -168,13 +168,40 @@ public class ImageProcessingService : IImageProcessor
         if (photo == null)
             throw new FileNotFoundException($"Photo {queueEntry.PhotoId} not found");
 
-        var originalStream = await _storageProvider.DownloadAsync(photo.StorageKey);
-        using (var image = await Image.LoadAsync(originalStream, cancellationToken))
+        // Mark processing as started
+        photo.ProcessingStatus = PhotoProcessingStatus.Processing;
+        photo.ProcessingStartedAt = DateTime.UtcNow;
+        await photoRepo.UpdateAsync(photo);
+
+        try
         {
-            foreach (var profile in _compressionProfiles)
+            var originalStream = await _storageProvider.DownloadAsync(photo.StorageKey);
+            using (var image = await Image.LoadAsync(originalStream, cancellationToken))
             {
-                await ProcessQualityLevelAsync(photo, image, profile, scope, cancellationToken);
+                // Reset completion flags
+                photo.HasThumbnail = false;
+                photo.HasLow = false;
+                photo.HasMedium = false;
+                photo.HasHigh = false;
+
+                foreach (var profile in _compressionProfiles)
+                {
+                    await ProcessQualityLevelAsync(photo, image, profile, scope, cancellationToken);
+                }
             }
+
+            // Mark processing as complete
+            photo.ProcessingStatus = PhotoProcessingStatus.Complete;
+            photo.ProcessingCompletedAt = DateTime.UtcNow;
+            photo.ProcessingComplete = true; // Legacy field for compatibility
+            await photoRepo.UpdateAsync(photo);
+        }
+        catch (Exception ex)
+        {
+            photo.ProcessingStatus = PhotoProcessingStatus.Failed;
+            photo.ProcessingCompletedAt = DateTime.UtcNow;
+            await photoRepo.UpdateAsync(photo);
+            throw;
         }
     }
 
@@ -193,7 +220,7 @@ public class ImageProcessingService : IImageProcessor
             await processedImage.SaveAsync(memoryStream, jpegEncoder, cancellationToken);
             memoryStream.Position = 0;
 
-            var storageKey = $"photos/{photo.AlbumId}/{photo.Id}/{profile.Name}.jpg";
+            var storageKey = $"photogallery/{photo.AlbumId}/{photo.Id}/{profile.Name}.jpg";
             await _storageProvider.UploadAsync(storageKey, memoryStream, "image/jpeg");
 
             if (!QualityMap.TryGetValue(profile.Name, out var photoQuality))
@@ -210,6 +237,25 @@ public class ImageProcessingService : IImageProcessor
             };
 
             await versionRepo.AddAsync(photoVersion);
+
+            // Update photo flags based on quality level
+            var photoRepo = scope.ServiceProvider.GetRequiredService<IRepository<Photo>>();
+            switch (profile.Name)
+            {
+                case "high":
+                    photo.HasHigh = true;
+                    break;
+                case "medium":
+                    photo.HasMedium = true;
+                    break;
+                case "low":
+                    photo.HasLow = true;
+                    break;
+                case "raw":
+                    // For thumbnail generation, we'll add that in Phase 15
+                    break;
+            }
+            await photoRepo.UpdateAsync(photo);
             
             _logger.LogInformation(
                 "Created {Quality} version of photo {PhotoId}, size: {Size} bytes",

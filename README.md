@@ -71,20 +71,44 @@ A modern web application for photographers to upload, organize, and securely sha
 - Docker & Docker Compose 2.0+
 - OR: .NET 9 SDK + Node.js 20 LTS (for local development)
 
-### Using Docker Compose (Recommended)
+### Automated Startup (Recommended - Windows/macOS/Linux)
+
+The easiest way to get started - one command starts everything:
+
+**Windows (PowerShell):**
+```powershell
+.\start-all.ps1
+```
+
+**Windows (Command Prompt):**
+```cmd
+start-all.bat
+```
+
+This script automatically:
+- Starts PostgreSQL and MinIO in Docker
+- Starts the ASP.NET Backend on port 5105
+- Starts the Angular Frontend on port 4200
+- Opens your browser to http://localhost:4200
+
+For more options:
+```powershell
+.\start-all.ps1 -NoOpen    # Don't auto-open browser
+.\start-all.ps1 -Wait      # Keep running indefinitely
+```
+
+See [STARTUP_GUIDE.md](./STARTUP_GUIDE.md) for detailed documentation.
+
+### Manual Setup (Docker Compose)
 
 ```bash
-# Clone repository
-git clone https://github.com/YOUR_ORG/PhotoGallery.git
-cd PhotoGallery
-
-# Start all services
+# Start all services with Docker Compose
 docker-compose up -d
 
-# Access services
+# Access services:
 # Frontend: http://localhost:4200
 # Backend API: http://localhost:5105
-# MinIO Console: http://localhost:9001 (admin/minioadmin-password)
+# MinIO Console: http://localhost:9000
 ```
 
 ### Local Development (Without Docker)

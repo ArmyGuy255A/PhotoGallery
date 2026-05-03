@@ -15,6 +15,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<Album> Albums { get; set; }
     public DbSet<Photo> Photos { get; set; }
     public DbSet<PhotoVersion> PhotoVersions { get; set; }
+    public DbSet<PhotoFile> PhotoFiles { get; set; }
     public DbSet<AccessCode> AccessCodes { get; set; }
     public DbSet<UserAccessLog> UserAccessLogs { get; set; }
     public DbSet<ProcessingQueue> ProcessingQueues { get; set; }

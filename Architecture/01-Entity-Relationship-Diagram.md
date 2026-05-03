@@ -1,3 +1,4 @@
+```mermaid
 erDiagram
     APPLICATION_USER ||--o{ ALBUM : owns
     APPLICATION_USER ||--o{ ACCESS_CODE : creates
@@ -7,7 +8,7 @@ erDiagram
     ALBUM ||--o{ ACCESS_CODE : "has access codes"
     PHOTO ||--o{ PHOTO_VERSION : "has versions"
     ACCESS_CODE ||--o{ USER_ACCESS_LOG : "associated with"
-    
+    D:\repos\CleanArchitecture
     APPLICATION_USER {
         string Id PK
         string Email UK
@@ -58,3 +59,4 @@ erDiagram
         guid AccessCodeId FK
         datetime AccessDate
     }
+```

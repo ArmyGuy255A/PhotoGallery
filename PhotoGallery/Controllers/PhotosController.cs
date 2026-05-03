@@ -80,42 +80,77 @@ public class PhotosController : ControllerBase
                 }
 
                 // Allowed image formats
-                var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp" };
+                var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp", "application/octet-stream" };
                 if (!allowedMimeTypes.Contains(file.ContentType))
                 {
-                    errors.Add($"{file.FileName}: Invalid file type. Only JPEG, PNG, and WebP are allowed");
+                    errors.Add($"{file.FileName}: Invalid file type '{file.ContentType}'. Only JPEG, PNG, and WebP are allowed");
+                    _logger.LogWarning("Rejected file {FileName} with content type {ContentType}", file.FileName, file.ContentType);
                     continue;
                 }
 
                 // Create photo entity
+                var photoId = Guid.NewGuid();
                 var photo = new Photo
                 {
-                    Id = Guid.NewGuid(),
+                    Id = photoId,
                     AlbumId = albumGuid,
                     FileName = file.FileName,
                     UploadDate = DateTime.UtcNow,
                     UploadedBy = userId,
-                    StorageKey = $"photos/{albumGuid}/{Guid.NewGuid()}/{file.FileName}"
+                    StorageKey = $"photogallery/{albumGuid}/{photoId}/original.jpg"
                 };
 
+                _logger.LogInformation("Starting upload for photo {PhotoId} (file: {FileName}, size: {FileSize})", photoId, file.FileName, file.Length);
+
                 // Upload original file to storage
-                using (var stream = file.OpenReadStream())
+                try
                 {
-                    await _storageProvider.UploadAsync(photo.StorageKey, stream, file.ContentType);
+                    using (var stream = file.OpenReadStream())
+                    {
+                        _logger.LogInformation("Stream opened for {FileName}, uploading to {StorageKey}", file.FileName, photo.StorageKey);
+                        await _storageProvider.UploadAsync(photo.StorageKey, stream, file.ContentType);
+                        _logger.LogInformation("File {StorageKey} uploaded successfully to storage", photo.StorageKey);
+                    }
+                }
+                catch (Exception storageEx)
+                {
+                    _logger.LogError(storageEx, "Storage provider error uploading {StorageKey}", photo.StorageKey);
+                    errors.Add($"{file.FileName}: Storage error - {storageEx.Message}");
+                    continue;
                 }
 
                 // Save photo to database
-                await _photoRepository.AddAsync(photo);
+                try
+                {
+                    await _photoRepository.AddAsync(photo);
+                    await _photoRepository.SaveChangesAsync();
+                    _logger.LogInformation("Photo {PhotoId} saved to database", photoId);
+                }
+                catch (Exception dbEx)
+                {
+                    _logger.LogError(dbEx, "Database error saving photo {PhotoId}", photoId);
+                    errors.Add($"{file.FileName}: Database error - {dbEx.Message}");
+                    continue;
+                }
 
                 // Queue for processing
-                var jobId = await _imageProcessor.QueuePhotoAsync(photo.Id.ToString());
-
-                uploadedPhotos.Add(new PhotoUploadInfo
+                try
                 {
-                    PhotoId = photo.Id.ToString(),
-                    FileName = photo.FileName,
-                    ProcessingJobId = jobId
-                });
+                    var jobId = await _imageProcessor.QueuePhotoAsync(photo.Id.ToString());
+                    _logger.LogInformation("Photo {PhotoId} queued for processing with job {JobId}", photoId, jobId);
+
+                    uploadedPhotos.Add(new PhotoUploadInfo
+                    {
+                        PhotoId = photo.Id.ToString(),
+                        FileName = photo.FileName,
+                        ProcessingJobId = jobId
+                    });
+                }
+                catch (Exception processingEx)
+                {
+                    _logger.LogError(processingEx, "Error queuing photo {PhotoId} for processing", photoId);
+                    // Don't fail the upload if queuing fails - photo is already in storage and DB
+                }
 
                 _logger.LogInformation(
                     "Photo {PhotoFileName} uploaded to album {AlbumId} by {UserId}",
@@ -123,8 +158,8 @@ public class PhotosController : ControllerBase
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error uploading photo {FileName}", file.FileName);
-                errors.Add($"{file.FileName}: {ex.Message}");
+                _logger.LogError(ex, "Unexpected error uploading photo {FileName}: {ExceptionMessage}", file.FileName, ex.Message);
+                errors.Add($"{file.FileName}: {ex.GetType().Name} - {ex.Message}");
             }
         }
 
@@ -206,20 +241,53 @@ public class PhotosController : ControllerBase
     /// <summary>
     /// Get processing status for a photo
     /// </summary>
-    /// <param name="jobId">Processing job ID</param>
-    /// <returns>Processing status</returns>
+    /// <param name="photoId">Photo ID</param>
+    /// <returns>Processing status with version completeness</returns>
     [Authorize]
-    [HttpGet("processing-status/{jobId}")]
-    public async Task<ActionResult<ProcessingStatusDto>> GetProcessingStatus(string jobId)
+    [HttpGet("{photoId}/status")]
+    public async Task<ActionResult<ProcessingStatusDto>> GetProcessingStatus(string photoId)
     {
-        // This endpoint would fetch from ProcessingQueue in a real implementation
-        // For now, we return a placeholder
+        if (!Guid.TryParse(photoId, out var photoGuid))
+            return BadRequest("Invalid photo ID");
+
+        var photo = await _photoRepository.GetByIdAsync(photoGuid);
+        if (photo == null)
+            return NotFound("Photo not found");
+
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        // Verify user has access to the album
+        var album = await _albumRepository.GetByIdAsync(photo.AlbumId);
+        if (album == null)
+            return NotFound("Album not found");
+
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
+            return Forbid();
+
+        // Get photo versions to count progress
+        var versions = await _photoVersionRepository.GetAllAsync();
+        var photoVersions = versions.Where(v => v.PhotoId == photoGuid).ToList();
+        
+        // Determine completion percentage
+        var expectedVersions = 4; // high, medium, low, raw
+        var completedVersions = photoVersions.Count;
+        var percentComplete = expectedVersions > 0 ? (completedVersions * 100) / expectedVersions : 0;
+
         return Ok(new ProcessingStatusDto
         {
-            JobId = jobId,
-            Status = "Processing",
-            CompletedVersions = 0,
-            TotalVersions = 4
+            PhotoId = photoId,
+            Status = photo.ProcessingStatus.ToString(),
+            CompletedVersions = completedVersions,
+            TotalVersions = expectedVersions,
+            PercentComplete = percentComplete,
+            ProcessingStartedAt = photo.ProcessingStartedAt,
+            ProcessingCompletedAt = photo.ProcessingCompletedAt,
+            HasThumbnail = photo.HasThumbnail,
+            HasLow = photo.HasLow,
+            HasMedium = photo.HasMedium,
+            HasHigh = photo.HasHigh
         });
     }
 }
@@ -260,8 +328,15 @@ public class CompressionProfileDto
 /// </summary>
 public class ProcessingStatusDto
 {
-    public string JobId { get; set; } = string.Empty;
+    public string PhotoId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public int CompletedVersions { get; set; }
     public int TotalVersions { get; set; }
+    public int PercentComplete { get; set; }
+    public DateTime? ProcessingStartedAt { get; set; }
+    public DateTime? ProcessingCompletedAt { get; set; }
+    public bool HasThumbnail { get; set; }
+    public bool HasLow { get; set; }
+    public bool HasMedium { get; set; }
+    public bool HasHigh { get; set; }
 }
