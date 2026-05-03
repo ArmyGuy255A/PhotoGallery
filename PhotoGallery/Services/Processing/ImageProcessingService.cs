@@ -202,7 +202,15 @@ public class ImageProcessingService : IImageProcessor
                     }));
 
                 // Save to storage
-                var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{item.Quality}.jpg";
+                var qualityName = item.Quality switch
+                {
+                    QualityType.Thumbnail => "thumbnail",
+                    QualityType.Low => "low",
+                    QualityType.Medium => "medium",
+                    QualityType.High => "high",
+                    _ => "medium"
+                };
+                var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{qualityName}.jpg";
                 using (var outputStream = new MemoryStream())
                 {
                     await image.SaveAsJpegAsync(outputStream, new JpegEncoder { Quality = quality }, cancellationToken);
@@ -353,6 +361,72 @@ public class ImageProcessingService : IImageProcessor
 
     public async Task<PhotoVersion?> GetPhotoVersionAsync(string photoId, string quality)
     {
-        return null;
+        try
+        {
+            // Parse the photo ID to get the album context
+            if (!Guid.TryParse(photoId, out var photoGuid))
+                return null;
+
+            using var scope = _serviceProvider.CreateScope();
+            var photoRepository = scope.ServiceProvider.GetRequiredService<IPhotoRepository>();
+            
+            // Get the photo to retrieve album ID
+            var photo = await photoRepository.GetByIdAsync(photoGuid);
+            if (photo == null)
+                return null;
+
+            // Map quality string to enum to get numeric value (for backwards compatibility)
+            var qualityEnum = quality.ToLower() switch
+            {
+                "thumbnail" => QualityType.Thumbnail,
+                "low" => QualityType.Low,
+                "medium" => QualityType.Medium,
+                "high" => QualityType.High,
+                _ => QualityType.Medium
+            };
+
+            // Try the new string-based format first (thumbnail.jpg, low.jpg, etc.)
+            var storageKey = $"photogallery/{photo.AlbumId}/{photoId}/{quality.ToLower()}.jpg";
+            var exists = await _storageProvider.ExistsAsync(storageKey);
+
+            // If not found, try the old numeric format (0.jpg, 1.jpg, etc.) for backwards compatibility
+            if (!exists)
+            {
+                storageKey = $"photogallery/{photo.AlbumId}/{photoId}/{(int)qualityEnum}.jpg";
+                exists = await _storageProvider.ExistsAsync(storageKey);
+            }
+
+            if (!exists)
+            {
+                _logger.LogWarning("Photo version file not found in storage for {PhotoId} quality {Quality}", photoId, quality);
+                return null;
+            }
+
+            // Map quality string to PhotoQuality enum
+            var photoQuality = quality.ToLower() switch
+            {
+                "thumbnail" => PhotoQuality.HighCompression,  // Thumbnail is most compressed
+                "low" => PhotoQuality.HighCompression,
+                "medium" => PhotoQuality.MediumCompression,
+                "high" => PhotoQuality.LowCompression,
+                _ => PhotoQuality.MediumCompression
+            };
+
+            // Return a PhotoVersion object for the controller to use
+            return new PhotoVersion
+            {
+                Id = Guid.NewGuid(),
+                PhotoId = photoGuid,
+                Quality = photoQuality,
+                StorageKey = storageKey,
+                FileSize = 0,  // We don't know the size, will be updated by storage provider if needed
+                ProcessedDate = DateTime.UtcNow
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting photo version for {PhotoId} with quality {Quality}", photoId, quality);
+            return null;
+        }
     }
 }
