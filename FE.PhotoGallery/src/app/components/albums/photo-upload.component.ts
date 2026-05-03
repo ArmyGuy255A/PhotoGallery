@@ -1,16 +1,18 @@
 import { Component, Input, Output, EventEmitter, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService } from '../../services/photo.service';
-import { interval, Subject, takeUntil, switchMap, filter } from 'rxjs';
+import { interval, Subject, takeUntil, switchMap, filter, take } from 'rxjs';
 
 interface UploadFile {
   file: File;
-  progress: number;
+  uploadProgress: number;
+  processingProgress: number;
   status: 'pending' | 'uploading' | 'complete' | 'error' | 'processing';
   errorMessage?: string;
   photoId?: string;
-  processingProgress?: number;
   processingStatus?: string;
+  thumbnailUrl?: string;
+  completeTime?: Date;
 }
 
 @Component({
@@ -51,50 +53,84 @@ interface UploadFile {
           </button>
         </div>
 
-        <!-- Upload progress -->
+        <!-- Upload progress with thumbnails -->
         <div *ngIf="uploadFiles.length > 0" class="mt-4">
           <h6>Upload Progress</h6>
-          <div *ngFor="let item of uploadFiles" class="mb-3">
-            <small class="d-block mb-1">{{ item.file.name }}</small>
-            <div class="d-flex align-items-center gap-2">
-              <div class="progress flex-grow-1">
-                <div 
-                  class="progress-bar" 
-                  [style.width.%]="item.progress"
-                  role="progressbar">
+          <div *ngFor="let item of uploadFiles; let i = index" class="upload-item mb-3" [class.completed]="item.status === 'complete'">
+            <div class="item-row d-flex align-items-center gap-3">
+              <!-- Thumbnail -->
+              <div class="thumbnail-container">
+                <img 
+                  *ngIf="item.thumbnailUrl && item.status === 'complete'" 
+                  [src]="item.thumbnailUrl" 
+                  alt="thumbnail"
+                  class="thumbnail"
+                  [title]="item.file.name"
+                />
+                <div *ngIf="!item.thumbnailUrl || item.status !== 'complete'" class="thumbnail-placeholder">
+                  📷
                 </div>
               </div>
-              <span class="text-sm">{{ item.progress }}%</span>
-              <span
-                *ngIf="item.status === 'complete'"
-                class="badge bg-success"
-              >
-                ✓
-              </span>
-              <span
-                *ngIf="item.status === 'error'"
-                class="badge bg-danger"
-                [title]="item.errorMessage"
-              >
-                ✗
-              </span>
-              <span
-                *ngIf="item.status === 'uploading'"
-                class="spinner-border spinner-border-sm text-primary"
-              ></span>
-              <span
-                *ngIf="item.status === 'processing'"
-                class="spinner-border spinner-border-sm text-warning"
-                [title]="'Processing: ' + (item.processingProgress || 0) + '%'"
-              ></span>
+
+              <!-- File info and progress -->
+              <div class="flex-grow-1">
+                <small class="d-block mb-1 filename">{{ item.file.name }}</small>
+                
+                <!-- Dual Progress Bar -->
+                <div class="progress-container">
+                  <!-- Background: Upload progress (blue) -->
+                  <div class="progress progress-upload">
+                    <div 
+                      class="progress-bar progress-bar-upload" 
+                      [style.width.%]="item.uploadProgress"
+                      role="progressbar">
+                    </div>
+                  </div>
+                  <!-- Overlay: Processing progress (green) -->
+                  <div class="progress progress-processing">
+                    <div 
+                      class="progress-bar progress-bar-processing" 
+                      [style.width.%]="item.processingProgress"
+                      role="progressbar">
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- Status text -->
+                <small class="status-text">
+                  <span *ngIf="item.status === 'uploading'">📤 Uploading...</span>
+                  <span *ngIf="item.status === 'processing'">🔄 Processing: {{ item.processingProgress }}%</span>
+                  <span *ngIf="item.status === 'complete'">✅ Complete</span>
+                  <span *ngIf="item.status === 'error'">❌ Error</span>
+                </small>
+                <small *ngIf="item.errorMessage" class="error-message">{{ item.errorMessage }}</small>
+              </div>
+
+              <!-- Status badge -->
+              <div class="status-badge">
+                <span
+                  *ngIf="item.status === 'complete'"
+                  class="badge bg-success"
+                >
+                  ✓
+                </span>
+                <span
+                  *ngIf="item.status === 'error'"
+                  class="badge bg-danger"
+                  [title]="item.errorMessage"
+                >
+                  ✗
+                </span>
+                <span
+                  *ngIf="item.status === 'uploading'"
+                  class="spinner-border spinner-border-sm text-primary"
+                ></span>
+                <span
+                  *ngIf="item.status === 'processing'"
+                  class="spinner-border spinner-border-sm text-warning"
+                ></span>
+              </div>
             </div>
-            <!-- Processing status -->
-            <small *ngIf="item.status === 'processing'" class="text-warning d-block mt-1">
-              🔄 Processing... {{ item.processingProgress || 0 }}% ({{ item.processingStatus || 'Starting' }})
-            </small>
-            <small *ngIf="item.errorMessage" class="text-danger d-block mt-1">
-              {{ item.errorMessage }}
-            </small>
           </div>
         </div>
 
@@ -164,24 +200,136 @@ interface UploadFile {
       cursor: not-allowed;
     }
 
-    .text-sm {
-      font-size: 0.875rem;
+    /* Upload Item */
+    .upload-item {
+      padding: 12px;
+      border: 1px solid #e0e6ed;
+      border-radius: 6px;
+      background: white;
+      transition: all 0.3s ease;
     }
 
-    .gap-2 {
-      gap: 0.5rem;
+    .upload-item.completed {
+      opacity: 0.7;
+      animation: fadeOut 5s ease-in-out 3s forwards;
+    }
+
+    @keyframes fadeOut {
+      0% {
+        opacity: 0.7;
+        transform: translateY(0);
+      }
+      100% {
+        opacity: 0;
+        transform: translateY(-10px);
+        max-height: 0;
+        padding: 0;
+        border: none;
+        margin: 0;
+      }
+    }
+
+    .item-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Thumbnail */
+    .thumbnail-container {
+      flex-shrink: 0;
+      width: 60px;
+      height: 60px;
+    }
+
+    .thumbnail {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid #ddd;
+    }
+
+    .thumbnail-placeholder {
+      width: 100%;
+      height: 100%;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      color: #999;
+    }
+
+    /* Progress bars */
+    .progress-container {
+      position: relative;
+      margin: 6px 0;
     }
 
     .progress {
-      height: 20px;
+      height: 24px;
       background: #e9ecef;
       border-radius: 4px;
       overflow: hidden;
+      position: absolute;
+      width: 100%;
+      top: 0;
+    }
+
+    .progress-upload {
+      z-index: 1;
+    }
+
+    .progress-processing {
+      z-index: 2;
     }
 
     .progress-bar {
-      background: #27ae60;
-      transition: width 0.3s;
+      transition: width 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: white;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+
+    .progress-bar-upload {
+      background: linear-gradient(90deg, #0d6efd, #0d6efd);
+    }
+
+    .progress-bar-processing {
+      background: linear-gradient(90deg, rgba(40, 167, 69, 0.8), rgba(40, 167, 69, 0.8));
+    }
+
+    .filename {
+      font-weight: 500;
+      color: #333;
+      word-break: break-word;
+    }
+
+    .status-text {
+      display: block;
+      margin-top: 4px;
+      color: #666;
+      font-size: 0.8rem;
+    }
+
+    .error-message {
+      display: block;
+      color: #e74c3c;
+      margin-top: 2px;
+      font-size: 0.8rem;
+    }
+
+    .status-badge {
+      flex-shrink: 0;
+      min-width: 32px;
+      text-align: center;
     }
 
     .badge {
@@ -190,6 +338,7 @@ interface UploadFile {
       font-size: 12px;
       font-weight: 600;
       color: white;
+      display: inline-block;
     }
 
     .bg-success {
@@ -200,19 +349,15 @@ interface UploadFile {
       background: #e74c3c;
     }
 
-    .bg-info {
-      background: #3498db;
-    }
-
-    .text-warning {
-      color: #f39c12;
+    .bg-warning {
+      background: #f39c12;
     }
 
     .spinner-border {
       display: inline-block;
-      width: 1rem;
-      height: 1rem;
-      vertical-align: -0.125em;
+      width: 1.2rem;
+      height: 1.2rem;
+      vertical-align: -0.25em;
       border: 0.25em solid currentColor;
       border-right-color: transparent;
       border-radius: 50%;
@@ -220,8 +365,8 @@ interface UploadFile {
     }
 
     .spinner-border-sm {
-      width: 0.875rem;
-      height: 0.875rem;
+      width: 1rem;
+      height: 1rem;
       border-width: 0.2em;
     }
 
@@ -229,10 +374,18 @@ interface UploadFile {
       color: #0d6efd;
     }
 
+    .text-warning {
+      color: #f39c12;
+    }
+
     @keyframes spinner-border {
       to {
         transform: rotate(360deg);
       }
+    }
+
+    .gap-3 {
+      gap: 12px;
     }
 
     .mt-4 {
@@ -269,14 +422,11 @@ interface UploadFile {
 
     .flex-grow-1 {
       flex-grow: 1;
+      min-width: 0;
     }
 
     .text-muted {
       color: #6c757d;
-    }
-
-    .text-danger {
-      color: #e74c3c;
     }
 
     .alert {
@@ -349,7 +499,8 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
     fileArray.forEach(file => {
       this.uploadFiles.push({
         file,
-        progress: 0,
+        uploadProgress: 0,
+        processingProgress: 0,
         status: 'pending'
       });
     });
@@ -383,8 +534,8 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
       next: (response: any) => {
         console.log(`[PhotoUpload] Upload success for ${item.file.name}:`, response);
         item.photoId = response.successfulUploads?.[0]?.photoId;
+        item.uploadProgress = 100;
         item.status = 'processing';
-        item.progress = 100;
         item.processingProgress = 0;
         this.processingCount++;
         
@@ -418,12 +569,19 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
           item.processingProgress = status.percentComplete || 0;
           item.processingStatus = this.getProcessingStatusText(status);
           
-          if (status.percentComplete === 100) {
+          if (status.percentComplete === 100 && status.hasThumbnail) {
             item.status = 'complete';
+            item.thumbnailUrl = this.photoService.getThumbnailUrl(item.photoId!);
+            item.completeTime = new Date();
             this.processingCount--;
             this.successCount++;
             console.log(`[PhotoUpload] Processing complete for ${item.file.name}`);
             this.checkUploadComplete();
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+              this.removeCompletedItem(item);
+            }, 5000);
           }
         },
         error: (error: any) => {
@@ -433,10 +591,17 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
       });
   }
 
+  private removeCompletedItem(item: UploadFile) {
+    const index = this.uploadFiles.indexOf(item);
+    if (index > -1) {
+      this.uploadFiles.splice(index, 1);
+    }
+  }
+
   private getProcessingStatusText(status: any): string {
-    const items = status.items || [];
-    const completed = items.filter((i: any) => i.Status === 'Complete').length;
-    return `${completed}/${items.length} qualities`;
+    const completed = status.completedVersions || 0;
+    const total = status.totalVersions || 4;
+    return `${completed}/${total} versions`;
   }
 
   private checkUploadComplete() {

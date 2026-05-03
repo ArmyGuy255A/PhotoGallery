@@ -112,6 +112,13 @@ export class PhotoService {
   }
 
   /**
+   * Get thumbnail URL for a photo
+   */
+  getThumbnailUrl(photoId: string): string {
+    return `${this.API_URL}/${photoId}/download?quality=Thumbnail`;
+  }
+
+  /**
    * Poll processing status repeatedly
    */
   pollProcessingStatus(photoId: string, intervalMs: number = 2000): Observable<ProcessingStatus> {
