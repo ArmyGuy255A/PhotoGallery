@@ -4,8 +4,8 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
-import { Subject } from 'rxjs';
-import { takeUntil } from 'rxjs/operators';
+import { Subject, interval, Observable } from 'rxjs';
+import { takeUntil, switchMap } from 'rxjs/operators';
 
 interface Photo {
   id: string;
@@ -490,12 +490,70 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
       this.loadAlbum();
       this.loadPhotos();
       this.loadAccessCodes();
+      this.startPhotoStatusPolling();
     });
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  private startPhotoStatusPolling(): void {
+    // Poll every 2 seconds for photos that are still processing
+    interval(2000)
+      .pipe(
+        takeUntil(this.destroy$),
+        switchMap(() => this.getProcessingPhotos())
+      )
+      .subscribe({
+        next: (processingPhotos) => {
+          if (processingPhotos.length === 0) {
+            // All photos done processing
+            return;
+          }
+          // Update each photo's status
+          processingPhotos.forEach(photoId => {
+            this.updatePhotoStatus(photoId);
+          });
+        },
+        error: (error) => {
+          console.error('Error polling photo statuses:', error);
+        }
+      });
+  }
+
+  private getProcessingPhotos(): Observable<string[]> {
+    // Get list of photos currently processing
+    return new Observable(observer => {
+      const processingIds = this.photos
+        .filter(p => p.processingStatus === 'Processing')
+        .map(p => p.id);
+      observer.next(processingIds);
+      observer.complete();
+    });
+  }
+
+  private updatePhotoStatus(photoId: string): void {
+    const apiUrl = environment.apiUrl || '';
+    this.http.get<any>(`${apiUrl}/api/photos/${photoId}/status`)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (status) => {
+          const photo = this.photos.find(p => p.id === photoId);
+          if (photo) {
+            // Update processingStatus based on percentComplete
+            if (status.percentComplete === 100) {
+              photo.processingStatus = 'Complete';
+            } else {
+              photo.processingStatus = 'Processing';
+            }
+          }
+        },
+        error: (error) => {
+          console.error('Error fetching photo status:', error);
+        }
+      });
   }
 
   loadAlbum(): void {
