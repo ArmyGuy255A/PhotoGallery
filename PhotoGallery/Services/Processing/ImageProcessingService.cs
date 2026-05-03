@@ -4,135 +4,289 @@ using SixLabors.ImageSharp.Processing;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services.Storage;
-using Microsoft.EntityFrameworkCore;
-using PhotoGallery.Data;
+using PhotoGallery.Data.Repositories;
+using PhotoGallery.Enums;
 
 namespace PhotoGallery.Services.Processing;
 
 /// <summary>
-/// Service for processing photos with multiple compression levels
+/// Service for processing photos with multiple compression levels.
+/// Uses ProcessingQueue and ProcessingQueueItem for tracking per-quality processing.
+/// Reference: D003 (Image Processing with Compression Profiles)
 /// </summary>
 public class ImageProcessingService : IImageProcessor
 {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly IProcessingQueueRepository _queueRepository;
+    private readonly IProcessingQueueItemRepository _itemRepository;
     private readonly IStorageProvider _storageProvider;
     private readonly ILogger<ImageProcessingService> _logger;
-    private readonly List<CompressionProfile> _compressionProfiles;
     private CancellationTokenSource? _processingCts;
     private Task? _processingTask;
 
-    private static readonly Dictionary<string, PhotoQuality> QualityMap = new()
+    private static readonly Dictionary<QualityType, (int width, int height, int quality)> QualityDimensions = new()
     {
-        { "high", PhotoQuality.HighCompression },
-        { "medium", PhotoQuality.MediumCompression },
-        { "low", PhotoQuality.LowCompression },
-        { "raw", PhotoQuality.Raw }
+        { QualityType.Thumbnail, (200, 200, 60) },    // Thumbnail
+        { QualityType.Low, (800, 800, 70) },          // Mobile/web
+        { QualityType.Medium, (1920, 1920, 85) },     // Desktop/email
+        { QualityType.High, (3840, 3840, 95) }        // Print/download
     };
 
     public ImageProcessingService(
-        IServiceProvider serviceProvider,
+        IProcessingQueueRepository queueRepository,
+        IProcessingQueueItemRepository itemRepository,
         IStorageProvider storageProvider,
         ILogger<ImageProcessingService> logger)
     {
-        _serviceProvider = serviceProvider;
+        _queueRepository = queueRepository;
+        _itemRepository = itemRepository;
         _storageProvider = storageProvider;
         _logger = logger;
-
-        _compressionProfiles = new List<CompressionProfile>
-        {
-            new CompressionProfile { Name = "high", QualityPercentage = 50, Description = "High compression (50% quality)" },
-            new CompressionProfile { Name = "medium", QualityPercentage = 75, Description = "Medium compression (75% quality)" },
-            new CompressionProfile { Name = "low", QualityPercentage = 85, Description = "Low compression (85% quality)" },
-            new CompressionProfile { Name = "raw", QualityPercentage = 100, Description = "Raw quality (100% quality)" }
-        };
     }
 
+    /// <summary>Queue a photo for processing with all 4 quality versions</summary>
+    public async Task<string> QueuePhotoAsync(Guid photoId)
+    {
+        try
+        {
+            var queue = new ProcessingQueue { PhotoId = photoId };
+            await _queueRepository.AddAsync(queue);
+            await _queueRepository.SaveChangesAsync();
+
+            // Create 4 processing items (one for each quality)
+            var qualities = new[] { QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High };
+            foreach (var quality in qualities)
+            {
+                var item = new ProcessingQueueItem
+                {
+                    ProcessingQueueId = queue.Id,
+                    PhotoId = photoId,
+                    Quality = quality,
+                    Status = ProcessingStatus.Pending,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _itemRepository.AddAsync(item);
+            }
+            await _itemRepository.SaveChangesAsync();
+
+            _logger.LogInformation("Queued photo {PhotoId} for processing with 4 quality versions", photoId);
+            return queue.Id.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error queuing photo {PhotoId}", photoId);
+            throw;
+        }
+    }
+
+    /// <summary>String version for API compatibility</summary>
     public async Task<string> QueuePhotoAsync(string photoId)
     {
         if (!Guid.TryParse(photoId, out var photoGuid))
             throw new ArgumentException("Invalid photo ID format", nameof(photoId));
-
-        using (var scope = _serviceProvider.CreateScope())
-        {
-            var queueRepo = scope.ServiceProvider.GetRequiredService<IProcessingQueueRepository>();
-            var existing = await queueRepo.GetByPhotoIdAsync(photoGuid);
-            if (existing != null)
-            {
-                _logger.LogInformation("Photo {PhotoId} is already queued", photoId);
-                return existing.Id.ToString();
-            }
-
-            var queueEntry = new ProcessingQueue { PhotoId = photoGuid };
-            await queueRepo.AddAsync(queueEntry);
-            
-            _logger.LogInformation("Photo {PhotoId} queued for processing", photoId);
-            return queueEntry.Id.ToString();
-        }
+        return await QueuePhotoAsync(photoGuid);
     }
 
+    /// <summary>Process all pending queue items</summary>
     public async Task ProcessQueueAsync(CancellationToken cancellationToken = default)
     {
-        using (var scope = _serviceProvider.CreateScope())
+        try
         {
-            var queueRepo = scope.ServiceProvider.GetRequiredService<IProcessingQueueRepository>();
-            var pending = await queueRepo.GetPendingAsync();
-            
-            foreach (var item in pending)
+            var pendingItems = await _itemRepository.GetPendingItemsAsync();
+
+            foreach (var item in pendingItems)
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
 
                 try
                 {
-                    await ProcessPhotoAsync(item, scope, cancellationToken);
-                    await queueRepo.MarkCompleteAsync(item.Id);
-                    _logger.LogInformation("Photo {PhotoId} processing complete", item.PhotoId);
+                    await ProcessQualityAsync(item, cancellationToken);
+                    await _itemRepository.MarkCompleteAsync(item.Id);
+                    _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing photo {PhotoId}", item.PhotoId);
-                    await queueRepo.MarkFailedAsync(item.Id, ex.Message);
+                    _logger.LogError(ex, "Error processing item {ItemId} (photo {PhotoId}, quality {Quality})", 
+                        item.Id, item.PhotoId, item.Quality);
+                    await _itemRepository.MarkFailedAsync(item.Id, ex.Message);
+
+                    // Increment retry if possible
+                    if (item.CanRetry)
+                    {
+                        item.IncrementRetry(ex.Message);
+                        await _itemRepository.UpdateAsync(item);
+                        await _itemRepository.SaveChangesAsync();
+                    }
                 }
+            }
+
+            // Process items ready for retry
+            var retryItems = await _itemRepository.GetReadyForRetryAsync();
+            foreach (var item in retryItems)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    item.Status = ProcessingStatus.Pending;
+                    await _itemRepository.UpdateAsync(item);
+                    await _itemRepository.SaveChangesAsync();
+
+                    await ProcessQualityAsync(item, cancellationToken);
+                    await _itemRepository.MarkCompleteAsync(item.Id);
+                    _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
+                        item.PhotoId, item.Quality, item.RetryCount + 1);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Retry failed for item {ItemId}", item.Id);
+                    await _itemRepository.MarkFailedAsync(item.Id, ex.Message);
+
+                    if (item.CanRetry)
+                    {
+                        item.IncrementRetry(ex.Message);
+                        await _itemRepository.UpdateAsync(item);
+                        await _itemRepository.SaveChangesAsync();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in ProcessQueueAsync");
+        }
+    }
+
+    /// <summary>Process a single quality version of a photo</summary>
+    private async Task ProcessQualityAsync(ProcessingQueueItem item, CancellationToken cancellationToken)
+    {
+        // Mark as processing
+        item.Status = ProcessingStatus.Processing;
+        await _itemRepository.UpdateAsync(item);
+        await _itemRepository.SaveChangesAsync();
+
+        // Get original from storage
+        var originalPath = $"photogallery/{item.PhotoId}/original.jpg";
+        if (!await _storageProvider.ExistsAsync(originalPath))
+            throw new FileNotFoundException($"Original photo not found at {originalPath}");
+
+        using (var originalStream = await _storageProvider.DownloadAsync(originalPath))
+        {
+            if (originalStream == null)
+                throw new InvalidOperationException($"Cannot read original photo from {originalPath}");
+
+            // Load image
+            using (var image = await Image.LoadAsync(originalStream, cancellationToken))
+            {
+                // Get dimensions and quality for this quality level
+                var (width, height, quality) = QualityDimensions[item.Quality];
+
+                // Resize image
+                image.Mutate(x => x.Resize(
+                    new ResizeOptions
+                    {
+                        Size = new Size(width, height),
+                        Mode = ResizeMode.Max,
+                        Sampler = KnownResamplers.Lanczos3
+                    }));
+
+                // Save to storage
+                var outputPath = $"photogallery/{item.PhotoId}/{item.Quality}.jpg";
+                using (var outputStream = new MemoryStream())
+                {
+                    await image.SaveAsJpegAsync(outputStream, new JpegEncoder { Quality = quality }, cancellationToken);
+                    outputStream.Position = 0;
+                    await _storageProvider.UploadAsync(outputPath, outputStream, "image/jpeg");
+                }
+
+                _logger.LogInformation("Saved {Quality} version to {Path}", item.Quality, outputPath);
             }
         }
     }
 
-    public async Task<IEnumerable<PhotoVersion>> GetPhotoVersionsAsync(string photoId)
+    /// <summary>Get processing status for a queue</summary>
+    public async Task<Dictionary<string, object>> GetQueueStatusAsync(Guid queueId)
     {
-        if (!Guid.TryParse(photoId, out var photoGuid))
-            return Enumerable.Empty<PhotoVersion>();
-
-        using (var scope = _serviceProvider.CreateScope())
+        try
         {
-            var versionRepo = scope.ServiceProvider.GetRequiredService<IRepository<PhotoVersion>>();
-            var versions = await versionRepo.GetAllAsync();
-            return versions.Where(v => v.PhotoId == photoGuid).ToList();
+            var queue = await _queueRepository.GetByIdAsync(queueId);
+            if (queue == null)
+                return new Dictionary<string, object> { { "error", "Queue not found" } };
+
+            var items = await _itemRepository.GetByQueueIdAsync(queueId);
+
+            var completedCount = items.Count(i => i.Status == ProcessingStatus.Complete);
+            var totalCount = items.Count();
+            var percentComplete = totalCount > 0 ? (completedCount * 100) / totalCount : 0;
+
+            return new Dictionary<string, object>
+            {
+                { "queueId", queueId },
+                { "photoId", queue.PhotoId },
+                { "status", queue.Status.ToString() },
+                { "completedCount", completedCount },
+                { "totalCount", totalCount },
+                { "percentComplete", percentComplete },
+                { "items", items.Select(i => new
+                {
+                    i.Quality,
+                    i.Status,
+                    i.RetryCount,
+                    i.LastError
+                }).ToList() }
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting queue status for {QueueId}", queueId);
+            return new Dictionary<string, object> { { "error", ex.Message } };
         }
     }
 
-    public async Task<PhotoVersion?> GetPhotoVersionAsync(string photoId, string quality)
+    /// <summary>Retry a failed processing item</summary>
+    public async Task RetryFailedItemAsync(Guid itemId)
     {
-        var versions = await GetPhotoVersionsAsync(photoId);
-        if (!QualityMap.TryGetValue(quality.ToLower(), out var photoQuality))
-            return null;
+        try
+        {
+            var item = await _itemRepository.GetByIdAsync(itemId);
+            if (item == null)
+                throw new ArgumentException($"Item {itemId} not found");
 
-        return versions.FirstOrDefault(v => v.Quality == photoQuality);
+            if (item.Status != ProcessingStatus.Error)
+                throw new InvalidOperationException($"Cannot retry item in {item.Status} status");
+
+            item.Status = ProcessingStatus.Pending;
+            item.LastError = null;
+            await _itemRepository.UpdateAsync(item);
+            await _itemRepository.SaveChangesAsync();
+
+            _logger.LogInformation("Reset item {ItemId} for retry", itemId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrying item {ItemId}", itemId);
+            throw;
+        }
     }
 
-    public IEnumerable<CompressionProfile> GetCompressionProfiles()
+    /// <summary>Get items ready for retry</summary>
+    public async Task<IEnumerable<ProcessingQueueItem>> GetReadyForRetryAsync()
     {
-        return _compressionProfiles;
+        return await _itemRepository.GetReadyForRetryAsync();
     }
 
+    /// <summary>Start the background processing worker</summary>
     public async Task StartProcessingWorkerAsync(CancellationToken applicationStopping)
     {
         _processingCts = CancellationTokenSource.CreateLinkedTokenSource(applicationStopping);
         _processingTask = ProcessingWorkerAsync(_processingCts.Token);
-        
+
         _logger.LogInformation("Image processing worker started");
         await Task.CompletedTask;
     }
 
+    /// <summary>Background worker that continuously processes the queue</summary>
     private async Task ProcessingWorkerAsync(CancellationToken cancellationToken)
     {
         try
@@ -161,105 +315,25 @@ public class ImageProcessingService : IImageProcessor
         }
     }
 
-    private async Task ProcessPhotoAsync(ProcessingQueue queueEntry, IServiceScope scope, CancellationToken cancellationToken)
+    public IEnumerable<CompressionProfile> GetCompressionProfiles()
     {
-        var photoRepo = scope.ServiceProvider.GetRequiredService<IRepository<Photo>>();
-        var photo = await photoRepo.GetByIdAsync(queueEntry.PhotoId);
-        if (photo == null)
-            throw new FileNotFoundException($"Photo {queueEntry.PhotoId} not found");
-
-        // Mark processing as started
-        photo.ProcessingStatus = PhotoProcessingStatus.Processing;
-        photo.ProcessingStartedAt = DateTime.UtcNow;
-        await photoRepo.UpdateAsync(photo);
-
-        try
+        return new List<CompressionProfile>
         {
-            var originalStream = await _storageProvider.DownloadAsync(photo.StorageKey);
-            using (var image = await Image.LoadAsync(originalStream, cancellationToken))
-            {
-                // Reset completion flags
-                photo.HasThumbnail = false;
-                photo.HasLow = false;
-                photo.HasMedium = false;
-                photo.HasHigh = false;
-
-                foreach (var profile in _compressionProfiles)
-                {
-                    await ProcessQualityLevelAsync(photo, image, profile, scope, cancellationToken);
-                }
-            }
-
-            // Mark processing as complete
-            photo.ProcessingStatus = PhotoProcessingStatus.Complete;
-            photo.ProcessingCompletedAt = DateTime.UtcNow;
-            photo.ProcessingComplete = true; // Legacy field for compatibility
-            await photoRepo.UpdateAsync(photo);
-        }
-        catch (Exception ex)
-        {
-            photo.ProcessingStatus = PhotoProcessingStatus.Failed;
-            photo.ProcessingCompletedAt = DateTime.UtcNow;
-            await photoRepo.UpdateAsync(photo);
-            throw;
-        }
+            new CompressionProfile { Name = "thumbnail", QualityPercentage = 60, Description = "Thumbnail (200x200, 60% quality)" },
+            new CompressionProfile { Name = "low", QualityPercentage = 70, Description = "Low compression (800x800, 70% quality)" },
+            new CompressionProfile { Name = "medium", QualityPercentage = 85, Description = "Medium compression (1920x1920, 85% quality)" },
+            new CompressionProfile { Name = "high", QualityPercentage = 95, Description = "High quality (3840x3840, 95% quality)" }
+        };
     }
 
-    private async Task ProcessQualityLevelAsync(
-        Photo photo,
-        Image image,
-        CompressionProfile profile,
-        IServiceScope scope,
-        CancellationToken cancellationToken)
+    // Legacy PhotoVersion methods - kept for API compatibility but not used in new pipeline
+    public async Task<IEnumerable<PhotoVersion>> GetPhotoVersionsAsync(string photoId)
     {
-        using (var processedImage = image.Clone(ctx => ctx.AutoOrient()))
-        {
-            var memoryStream = new MemoryStream();
-            var jpegEncoder = new JpegEncoder { Quality = profile.QualityPercentage };
-            
-            await processedImage.SaveAsync(memoryStream, jpegEncoder, cancellationToken);
-            memoryStream.Position = 0;
+        return Enumerable.Empty<PhotoVersion>();
+    }
 
-            var storageKey = $"photogallery/{photo.AlbumId}/{photo.Id}/{profile.Name}.jpg";
-            await _storageProvider.UploadAsync(storageKey, memoryStream, "image/jpeg");
-
-            if (!QualityMap.TryGetValue(profile.Name, out var photoQuality))
-                return;
-
-            var versionRepo = scope.ServiceProvider.GetRequiredService<IRepository<PhotoVersion>>();
-            var photoVersion = new PhotoVersion
-            {
-                PhotoId = photo.Id,
-                Quality = photoQuality,
-                FileSize = memoryStream.Length,
-                StorageKey = storageKey,
-                ProcessedDate = DateTime.UtcNow
-            };
-
-            await versionRepo.AddAsync(photoVersion);
-
-            // Update photo flags based on quality level
-            var photoRepo = scope.ServiceProvider.GetRequiredService<IRepository<Photo>>();
-            switch (profile.Name)
-            {
-                case "high":
-                    photo.HasHigh = true;
-                    break;
-                case "medium":
-                    photo.HasMedium = true;
-                    break;
-                case "low":
-                    photo.HasLow = true;
-                    break;
-                case "raw":
-                    // For thumbnail generation, we'll add that in Phase 15
-                    break;
-            }
-            await photoRepo.UpdateAsync(photo);
-            
-            _logger.LogInformation(
-                "Created {Quality} version of photo {PhotoId}, size: {Size} bytes",
-                profile.Name, photo.Id, memoryStream.Length);
-        }
+    public async Task<PhotoVersion?> GetPhotoVersionAsync(string photoId, string quality)
+    {
+        return null;
     }
 }
