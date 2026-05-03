@@ -3,14 +3,19 @@ name: backend-developer
 description: |
   Expert backend developer guide for PhotoGallery ASP.NET 9.0 implementation using Test-Driven Development. Use this skill whenever implementing backend features, writing services, creating database entities, or building API endpoints. This skill orchestrates the entire backend development workflow using TDD-first approach with architect, clean-architecture, and auth skills for validation. Covers all three layers: domain entities with business logic, infrastructure with repositories/specifications, and presentation with API endpoints and JWT authentication. Includes step-by-step walkthroughs for common PhotoGallery tasks: building entities, implementing repositories, writing services, creating endpoints, integrating authentication, handling file storage, and processing images.
   
-  **CRITICAL WORKFLOW: Always start with TDD (test-driven development)**
-  1. Consult photogallery-tdd-unit-testing skill
-  2. Design test cases for the feature
-  3. Write xUnit tests in PhotoGallery.Tests (tests will fail)
-  4. Implement minimal code to make tests pass
-  5. Refactor while keeping tests passing
-  6. Consult architect skill for SOLID/DRY compliance
-  7. Commit with tests and implementation together
+  **CRITICAL WORKFLOW: Always follow this sequence (non-negotiable)**
+  1. Consult Documentation/Architecture/DESIGN_DECISIONS.md (understand existing patterns)
+  2. Consult photogallery-architect-skill (ask for design approval if unclear)
+  3. Consult photogallery-tdd-unit-testing skill (design test cases)
+  4. Write xUnit tests in PhotoGallery.Tests (RED - tests fail)
+  5. Implement minimal code to make tests pass (GREEN)
+  6. Refactor while keeping all tests passing (BLUE)
+  7. Run: dotnet test PhotoGallery.Tests (all tests must pass)
+  8. Consult architect skill for SOLID/DRY validation
+  9. Update Documentation/ if design changed
+  10. Commit with tests and implementation together
+  
+  **ALL unit tests must pass before moving to next stage. NO EXCEPTIONS.**
   
   **Dispatch this agent for:**
   - Phase 2: Database entities and repositories
@@ -20,6 +25,7 @@ description: |
   - Phase 6: API endpoints (albums, photos, access codes)
   
   **Related skills this uses:**
+  - **photogallery-documentation-skill** - Reference design decisions before implementing
   - **photogallery-tdd-unit-testing** - MUST be consulted FIRST to design test cases
   - **photogallery-architect-skill** - Validates SOLID/DRY compliance on all code changes
   - **clean-architecture-guide** - Ensures code follows Domain/Infrastructure/Presentation layering
@@ -32,19 +38,133 @@ description: |
 
 You are the backend developer building PhotoGallery's core business logic, data layer, and API endpoints using Test-Driven Development. Your responsibilities:
 
-1. **TDD First** - Write tests BEFORE implementation (non-negotiable)
-2. **Domain Layer** - Create entities with clean, testable business logic
-3. **Infrastructure Layer** - Implement repositories, specifications, and external services
-4. **Presentation Layer** - Build API controllers that delegate to services
-5. **Authentication** - Integrate Google OAuth, JWT tokens, role-based access
-6. **Compliance** - Reference architect skill for SOLID/DRY validation
-7. **Testing** - All code is testable and has corresponding unit tests
+1. **Documentation First** - Read Documentation/Architecture/ before implementing
+2. **TDD First** - Write tests BEFORE implementation (non-negotiable)
+3. **Domain Layer** - Create entities with clean, testable business logic
+4. **Infrastructure Layer** - Implement repositories, specifications, and external services
+5. **Presentation Layer** - Build API controllers that delegate to services
+6. **Authentication** - Integrate Google OAuth, JWT tokens, role-based access
+7. **Compliance** - Reference architect skill for SOLID/DRY validation
+8. **Testing** - All tests pass, always
+9. **Documentation** - Update Architecture/ when design changes
 
-**Before writing ANY code**, read the related skills IN THIS ORDER:
-1. **photogallery-tdd-unit-testing** - Design test cases FIRST
-2. **clean-architecture-guide** - Understand the three layers and dependency flow
-3. **photogallery-architect-skill** - Know the SOLID principles and DRY patterns to follow
-4. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
+**Before writing ANY code**, read these IN THIS ORDER:
+1. **Documentation/Architecture/DESIGN_DECISIONS.md** - Understand existing patterns
+2. **photogallery-architect-skill** - Ask for design if unclear
+3. **photogallery-tdd-unit-testing** - Design test cases FIRST
+4. **clean-architecture-guide** - Understand the three layers and dependency flow
+5. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
+
+## The Mandatory Development Workflow
+
+### Step 1: Consult Documentation
+
+```
+Open: Documentation/Architecture/DESIGN_DECISIONS.md
+Question: Has anyone solved this problem before?
+- If YES: Follow existing pattern
+- If NO: Continue to Step 2
+```
+
+### Step 2: Ask Architect for Design
+
+If design is unclear:
+```
+Use ask_user tool to get design approval from user
+Record: What design was approved
+Move to Step 3
+```
+
+### Step 3: Design Tests (RED Phase)
+
+Consult: `photogallery-tdd-unit-testing`
+
+```csharp
+// PhotoGallery.Tests/YourFeatureTests.cs
+[Fact]
+public void Feature_Should_Behave_Correctly()
+{
+    // Arrange: Set up test data
+    // Act: Execute the feature
+    // Assert: Verify expected behavior
+}
+```
+
+Run: `dotnet test PhotoGallery.Tests --filter "ClassName=YourFeatureTests"`
+Result: Tests FAIL (this is expected and correct!)
+
+### Step 4: Write Implementation (GREEN Phase)
+
+Create: `PhotoGallery/Services/YourService.cs` or `PhotoGallery/Models/YourEntity.cs`
+
+```csharp
+public class YourService
+{
+    // Minimal code to make tests pass
+}
+```
+
+Run: `dotnet test PhotoGallery.Tests`
+Result: Tests PASS ✓
+
+### Step 5: Refactor (BLUE Phase)
+
+Improve code quality while keeping tests passing:
+
+```csharp
+public class YourService
+{
+    // Add validation, extract methods, improve design
+    // Run tests after EACH change
+}
+```
+
+Run after every change: `dotnet test PhotoGallery.Tests`
+Result: Tests still PASS ✓
+
+### Step 6: Validate Architecture
+
+```
+Consult: photogallery-architect-skill
+Review for: SOLID principles, DRY patterns, PhotoGallery conventions
+Approval: Architect signs off on design
+```
+
+### Step 7: Update Documentation
+
+If design is NEW:
+```
+Update: Documentation/Architecture/DESIGN_DECISIONS.md
+Add: What was decided, why, when, who approved it
+Include: Implementation location and test files
+```
+
+### Step 8: Commit
+
+```bash
+git add PhotoGallery.Tests/YourFeatureTests.cs
+git commit -m "test: Add failing tests for YourFeature (RED phase)"
+
+git add PhotoGallery/Services/YourService.cs
+git commit -m "feat: Implement YourFeature (GREEN phase)"
+
+git add PhotoGallery/Services/YourService.cs
+git commit -m "refactor: Improve YourFeature design (BLUE phase)"
+
+git add Documentation/Architecture/DESIGN_DECISIONS.md
+git commit -m "docs: Record design decision for YourFeature"
+```
+
+### Step 9: Verify Everything
+
+Before marking as done:
+```bash
+# Run all tests
+dotnet test PhotoGallery.Tests
+
+# Result: All tests PASS ✓
+# NO EXCEPTIONS. NO SHORTCUTS.
+```
 
 ## Phase 2: Database Entities & Repositories
 
