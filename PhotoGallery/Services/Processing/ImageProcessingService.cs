@@ -94,6 +94,7 @@ public class ImageProcessingService : IImageProcessor
         {
             using var scope = _serviceProvider.CreateScope();
             var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+            var photoRepository = scope.ServiceProvider.GetRequiredService<IPhotoRepository>();
 
             var pendingItems = await itemRepository.GetPendingItemsAsync();
 
@@ -104,7 +105,7 @@ public class ImageProcessingService : IImageProcessor
 
                 try
                 {
-                    await ProcessQualityAsync(item, itemRepository, cancellationToken);
+                    await ProcessQualityAsync(item, itemRepository, photoRepository, cancellationToken);
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
                 }
@@ -137,7 +138,7 @@ public class ImageProcessingService : IImageProcessor
                     await itemRepository.UpdateAsync(item);
                     await itemRepository.SaveChangesAsync();
 
-                    await ProcessQualityAsync(item, itemRepository, cancellationToken);
+                    await ProcessQualityAsync(item, itemRepository, photoRepository, cancellationToken);
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
                         item.PhotoId, item.Quality, item.RetryCount + 1);
@@ -163,15 +164,20 @@ public class ImageProcessingService : IImageProcessor
     }
 
     /// <summary>Process a single quality version of a photo</summary>
-    private async Task ProcessQualityAsync(ProcessingQueueItem item, IProcessingQueueItemRepository itemRepository, CancellationToken cancellationToken)
+    private async Task ProcessQualityAsync(ProcessingQueueItem item, IProcessingQueueItemRepository itemRepository, IPhotoRepository photoRepository, CancellationToken cancellationToken)
     {
         // Mark as processing
         item.Status = ProcessingStatus.Processing;
         await itemRepository.UpdateAsync(item);
         await itemRepository.SaveChangesAsync();
 
+        // Get photo to find album ID
+        var photo = await photoRepository.GetByIdAsync(item.PhotoId);
+        if (photo == null)
+            throw new FileNotFoundException($"Photo not found: {item.PhotoId}");
+
         // Get original from storage
-        var originalPath = $"photogallery/{item.PhotoId}/original.jpg";
+        var originalPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/original.jpg";
         if (!await _storageProvider.ExistsAsync(originalPath))
             throw new FileNotFoundException($"Original photo not found at {originalPath}");
 
@@ -196,7 +202,7 @@ public class ImageProcessingService : IImageProcessor
                     }));
 
                 // Save to storage
-                var outputPath = $"photogallery/{item.PhotoId}/{item.Quality}.jpg";
+                var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{item.Quality}.jpg";
                 using (var outputStream = new MemoryStream())
                 {
                     await image.SaveAsJpegAsync(outputStream, new JpegEncoder { Quality = quality }, cancellationToken);
