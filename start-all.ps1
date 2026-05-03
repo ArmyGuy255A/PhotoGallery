@@ -89,12 +89,9 @@ Write-Status "Step 1/3: Starting Docker services (PostgreSQL, MinIO)..." Info
 try {
     Push-Location $projectRoot
     
-    # Kill any existing containers (preserve volumes for persistent storage)
-    Write-Status "Cleaning up existing Docker containers..." Info
-    docker-compose down 2>$null | Out-Null
-    
     # Start postgres and minio only (not backend/frontend)
-    Write-Status "Starting PostgreSQL and MinIO..." Info
+    # docker-compose up -d is idempotent - only starts containers that aren't running
+    Write-Status "Ensuring PostgreSQL and MinIO are running..." Info
     docker-compose up -d postgres minio
     
     if ($LASTEXITCODE -ne 0) {
@@ -103,7 +100,7 @@ try {
     }
     
     Pop-Location
-    Write-Status "Docker services started" Success
+    Write-Status "Docker services ready" Success
 }
 catch {
     Write-Status "Error starting Docker services: $_" Error
