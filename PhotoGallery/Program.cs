@@ -117,9 +117,13 @@ builder.Services.AddScoped<ApplicationDbContextInitializer>();
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
 builder.Services.AddScoped<IPhotoRepository, PhotoRepository>();
+builder.Services.AddScoped<IPhotoVersionUrlRepository, PhotoVersionUrlRepository>();
 builder.Services.AddScoped<IAccessCodeRepository, AccessCodeRepository>();
 builder.Services.AddScoped<IProcessingQueueRepository, ProcessingQueueRepository>();
 builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRepository>();
+
+// Register services
+builder.Services.AddScoped<PhotoVersionUrlService>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
@@ -127,8 +131,9 @@ builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
 // Register consistency checker for validating photo processing completion
 builder.Services.AddScoped<PhotoConsistencyChecker>();
 
-// Register background service for photo processing
+// Register background services for photo processing and URL refresh
 builder.Services.AddHostedService<PhotoProcessingWorker>();
+builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()

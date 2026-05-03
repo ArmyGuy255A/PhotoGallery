@@ -36,4 +36,5 @@ public class Photo
     public virtual Album? Album { get; set; }
     public virtual ICollection<PhotoVersion> PhotoVersions { get; set; } = new List<PhotoVersion>();
     public virtual ICollection<PhotoFile> PhotoFiles { get; set; } = new List<PhotoFile>();
+    public virtual ICollection<PhotoVersionUrl> PhotoVersionUrls { get; set; } = new List<PhotoVersionUrl>();
 }

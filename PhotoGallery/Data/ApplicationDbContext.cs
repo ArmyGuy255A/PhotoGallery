@@ -20,6 +20,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<UserAccessLog> UserAccessLogs { get; set; }
     public DbSet<ProcessingQueue> ProcessingQueues { get; set; }
     public DbSet<ProcessingQueueItem> ProcessingQueueItems { get; set; }
+    public DbSet<PhotoVersionUrl> PhotoVersionUrls { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {
