@@ -216,10 +216,7 @@ public class StorageConsistencyService
             }
 
             // Pending or retryable Error: storage already has the file, so the work is effectively done.
-            item.Status = ProcessingStatus.Complete;
-            item.CompletedAt = DateTime.UtcNow;
-            item.UpdatedAt = DateTime.UtcNow;
-            item.LastError = null;
+            MarkItemComplete(item);
             await _itemRepository.UpdateAsync(item);
             report.ItemsBackFilledComplete++;
             return;
@@ -230,13 +227,7 @@ public class StorageConsistencyService
         {
             var wasComplete = item.Status == ProcessingStatus.Complete;
 
-            item.Status = ProcessingStatus.Pending;
-            item.CompletedAt = null;
-            item.RetryCount = 0;
-            item.LastError = null;
-            item.NextRetryTime = null;
-            item.Attempts = 0;
-            item.UpdatedAt = DateTime.UtcNow;
+            ResetItemToPending(item);
             await _itemRepository.UpdateAsync(item);
 
             if (wasComplete)
@@ -274,6 +265,35 @@ public class StorageConsistencyService
     private static string BuildPrefix(Photo photo) => $"photogallery/{photo.AlbumId}/{photo.Id}/";
 
     private static string BuildKey(Photo photo, string qualityLowercase) => $"{BuildPrefix(photo)}{qualityLowercase}.jpg";
+
+    /// <summary>
+    /// Reset a queue item back to <see cref="ProcessingStatus.Pending"/> so
+    /// <see cref="PhotoProcessingWorker"/> will pick it up on its next tick. Clears all
+    /// retry metadata and the previous completion timestamp; updates <see cref="ProcessingQueueItem.UpdatedAt"/>.
+    /// </summary>
+    private static void ResetItemToPending(ProcessingQueueItem item)
+    {
+        item.Status = ProcessingStatus.Pending;
+        item.CompletedAt = null;
+        item.RetryCount = 0;
+        item.LastError = null;
+        item.NextRetryTime = null;
+        item.Attempts = 0;
+        item.UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Mark a queue item as <see cref="ProcessingStatus.Complete"/> with a current timestamp.
+    /// Used for the present+Pending and present+retryable-Error reconciliation paths where
+    /// storage already has the rendered file, so the DB just needs to catch up.
+    /// </summary>
+    private static void MarkItemComplete(ProcessingQueueItem item)
+    {
+        item.Status = ProcessingStatus.Complete;
+        item.CompletedAt = DateTime.UtcNow;
+        item.UpdatedAt = DateTime.UtcNow;
+        item.LastError = null;
+    }
 }
 
 /// <summary>
