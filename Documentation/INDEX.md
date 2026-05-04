@@ -25,6 +25,7 @@ Completed phase reports showing what was implemented and why.
 
 | Document | Phase | Key Changes |
 |----------|-------|------------|
+| **[STORAGE-CONSISTENCY-COMPLETE.md](./Phase-Reports/STORAGE-CONSISTENCY-COMPLETE.md)** | D006/D007/D008 | Playwright-first frontend testing, storage/DB reconciliation worker, cached pre-signed URL verification | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) |
 | **[SKILL-CONSULTATION-ENFORCEMENT-COMPLETE.md](./Phase-Reports/SKILL-CONSULTATION-ENFORCEMENT-COMPLETE.md)** | System | Mandatory skill consultation enforcement, PRE-IMPLEMENTATION-CHECKLIST, file organization | 🔗 [Pre-Implementation Checklist](./Guides/PRE-IMPLEMENTATION-CHECKLIST.md) • [Design Decisions](./Architecture/DESIGN_DECISIONS.md) |
 | **[PHASE_12_SUMMARY.md](./Phase-Reports/PHASE_12_SUMMARY.md)** | 12 | Photo upload infrastructure, TDD workflow, storage paths | 🔗 [Design Decisions](./Architecture/DESIGN_DECISIONS.md) • [Guides](./Guides/) |
 | **[E2E_TESTING_COMPLETE.md](./Phase-Reports/E2E_TESTING_COMPLETE.md)** | E2E | End-to-end testing verification | 🔗 [Phase 12](./Phase-Reports/PHASE_12_SUMMARY.md) |
@@ -256,6 +257,6 @@ Before committing any code:
 
 ---
 
-**Last Updated**: 2026-05-03
+**Last Updated**: 2026-05-03 (D006/D007/D008 added — Playwright testing strategy, storage reconciliation, cached URL verification)
 **Status**: Operational (6 folders, 20+ documents)
 **Maintained By**: Architect Skill + Development Team
