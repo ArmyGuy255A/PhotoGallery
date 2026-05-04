@@ -136,7 +136,17 @@ public class PhotoVersionUrlService
         {
             return null;
         }
-        return $"photogallery/{photo.AlbumId}/{photoId}/{quality.ToString().ToLower()}.jpg";
+        return BuildStorageKey(photo.AlbumId, photoId, quality);
+    }
+
+    /// <summary>
+    /// Construct the canonical storage key for a photo version.
+    /// Format: <c>photogallery/{albumId}/{photoId}/{quality}.jpg</c> with quality lowercased.
+    /// Single source of truth shared by every code path that needs to talk to <see cref="IStorageProvider"/>.
+    /// </summary>
+    internal static string BuildStorageKey(Guid albumId, Guid photoId, QualityType quality)
+    {
+        return $"photogallery/{albumId}/{photoId}/{quality.ToString().ToLower()}.jpg";
     }
 
     /// <summary>
@@ -195,9 +205,9 @@ public class PhotoVersionUrlService
                 return null;
             }
 
-            // Construct storage key: photogallery/{albumId}/{photoId}/{quality}.jpg
-            var qualityName = quality.ToString().ToLower();
-            var storageKey = $"photogallery/{photo.AlbumId}/{photoId}/{qualityName}.jpg";
+            // Construct storage key (centralized in BuildStorageKey to keep verification and
+            // generation paths in lockstep).
+            var storageKey = BuildStorageKey(photo.AlbumId, photoId, quality);
 
             // Verify file exists
             var exists = await _storageProvider.ExistsAsync(storageKey);
