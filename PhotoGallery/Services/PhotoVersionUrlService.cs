@@ -150,6 +150,60 @@ public class PhotoVersionUrlService
     }
 
     /// <summary>
+    /// Generate a short-lived pre-signed URL that bypasses the cache.
+    ///
+    /// Used for public/code-based access where the cached 7-day URLs would survive access-code
+    /// revocation. Generates a fresh URL every call with the supplied TTL (typically 5-15 minutes).
+    ///
+    /// Reference: Phase 14 (Shopping Cart) — security: revocation gap mitigation.
+    /// </summary>
+    /// <param name="photoId">Photo identifier</param>
+    /// <param name="quality">Quality version</param>
+    /// <param name="ttlMinutes">URL lifetime in minutes (default 15)</param>
+    /// <returns>Pre-signed URL or null if photo/file does not exist</returns>
+    public async Task<string?> GenerateShortLivedUrlAsync(Guid photoId, QualityType quality, int ttlMinutes = 15)
+    {
+        if (ttlMinutes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ttlMinutes), "TTL must be positive.");
+        }
+
+        try
+        {
+            var photo = await _photoRepository.GetByIdAsync(photoId);
+            if (photo == null)
+            {
+                _logger.LogWarning("Photo {PhotoId} not found, cannot generate short-lived URL", photoId);
+                return null;
+            }
+
+            var storageKey = BuildStorageKey(photo.AlbumId, photoId, quality);
+
+            var exists = await _storageProvider.ExistsAsync(storageKey);
+            if (!exists)
+            {
+                _logger.LogWarning("Photo version file not found in storage: {StorageKey}", storageKey);
+                return null;
+            }
+
+            var presignedUrl = await _storageProvider.GetUrlAsync(storageKey, ttlMinutes);
+
+            if (string.IsNullOrEmpty(presignedUrl))
+            {
+                _logger.LogError("Failed to generate short-lived URL for storage key: {StorageKey}", storageKey);
+                return null;
+            }
+
+            return presignedUrl;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating short-lived URL for photo {PhotoId} quality {Quality}", photoId, quality);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Generate pre-signed URLs for all 4 photo qualities and cache Thumbnail/Medium in database.
     /// Called during photo processing after successful resize/encode.
     /// </summary>

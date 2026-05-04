@@ -21,6 +21,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<ProcessingQueue> ProcessingQueues { get; set; }
     public DbSet<ProcessingQueueItem> ProcessingQueueItems { get; set; }
     public DbSet<PhotoVersionUrl> PhotoVersionUrls { get; set; }
+    public DbSet<Download> Downloads { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {

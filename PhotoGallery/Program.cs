@@ -124,6 +124,7 @@ builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRe
 
 // Register services
 builder.Services.AddScoped<PhotoVersionUrlService>();
+builder.Services.AddScoped<ZipDownloadService>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
