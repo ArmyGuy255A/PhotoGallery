@@ -695,7 +695,7 @@ The service classifies each `(photoId, quality)` pair into one of four cases:
 | Storage state | Queue item state | Action |
 |---------------|------------------|--------|
 | Missing | None | Insert `Pending` `ProcessingQueueItem` (regenerate from `original.jpg`). Ensure parent `ProcessingQueue` exists; if not, create it as `Pending`. |
-| Missing | `Complete` | Flip item to `Pending`, reset `RetryCount=0`, `LastError=null`, `NextRetryTime=null`, `CompletedAt=null`. Then **regenerate the cached `PhotoVersionUrl` row in place** (per D008's overwrite pattern — does NOT just set `IsActive=false`, because the next caching call would hit the unique-constraint violation). Reopen the parent `ProcessingQueue` if it was `Complete` (set `Status=Pending`, `CompletedAt=null`, `ErrorMessage=null`). |
+| Missing | `Complete` | Flip item to `Pending`, reset `RetryCount=0`, `LastError=null`, `NextRetryTime=null`, `CompletedAt=null`. Then **invalidate the matching active `PhotoVersionUrl` row** (set `IsActive=false`) so the album-list endpoint stops returning the now-broken URL; D008's cache-write path will overwrite-in-place via `GetByPhotoAndQualityIncludingInactiveAsync` the next time the URL is regenerated, so the unique `(PhotoId, Quality)` index is never violated. Reopen the parent `ProcessingQueue` if it was `Complete` (set `Status=Pending`, `CompletedAt=null`, `ErrorMessage=null`). |
 | Present | None | Insert `Complete` `ProcessingQueueItem` with `CompletedAt = UtcNow` (back-fill DB record). Ensure parent `ProcessingQueue` exists; if not, create it. Then call the existing `PhotoConsistencyChecker.MarkQueueCompleteIfReadyAsync` to re-derive queue status. |
 | Present | `Complete` | No-op. |
 
