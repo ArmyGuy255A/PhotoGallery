@@ -77,13 +77,31 @@ public class StorageConsistencyService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var report = new ConsistencyReport();
+            var mutations = new MutationFlags();
 
             var photos = await _photoRepository.GetAllAsync();
             foreach (var photo in photos)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await ReconcilePhotoAsync(photo, report, cancellationToken);
+                await ReconcilePhotoAsync(photo, report, mutations, cancellationToken);
                 report.PhotosScanned++;
+            }
+
+            // Persist every mutation made during the cycle. Without this, the scoped
+            // DbContext is disposed by the caller (worker or admin endpoint) and all
+            // tracked Add/Update calls are silently abandoned. Conditional so a no-op
+            // cycle does not issue unnecessary SaveChangesAsync calls.
+            if (mutations.ItemsChanged)
+            {
+                await _itemRepository.SaveChangesAsync();
+            }
+            if (mutations.QueuesChanged)
+            {
+                await _queueRepository.SaveChangesAsync();
+            }
+            if (mutations.UrlsChanged)
+            {
+                await _urlRepository.SaveChangesAsync();
             }
 
             _logger.LogInformation(
@@ -99,7 +117,19 @@ public class StorageConsistencyService
         }
     }
 
-    private async Task ReconcilePhotoAsync(Photo photo, ConsistencyReport report, CancellationToken cancellationToken)
+    /// <summary>
+    /// Per-cycle flags recording which repositories had mutations and therefore need
+    /// SaveChangesAsync called. Keeps the save logic data-driven instead of inferring
+    /// from report counters (which mix counts of distinct mutation types per repo).
+    /// </summary>
+    private sealed class MutationFlags
+    {
+        public bool ItemsChanged;
+        public bool QueuesChanged;
+        public bool UrlsChanged;
+    }
+
+    private async Task ReconcilePhotoAsync(Photo photo, ConsistencyReport report, MutationFlags mutations, CancellationToken cancellationToken)
     {
         var prefix = BuildPrefix(photo);
         var presentKeys = (await _storageProvider.ListAsync(prefix)).ToHashSet(StringComparer.Ordinal);
@@ -126,6 +156,7 @@ public class StorageConsistencyService
                 CreatedAt = DateTime.UtcNow,
             };
             await _queueRepository.AddAsync(queue);
+            mutations.QueuesChanged = true;
             report.QueuesCreated++;
             _logger.LogInformation(
                 "Created missing ProcessingQueue {QueueId} for photo {PhotoId} during consistency reconciliation",
@@ -140,7 +171,7 @@ public class StorageConsistencyService
             var key = BuildKey(photo, quality.ToString().ToLowerInvariant());
             var present = presentKeys.Contains(key);
             var item = existingItems.FirstOrDefault(i => i.Quality == quality);
-            await ReconcileQualityAsync(photo, queue, quality, present, item, report);
+            await ReconcileQualityAsync(photo, queue, quality, present, item, report, mutations);
         }
     }
 
@@ -150,7 +181,8 @@ public class StorageConsistencyService
         QualityType quality,
         bool present,
         ProcessingQueueItem? item,
-        ConsistencyReport report)
+        ConsistencyReport report,
+        MutationFlags mutations)
     {
         if (item == null)
         {
@@ -170,6 +202,7 @@ public class StorageConsistencyService
                     UpdatedAt = DateTime.UtcNow,
                 };
                 await _itemRepository.AddAsync(complete);
+                mutations.ItemsChanged = true;
                 report.ItemsBackFilledComplete++;
             }
             else
@@ -186,6 +219,7 @@ public class StorageConsistencyService
                     UpdatedAt = DateTime.UtcNow,
                 };
                 await _itemRepository.AddAsync(pending);
+                mutations.ItemsChanged = true;
                 report.ItemsCreatedPending++;
             }
 
@@ -218,6 +252,7 @@ public class StorageConsistencyService
             // Pending or retryable Error: storage already has the file, so the work is effectively done.
             MarkItemComplete(item);
             await _itemRepository.UpdateAsync(item);
+            mutations.ItemsChanged = true;
             report.ItemsBackFilledComplete++;
             return;
         }
@@ -229,6 +264,7 @@ public class StorageConsistencyService
 
             ResetItemToPending(item);
             await _itemRepository.UpdateAsync(item);
+            mutations.ItemsChanged = true;
 
             if (wasComplete)
             {
@@ -241,6 +277,7 @@ public class StorageConsistencyService
                     queue.CompletedAt = null;
                     queue.ErrorMessage = null;
                     await _queueRepository.UpdateAsync(queue);
+                    mutations.QueuesChanged = true;
                 }
 
                 // Invalidate any cached pre-signed URL so the album-list endpoint stops
@@ -252,6 +289,7 @@ public class StorageConsistencyService
                 {
                     cachedUrl.IsActive = false;
                     await _urlRepository.UpdateAsync(cachedUrl);
+                    mutations.UrlsChanged = true;
                     report.UrlsInvalidated++;
                 }
             }

@@ -611,4 +611,106 @@ public class StorageConsistencyServiceTests
         _mockItemRepository.Verify(r => r.UpdateAsync(It.IsAny<ProcessingQueueItem>()), Times.Never);
         _mockQueueRepository.Verify(r => r.AddAsync(It.IsAny<ProcessingQueue>()), Times.Never);
     }
+
+    // ---- Persistence: SaveChangesAsync must be called for every mutation path ----
+    //
+    // RED-phase regression tests for the bug where the reconciler appeared to work
+    // (returned a non-zero report) but actually persisted nothing because none of
+    // the AddAsync/UpdateAsync calls were followed by SaveChangesAsync. The DbContext
+    // tracked the changes, the using-scope around the worker disposed the context,
+    // and all reconciliation work was silently abandoned. Live thumbnails were not
+    // restored because subsequent worker ticks saw zero new Pending items.
+    //
+    // These tests assert SaveChangesAsync was invoked on each repository that
+    // received writes. This is implementation-leaning, but it is the only signal a
+    // mock can provide; the alternative is a real-DB integration test, which is
+    // already covered by D004.
+
+    [Fact]
+    public async Task RunOnceAsync_Should_Persist_When_Creating_Pending_Items()
+    {
+        var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
+        var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Complete };
+
+        SetupStorage(PrefixFor(photo), new[] { KeyFor(photo, "original") });
+        _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
+        _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id))
+            .ReturnsAsync(Array.Empty<ProcessingQueueItem>());
+
+        await BuildService().RunOnceAsync(CancellationToken.None);
+
+        _mockItemRepository.Verify(r => r.SaveChangesAsync(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_Should_Persist_When_Requeuing_Complete_Items_With_Missing_Storage()
+    {
+        var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
+        var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Complete };
+
+        SetupStorage(PrefixFor(photo), new[] { KeyFor(photo, "original") });
+        var completeItem = new ProcessingQueueItem
+        {
+            PhotoId = photo.Id,
+            Quality = QualityType.Thumbnail,
+            Status = ProcessingStatus.Complete,
+            ProcessingQueueId = queue.Id,
+            CompletedAt = DateTime.UtcNow.AddDays(-1),
+        };
+        _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
+        _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[] { completeItem });
+
+        await BuildService().RunOnceAsync(CancellationToken.None);
+
+        _mockItemRepository.Verify(r => r.SaveChangesAsync(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_Should_Persist_Queue_When_Creating_Missing_Queue()
+    {
+        var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
+
+        SetupStorage(PrefixFor(photo), new[] { KeyFor(photo, "original") });
+        _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
+        _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id))
+            .ReturnsAsync((ProcessingQueue?)null);
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id))
+            .ReturnsAsync(Array.Empty<ProcessingQueueItem>());
+
+        await BuildService().RunOnceAsync(CancellationToken.None);
+
+        _mockQueueRepository.Verify(r => r.SaveChangesAsync(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_Should_Not_Save_When_No_Mutations_Occurred()
+    {
+        // No-op cycles must not issue gratuitous SaveChangesAsync calls — there's nothing
+        // to flush. This guards against a "save on every cycle" anti-fix where someone
+        // would just unconditionally call SaveChangesAsync at the end of RunOnceAsync.
+        var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
+        var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Complete };
+
+        var presentKeys = new List<string> { KeyFor(photo, "original") };
+        presentKeys.AddRange(AllProcessedKeys(photo));
+        SetupStorage(PrefixFor(photo), presentKeys);
+
+        _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
+        _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[]
+        {
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Thumbnail, Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Low,       Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Medium,    Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.High,      Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+        });
+
+        await BuildService().RunOnceAsync(CancellationToken.None);
+
+        _mockItemRepository.Verify(r => r.SaveChangesAsync(), Times.Never);
+        _mockQueueRepository.Verify(r => r.SaveChangesAsync(), Times.Never);
+        _mockUrlRepository.Verify(r => r.SaveChangesAsync(), Times.Never);
+    }
 }

@@ -12,11 +12,24 @@ public class MinioStorageProvider : IStorageProvider
     private readonly string _bucketName;
     private readonly ILogger<MinioStorageProvider> _logger;
 
+    /// <summary>
+    /// Scheme used for pre-signed URLs. The AWS S3 SDK ignores the scheme of
+    /// AmazonS3Config.ServiceURL when generating pre-signed URLs and defaults to
+    /// HTTPS, so we must set <see cref="GetPreSignedUrlRequest.Protocol"/>
+    /// explicitly to match the actual MinIO endpoint scheme. Driven by
+    /// Storage:Minio:UseSSL — false in local dev (MinIO on http://localhost:9000),
+    /// true in production behind TLS termination.
+    /// </summary>
+    private readonly Protocol _presignProtocol;
+
     public MinioStorageProvider(IAmazonS3 s3Client, IConfiguration configuration, ILogger<MinioStorageProvider> logger)
     {
         _s3Client = s3Client;
         _logger = logger;
         _bucketName = configuration["Storage:Minio:BucketName"] ?? "photogallery";
+        _presignProtocol = configuration.GetValue<bool>("Storage:Minio:UseSSL", false)
+            ? Protocol.HTTPS
+            : Protocol.HTTP;
     }
 
     public async Task<string> UploadAsync(string key, Stream fileStream, string contentType)
@@ -104,7 +117,8 @@ public class MinioStorageProvider : IStorageProvider
                 BucketName = _bucketName,
                 Key = key,
                 Expires = DateTime.UtcNow.AddMinutes(expirationMinutes),
-                Verb = HttpVerb.GET
+                Verb = HttpVerb.GET,
+                Protocol = _presignProtocol
             };
 
             var url = _s3Client.GetPreSignedURL(request);
