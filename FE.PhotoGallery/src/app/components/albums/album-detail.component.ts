@@ -38,10 +38,10 @@ interface Album {
   standalone: true,
   imports: [CommonModule, RouterLink, PhotoUploadComponent],
   template: `
-    <div class="album-detail-container">
+    <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
         <button class="back-btn" routerLink="/dashboard">← Back to Dashboard</button>
-        <h1>{{ album?.title }}</h1>
+        <h1 data-testid="album-title">{{ album?.title }}</h1>
       </header>
 
       <main class="detail-content">
@@ -65,28 +65,33 @@ interface Album {
 
           <section class="photos-section">
             <div class="section-header">
-              <h2>Photos ({{ photos.length }})</h2>
+              <h2 data-testid="photos-count">Photos ({{ photos.length }})</h2>
             </div>
 
-            <div class="photos-grid" *ngIf="photos.length > 0">
-              <div *ngFor="let photo of photos" class="photo-card">
-                <div class="photo-status-badge" [ngClass]="getStatusClass(photo)">
+            <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
+              <div *ngFor="let photo of photos" class="photo-card" data-testid="photo-card" [attr.data-photo-id]="photo.id">
+                <div class="photo-status-badge" [ngClass]="getStatusClass(photo)" data-testid="photo-status-badge">
                   <span *ngIf="photo.processingStatus === 'Complete'">✓</span>
                   <span *ngIf="photo.processingStatus === 'Processing'">⟳</span>
                   <span *ngIf="photo.processingStatus === 'Failed'">✗</span>
                 </div>
                 <div class="photo-placeholder">
-                  <img *ngIf="photo.thumbnailUrl" [src]="photo.thumbnailUrl" alt="{{ photo.fileName }}" class="photo-image">
-                  <svg *ngIf="!photo.thumbnailUrl" viewBox="0 0 24 24">
+                  <img *ngIf="photo.thumbnailUrl"
+                       [src]="photo.thumbnailUrl"
+                       alt="{{ photo.fileName }}"
+                       class="photo-image"
+                       data-testid="photo-card-image"
+                       (error)="onThumbnailError(photo)">
+                  <svg *ngIf="!photo.thumbnailUrl" viewBox="0 0 24 24" data-testid="photo-card-placeholder">
                     <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
                   </svg>
                 </div>
-                <h3>{{ photo.fileName }}</h3>
+                <h3 data-testid="photo-card-filename">{{ photo.fileName }}</h3>
                 <p class="photo-meta">Uploaded {{ (photo.uploadDate | date: 'short') }}</p>
               </div>
             </div>
 
-            <div class="empty-message" *ngIf="photos.length === 0">
+            <div class="empty-message" *ngIf="photos.length === 0" data-testid="album-empty-photos">
               <p>No photos yet. Upload some photos to get started above.</p>
             </div>
           </section>
@@ -673,5 +678,19 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
       console.log('Copied to clipboard:', text);
       alert('Access code copied to clipboard!');
     });
+  }
+
+  /**
+   * Defensive fallback when a thumbnail URL fails to load (HTTP 404, network error,
+   * stale pre-signed URL, etc.). Clearing the URL on the photo lets the existing
+   * `*ngIf="!photo.thumbnailUrl"` SVG placeholder take over so the user no longer
+   * sees the browser's broken-image icon.
+   *
+   * The underlying root cause (cached pre-signed URL pointing at a missing storage
+   * object) is fixed server-side by D008; this handler is the client-side safety net.
+   */
+  onThumbnailError(photo: Photo): void {
+    console.warn('Thumbnail failed to load for photo', photo.id, photo.fileName);
+    photo.thumbnailUrl = undefined;
   }
 }

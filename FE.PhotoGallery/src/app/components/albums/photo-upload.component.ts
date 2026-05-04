@@ -20,7 +20,7 @@ interface UploadFile {
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="upload-card">
+    <div class="upload-card" data-testid="photo-upload-component">
       <div class="card-header">
         <strong>Upload Photos</strong>
       </div>
@@ -28,6 +28,7 @@ interface UploadFile {
         <!-- Drag and drop zone -->
         <div
           class="upload-zone"
+          data-testid="photo-upload-zone"
           (dragover)="onDragOver($event)"
           (dragleave)="onDragLeave($event)"
           (drop)="onDrop($event)"
@@ -41,11 +42,13 @@ interface UploadFile {
             type="file"
             multiple
             accept="image/*,.raw,.cr2,.nef"
+            data-testid="photo-upload-input"
             (change)="onFileSelected($event)"
             style="display: none"
           />
           <button
             class="btn btn-primary"
+            data-testid="photo-upload-choose-files"
             (click)="fileInput.click()"
             [disabled]="isUploading"
           >
@@ -54,50 +57,52 @@ interface UploadFile {
         </div>
 
         <!-- Upload progress with thumbnails -->
-        <div *ngIf="uploadFiles.length > 0" class="mt-4">
+        <div *ngIf="uploadFiles.length > 0" class="mt-4" data-testid="upload-progress-list">
           <h6>Upload Progress</h6>
-          <div *ngFor="let item of uploadFiles; let i = index" class="upload-item mb-3" [class.completed]="item.status === 'complete'">
+          <div *ngFor="let item of uploadFiles; let i = index" class="upload-item mb-3" [class.completed]="item.status === 'complete'" data-testid="upload-item" [attr.data-upload-status]="item.status">
             <div class="item-row d-flex align-items-center gap-3">
               <!-- Thumbnail -->
               <div class="thumbnail-container">
-                <img 
-                  *ngIf="item.thumbnailUrl && item.status === 'complete'" 
-                  [src]="item.thumbnailUrl" 
+                <img
+                  *ngIf="item.thumbnailUrl && item.status === 'complete'"
+                  [src]="item.thumbnailUrl"
                   alt="thumbnail"
                   class="thumbnail"
+                  data-testid="upload-item-thumbnail"
                   [title]="item.file.name"
+                  (error)="onThumbnailError(item)"
                 />
-                <div *ngIf="!item.thumbnailUrl || item.status !== 'complete'" class="thumbnail-placeholder">
+                <div *ngIf="!item.thumbnailUrl || item.status !== 'complete'" class="thumbnail-placeholder" data-testid="upload-item-thumbnail-placeholder">
                   📷
                 </div>
               </div>
 
               <!-- File info and progress -->
               <div class="flex-grow-1">
-                <small class="d-block mb-1 filename">{{ item.file.name }}</small>
-                
+                <small class="d-block mb-1 filename" data-testid="upload-item-filename">{{ item.file.name }}</small>
+
                 <!-- Dual Progress Bar -->
                 <div class="progress-container">
                   <!-- Background: Upload progress (blue) -->
                   <div class="progress progress-upload">
-                    <div 
-                      class="progress-bar progress-bar-upload" 
+                    <div
+                      class="progress-bar progress-bar-upload"
                       [style.width.%]="item.uploadProgress"
                       role="progressbar">
                     </div>
                   </div>
                   <!-- Overlay: Processing progress (green) -->
                   <div class="progress progress-processing">
-                    <div 
-                      class="progress-bar progress-bar-processing" 
+                    <div
+                      class="progress-bar progress-bar-processing"
                       [style.width.%]="item.processingProgress"
                       role="progressbar">
                     </div>
                   </div>
                 </div>
-                
+
                 <!-- Status text -->
-                <small class="status-text">
+                <small class="status-text" data-testid="upload-item-status">
                   <span *ngIf="item.status === 'uploading'">📤 Uploading...</span>
                   <span *ngIf="item.status === 'processing'">🔄 Processing: {{ item.processingProgress }}%</span>
                   <span *ngIf="item.status === 'complete'">✅ Complete</span>
@@ -135,7 +140,7 @@ interface UploadFile {
         </div>
 
         <!-- Summary -->
-        <div *ngIf="uploadCompleteFlag" class="alert alert-info mt-4">
+        <div *ngIf="uploadCompleteFlag" class="alert alert-info mt-4" data-testid="upload-summary">
           <strong>Upload Summary:</strong>
           <p class="mb-0">
             {{ successCount }} photo(s) uploaded successfully,
@@ -465,6 +470,17 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
     this.pollStop$.next();
     this.pollStop$.complete();
+  }
+
+  /**
+   * Defensive fallback when the in-component upload thumbnail fails to render
+   * (server returned a stale pre-signed URL, network blip, etc.). Clearing the
+   * URL on the upload item swaps in the existing 📷 placeholder so the user
+   * never sees the browser's broken-image icon.
+   */
+  onThumbnailError(item: UploadFile): void {
+    console.warn('Upload thumbnail failed to load for', item.file.name, item.photoId);
+    item.thumbnailUrl = undefined;
   }
 
   onDragOver(event: DragEvent) {
