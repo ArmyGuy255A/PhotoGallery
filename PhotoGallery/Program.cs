@@ -131,9 +131,16 @@ builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
 // Register consistency checker for validating photo processing completion
 builder.Services.AddScoped<PhotoConsistencyChecker>();
 
+// Register storage/DB consistency reconciliation (D007).
+// Scoped because the per-cycle StorageConsistencyWorker resolves it per tick
+// and the admin endpoint resolves it per request. The internal SemaphoreSlim
+// is per-instance which is sufficient for the single-process deployment model.
+builder.Services.AddScoped<StorageConsistencyService>();
+
 // Register background services for photo processing and URL refresh
 builder.Services.AddHostedService<PhotoProcessingWorker>();
 builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
+builder.Services.AddHostedService<StorageConsistencyWorker>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()

@@ -23,6 +23,7 @@ public class PhotosController : ControllerBase
     private readonly IRepository<Album> _albumRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
     private readonly IProcessingQueueItemRepository _queueItemRepository;
+    private readonly StorageConsistencyService _storageConsistencyService;
     private readonly ILogger<PhotosController> _logger;
 
     public PhotosController(
@@ -32,6 +33,7 @@ public class PhotosController : ControllerBase
         IRepository<Album> albumRepository,
         IRepository<PhotoVersion> photoVersionRepository,
         IProcessingQueueItemRepository queueItemRepository,
+        StorageConsistencyService storageConsistencyService,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -40,6 +42,7 @@ public class PhotosController : ControllerBase
         _albumRepository = albumRepository;
         _photoVersionRepository = photoVersionRepository;
         _queueItemRepository = queueItemRepository;
+        _storageConsistencyService = storageConsistencyService;
         _logger = logger;
     }
 
@@ -301,6 +304,38 @@ public class PhotosController : ControllerBase
             HasMedium = hasMedium,
             HasHigh = hasHigh
         });
+    }
+
+    /// <summary>
+    /// Admin-only: synchronously trigger a storage/DB consistency reconciliation cycle (D007).
+    /// Returns the per-cycle summary report once reconciliation completes.
+    ///
+    /// Synchronous by design for v1 — admins are technical users with no SLA, datasets
+    /// are small in practice, and a sync endpoint avoids the complexity of a separate
+    /// job-status table. Future v2 may move to 202 Accepted + job-id polling.
+    ///
+    /// Reference: D007 (Storage/Database Consistency Reconciliation), D001 (Auth model).
+    /// </summary>
+    [HttpPost("admin/reconcile-storage")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ReconcileStorage(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _logger.LogInformation("Admin {User} triggered storage reconciliation", User.Identity?.Name);
+            var report = await _storageConsistencyService.RunOnceAsync(cancellationToken);
+            return Ok(report);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Admin storage reconciliation was cancelled");
+            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Admin storage reconciliation failed");
+            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
+        }
     }
 }
 
