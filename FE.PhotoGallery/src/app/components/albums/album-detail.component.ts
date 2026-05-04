@@ -4,6 +4,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
+import { AccessCodeFormComponent } from './access-code-form.component';
 import { Subject, interval, Observable } from 'rxjs';
 import { takeUntil, switchMap } from 'rxjs/operators';
 
@@ -36,7 +37,7 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, PhotoUploadComponent],
+  imports: [CommonModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
@@ -99,8 +100,15 @@ interface Album {
           <section class="access-codes-section">
             <div class="section-header">
               <h2>Access Codes ({{ accessCodes.length }})</h2>
-              <button (click)="createAccessCode()" class="action-btn">+ Generate Code</button>
+              <button (click)="toggleCodeForm()" class="action-btn" *ngIf="!showCodeForm">+ Generate Code</button>
             </div>
+
+            <app-access-code-form
+              *ngIf="showCodeForm"
+              [albumId]="albumId"
+              (codeCreated)="onCodeCreated()"
+              (cancelled)="showCodeForm = false">
+            </app-access-code-form>
 
             <div class="codes-table" *ngIf="accessCodes.length > 0">
               <table>
@@ -117,7 +125,10 @@ interface Album {
                   <tr *ngFor="let code of accessCodes">
                     <td class="code-cell">
                       <code>{{ code.code }}</code>
-                      <button class="copy-btn" (click)="copyToClipboard(code.code)" title="Copy code">📋</button>
+                      <button class="copy-btn" (click)="copyToClipboard(code.code)" title="Copy code">
+                        <span *ngIf="copiedCode !== code.code">📋</span>
+                        <span *ngIf="copiedCode === code.code" class="copied-feedback">✓ Copied!</span>
+                      </button>
                     </td>
                     <td>
                       <span class="status-badge" [ngClass]="getCodeStatus(code)">
@@ -127,6 +138,10 @@ interface Album {
                     <td>{{ code.expirationDate ? (code.expirationDate | date: 'short') : 'Never' }}</td>
                     <td>{{ code.createdDate | date: 'short' }}</td>
                     <td>
+                      <button class="copy-link-btn" (click)="copyShareLink(code.code)" title="Copy share link">
+                        <span *ngIf="copiedLink !== code.code">🔗 Copy Link</span>
+                        <span *ngIf="copiedLink === code.code" class="copied-feedback">✓ Copied!</span>
+                      </button>
                       <button class="delete-btn" (click)="deleteAccessCode(code.id)">Delete</button>
                     </td>
                   </tr>
@@ -134,7 +149,7 @@ interface Album {
               </table>
             </div>
 
-            <div class="empty-message" *ngIf="accessCodes.length === 0">
+            <div class="empty-message" *ngIf="accessCodes.length === 0 && !showCodeForm">
               <p>No access codes yet. Create one to share this album with clients.</p>
             </div>
           </section>
@@ -404,14 +419,39 @@ interface Album {
 
     .copy-btn {
       background: none;
-      border: none;
+      border: 1px solid transparent;
       cursor: pointer;
-      font-size: 16px;
-      padding: 2px 5px;
+      font-size: 14px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: background 0.15s, border-color 0.15s;
     }
 
     .copy-btn:hover {
-      transform: scale(1.2);
+      background: #f0f0f0;
+      border-color: #ddd;
+    }
+
+    .copy-link-btn {
+      background: #e3f2fd;
+      color: #0066cc;
+      border: 1px solid #bbdefb;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      margin-right: 6px;
+      transition: background 0.15s;
+    }
+
+    .copy-link-btn:hover {
+      background: #bbdefb;
+    }
+
+    .copied-feedback {
+      color: #2e7d32;
+      font-weight: 600;
+      font-size: 12px;
     }
 
     .status-badge {
@@ -492,6 +532,9 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   isLoading = true;
   errorMessage = '';
   isAdmin = false;
+  showCodeForm = false;
+  copiedCode: string | null = null;
+  copiedLink: string | null = null;
 
   private destroy$ = new Subject<void>();
 
@@ -611,23 +654,13 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  createAccessCode(): void {
-    const apiUrl = environment.apiUrl || '';
-    const defaultExpiration = new Date();
-    defaultExpiration.setDate(defaultExpiration.getDate() + 30);
+  toggleCodeForm(): void {
+    this.showCodeForm = !this.showCodeForm;
+  }
 
-    this.http.post(`${apiUrl}/api/albums/${this.albumId}/access-codes`, {
-      expirationDate: defaultExpiration
-    }).pipe(takeUntil(this.destroy$)).subscribe({
-      next: () => {
-        console.log('Access code created successfully');
-        this.loadAccessCodes();
-      },
-      error: (error) => {
-        console.error('Error creating access code:', error);
-        this.errorMessage = 'Failed to create access code. Please try again.';
-      }
-    });
+  onCodeCreated(): void {
+    this.showCodeForm = false;
+    this.loadAccessCodes();
   }
 
   deleteAccessCode(codeId: string): void {
@@ -675,8 +708,31 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
 
   copyToClipboard(text: string): void {
     navigator.clipboard.writeText(text).then(() => {
-      console.log('Copied to clipboard:', text);
-      alert('Access code copied to clipboard!');
+      this.copiedCode = text;
+      setTimeout(() => {
+        if (this.copiedCode === text) {
+          this.copiedCode = null;
+        }
+      }, 2000);
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+      this.errorMessage = 'Failed to copy to clipboard.';
+    });
+  }
+
+  copyShareLink(code: string): void {
+    // Build share link for unauthenticated client access (per requirement #4: /code/{albumcode})
+    const shareUrl = `${window.location.origin}/code/${code}`;
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      this.copiedLink = code;
+      setTimeout(() => {
+        if (this.copiedLink === code) {
+          this.copiedLink = null;
+        }
+      }, 2000);
+    }).catch(err => {
+      console.error('Failed to copy share link:', err);
+      this.errorMessage = 'Failed to copy share link.';
     });
   }
 

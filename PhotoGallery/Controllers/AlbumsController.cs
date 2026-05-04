@@ -313,10 +313,29 @@ public class AlbumsController : ControllerBase
             codeExists = existingCodes.Any(c => c.Code == code);
         } while (codeExists);
 
-        // Set expiration date (default 30 days from now, or null if forever)
-        DateTime? expirationDate = request.ExpiresForever 
-            ? (DateTime?)null 
-            : DateTime.UtcNow.AddDays(request.ExpirationDays ?? 30);
+        // Determine expiration date:
+        // 1. ExpiresForever → null
+        // 2. ExpirationDate provided (and in the future) → use it
+        // 3. ExpirationDays provided → today + N days
+        // 4. Default → today + 30 days
+        DateTime? expirationDate;
+        if (request.ExpiresForever)
+        {
+            expirationDate = null;
+        }
+        else if (request.ExpirationDate.HasValue)
+        {
+            var requestedDate = DateTime.SpecifyKind(request.ExpirationDate.Value, DateTimeKind.Utc);
+            if (requestedDate <= DateTime.UtcNow)
+            {
+                return BadRequest("Expiration date must be in the future.");
+            }
+            expirationDate = requestedDate;
+        }
+        else
+        {
+            expirationDate = DateTime.UtcNow.AddDays(request.ExpirationDays ?? 30);
+        }
 
         var accessCode = new AccessCode
         {
@@ -491,5 +510,14 @@ public class AccessCodeDetailDto
 public class CreateAccessCodeRequest
 {
     public bool ExpiresForever { get; set; } = false;
+
+    /// <summary>
+    /// Explicit expiration date (UTC). Takes precedence over ExpirationDays when provided.
+    /// </summary>
+    public DateTime? ExpirationDate { get; set; }
+
+    /// <summary>
+    /// Number of days from now until expiration. Used as fallback when ExpirationDate is not provided.
+    /// </summary>
     public int? ExpirationDays { get; set; } = 30;
 }
