@@ -28,6 +28,7 @@ public class PhotoVersionUrlService
     private readonly int _ttlDays;
     private readonly int _refreshWindowDays;
     private readonly List<string> _cachedQualities;
+    private readonly bool _verifyCachedUrls;
 
     public PhotoVersionUrlService(
         IStorageProvider storageProvider,
@@ -47,11 +48,28 @@ public class PhotoVersionUrlService
         _refreshWindowDays = _configuration.GetValue("BlobStorage:PreSignedUrlRefreshWindowDays", 5);
         var cachedQualitiesJson = _configuration.GetSection("BlobStorage:CachedQualities").Get<List<string>>() ?? new();
         _cachedQualities = cachedQualitiesJson;
+
+        // D008: When true, GetPhotoVersionUrlAsync verifies that a cached pre-signed URL
+        // still backs an existing storage object before returning it. Default true to make
+        // drift between PhotoVersionUrl rows and MinIO objects fail loudly with self-healing
+        // regeneration; operators may disable in production once D007's worker is keeping
+        // drift bounded.
+        _verifyCachedUrls = _configuration.GetValue("BlobStorage:VerifyCachedUrls", true);
     }
 
     /// <summary>
     /// Get a pre-signed URL for a photo quality. Returns cached URL if valid, otherwise generates new one.
     /// Only Thumbnail and Medium are cached in database. Low/High are generated on-demand.
+    ///
+    /// D008: When <c>BlobStorage:VerifyCachedUrls</c> is true (default), the cached-return path
+    /// also calls <see cref="IStorageProvider.ExistsAsync"/> to confirm the underlying storage
+    /// object still exists before returning the cached URL. If the object is gone, the URL is
+    /// regenerated; the existing row is overwritten in place by <see cref="CachePhotoVersionUrlAsync"/>
+    /// (it now uses <c>GetByPhotoAndQualityIncludingInactiveAsync</c>) so the unique
+    /// (PhotoId, Quality) index is not violated.
+    ///
+    /// Race window: between two concurrent verifications of the same cached row, one stale URL
+    /// can leak. Documented as eventual invalidation, not strict prevention (see D008).
     /// </summary>
     public async Task<string?> GetPhotoVersionUrlAsync(Guid photoId, QualityType quality)
     {
@@ -64,9 +82,33 @@ public class PhotoVersionUrlService
             {
                 // Try to get cached URL
                 var cachedUrl = await _urlRepository.GetByPhotoAndQualityAsync(photoId, quality);
-                
+
                 if (cachedUrl != null && cachedUrl.IsActive && cachedUrl.ExpiresAt > DateTime.UtcNow)
                 {
+                    if (_verifyCachedUrls)
+                    {
+                        // D008: verify the cached URL still backs a real object before returning it.
+                        var storageKey = await TryBuildStorageKeyAsync(photoId, quality);
+                        if (storageKey == null)
+                        {
+                            _logger.LogWarning(
+                                "Could not build storage key for photo {PhotoId} quality {Quality} during cached-URL verification; falling through to regeneration",
+                                photoId, quality);
+                            return await GeneratePhotoVersionUrlAsync(photoId, quality, shouldCache);
+                        }
+
+                        var stillExists = await _storageProvider.ExistsAsync(storageKey);
+                        if (!stillExists)
+                        {
+                            _logger.LogWarning(
+                                "Cached pre-signed URL for photo {PhotoId} quality {Quality} points to missing storage object {StorageKey}; regenerating in place",
+                                photoId, quality, storageKey);
+                            // Fall through to regeneration; CachePhotoVersionUrlAsync will overwrite
+                            // the existing row in place via GetByPhotoAndQualityIncludingInactiveAsync.
+                            return await GeneratePhotoVersionUrlAsync(photoId, quality, shouldCache);
+                        }
+                    }
+
                     _logger.LogInformation("Returning cached URL for photo {PhotoId} quality {Quality}", photoId, quality);
                     return cachedUrl.PresignedUrl;
                 }
@@ -80,6 +122,21 @@ public class PhotoVersionUrlService
             _logger.LogError(ex, "Error getting photo version URL for photo {PhotoId} quality {Quality}", photoId, quality);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Build the canonical storage key for a (photoId, quality) pair.
+    /// Returns null if the photo cannot be found (which the caller should treat as "fall back to regeneration").
+    /// Centralized so the verification path and the generation path can never disagree on the key format.
+    /// </summary>
+    private async Task<string?> TryBuildStorageKeyAsync(Guid photoId, QualityType quality)
+    {
+        var photo = await _photoRepository.GetByIdAsync(photoId);
+        if (photo == null)
+        {
+            return null;
+        }
+        return $"photogallery/{photo.AlbumId}/{photoId}/{quality.ToString().ToLower()}.jpg";
     }
 
     /// <summary>
@@ -182,12 +239,14 @@ public class PhotoVersionUrlService
             var now = DateTime.UtcNow;
             var expiresAt = now.AddDays(_ttlDays);
 
-            // Check if URL already exists and should be updated
-            var existing = await _urlRepository.GetByPhotoAndQualityAsync(photoId, quality);
+            // D008: look up regardless of IsActive. The unique index on (PhotoId, Quality)
+            // means an inactive row cannot coexist with a new row — we must overwrite the
+            // existing row in place rather than insert a sibling.
+            var existing = await _urlRepository.GetByPhotoAndQualityIncludingInactiveAsync(photoId, quality);
 
             if (existing != null)
             {
-                // Update existing
+                // Update existing (reactivates the row if it was previously inactive).
                 existing.PresignedUrl = presignedUrl;
                 existing.ExpiresAt = expiresAt;
                 existing.GeneratedAt = now;

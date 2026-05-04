@@ -141,6 +141,13 @@ public class PhotoVersionUrlServiceTests
             .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
             .ReturnsAsync(expiredUrl);
 
+        // D008: CachePhotoVersionUrlAsync now uses the include-inactive variant so it can
+        // overwrite the existing row in place rather than insert a sibling (which would
+        // violate the unique (PhotoId, Quality) index).
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityIncludingInactiveAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(expiredUrl);
+
         _mockPhotoRepository
             .Setup(x => x.GetByIdAsync(photoId))
             .ReturnsAsync(photo);

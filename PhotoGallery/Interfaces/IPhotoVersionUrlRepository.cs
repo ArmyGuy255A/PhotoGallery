@@ -10,6 +10,17 @@ public interface IPhotoVersionUrlRepository : IRepository<PhotoVersionUrl>
     /// Returns null if not found or inactive.
     /// </summary>
     Task<PhotoVersionUrl?> GetByPhotoAndQualityAsync(Guid photoId, QualityType quality);
+
+    /// <summary>
+    /// Get the row for a (photoId, quality) pair regardless of <see cref="PhotoVersionUrl.IsActive"/>.
+    ///
+    /// Used by the cache-write/upsert path so it can find and overwrite an existing inactive row
+    /// rather than inserting a sibling row, which would violate the unique
+    /// (PhotoId, Quality) index defined in <c>PhotoVersionUrlConfiguration</c>.
+    ///
+    /// Reference: D008 (Cached Pre-Signed URL Storage Verification).
+    /// </summary>
+    Task<PhotoVersionUrl?> GetByPhotoAndQualityIncludingInactiveAsync(Guid photoId, QualityType quality);
     
     /// <summary>
     /// Get all URLs for a photo.

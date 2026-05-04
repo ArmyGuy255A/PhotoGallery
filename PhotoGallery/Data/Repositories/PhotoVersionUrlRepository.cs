@@ -19,6 +19,13 @@ public class PhotoVersionUrlRepository : Repository<PhotoVersionUrl>, IPhotoVers
             .FirstOrDefaultAsync();
     }
 
+    public async Task<PhotoVersionUrl?> GetByPhotoAndQualityIncludingInactiveAsync(Guid photoId, QualityType quality)
+    {
+        return await _dbSet
+            .Where(pvu => pvu.PhotoId == photoId && pvu.Quality == quality)
+            .FirstOrDefaultAsync();
+    }
+
     public async Task<List<PhotoVersionUrl>> GetByPhotoIdAsync(Guid photoId)
     {
         return await _dbSet
