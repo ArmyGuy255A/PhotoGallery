@@ -26,13 +26,16 @@ public class PhotoVersionUrlServiceTests
         _mockPhotoRepository = new Mock<IPhotoRepository>();
         _mockLogger = new Mock<ILogger<PhotoVersionUrlService>>();
 
-        // Create a real configuration object for testing
+        // Create a real configuration object for testing.
+        // BlobStorage:VerifyCachedUrls defaults to true here to match the production/dev default
+        // introduced by D008 (Cached Pre-Signed URL Storage Verification).
         var inMemorySettings = new Dictionary<string, string?>
         {
             {"BlobStorage:PreSignedUrlTTLDays", "7"},
             {"BlobStorage:PreSignedUrlRefreshWindowDays", "5"},
             {"BlobStorage:CachedQualities:0", "Thumbnail"},
             {"BlobStorage:CachedQualities:1", "Medium"},
+            {"BlobStorage:VerifyCachedUrls", "true"},
         };
 
         _configuration = new ConfigurationBuilder()
@@ -47,11 +50,37 @@ public class PhotoVersionUrlServiceTests
             _mockLogger.Object);
     }
 
+    /// <summary>
+    /// Construct a service variant with a custom value for BlobStorage:VerifyCachedUrls.
+    /// Used by the D008 "verification disabled" test to exercise the legacy/no-verify path.
+    /// </summary>
+    private PhotoVersionUrlService BuildServiceWithVerifyCachedUrls(bool verify)
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            {"BlobStorage:PreSignedUrlTTLDays", "7"},
+            {"BlobStorage:PreSignedUrlRefreshWindowDays", "5"},
+            {"BlobStorage:CachedQualities:0", "Thumbnail"},
+            {"BlobStorage:CachedQualities:1", "Medium"},
+            {"BlobStorage:VerifyCachedUrls", verify ? "true" : "false"},
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(settings)
+            .Build();
+        return new PhotoVersionUrlService(
+            _mockStorageProvider.Object,
+            _mockUrlRepository.Object,
+            _mockPhotoRepository.Object,
+            configuration,
+            _mockLogger.Object);
+    }
+
     [Fact]
     public async Task GetPhotoVersionUrlAsync_Should_Return_Cached_Url_If_Valid()
     {
         // Arrange
         var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
         var now = DateTime.UtcNow;
         var cachedUrl = new PhotoVersionUrl
         {
@@ -67,6 +96,16 @@ public class PhotoVersionUrlServiceTests
         _mockUrlRepository
             .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
             .ReturnsAsync(cachedUrl);
+
+        // D008: GetPhotoVersionUrlAsync now verifies the cached URL still backs a real
+        // storage object before returning it. We must mock the photo lookup (used to
+        // build the storage key) and an ExistsAsync = true response.
+        _mockPhotoRepository
+            .Setup(x => x.GetByIdAsync(photoId))
+            .ReturnsAsync(new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" });
+        _mockStorageProvider
+            .Setup(x => x.ExistsAsync($"photogallery/{albumId}/{photoId}/thumbnail.jpg"))
+            .ReturnsAsync(true);
 
         // Act
         var result = await _service.GetPhotoVersionUrlAsync(photoId, QualityType.Thumbnail);
@@ -337,9 +376,248 @@ public class PhotoVersionUrlServiceTests
 
         // Assert
         Assert.Equal("http://minio/low-url", result);
-        
+
         // Low quality should NOT be added to repository (no caching)
         _mockUrlRepository.Verify(x => x.AddAsync(It.IsAny<PhotoVersionUrl>()), Times.Never);
         _mockUrlRepository.Verify(x => x.UpdateAsync(It.IsAny<PhotoVersionUrl>()), Times.Never);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // D008: Cached Pre-Signed URL Storage Verification
+    // -----------------------------------------------------------------------------------
+    // The cached-return path in PhotoVersionUrlService.GetPhotoVersionUrlAsync historically
+    // returned the cached URL without verifying that the underlying storage object still
+    // exists. When the object is gone (manual cleanup, drift between DB and storage), the
+    // pre-signed URL is "valid" by signature but yields 404 — producing the broken-image
+    // icon in the album cards.
+    //
+    // D008 says:
+    //   1. When VerifyCachedUrls is true, call ExistsAsync(storageKey) before returning
+    //      a cached URL.
+    //   2. If the object is missing, regenerate by overwriting the existing row in place
+    //      (must NOT insert a new row — there is a unique index on (PhotoId, Quality) per
+    //      PhotoVersionUrlConfiguration.cs:35).
+    //   3. When VerifyCachedUrls is false, behave exactly like before (no ExistsAsync call).
+    //
+    // The four tests below cover the full contract.
+    // -----------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetPhotoVersionUrlAsync_WhenCachedUrlPointsToMissingFile_RegeneratesAndOverwritesRow()
+    {
+        // Arrange: a valid (not expired) cached URL exists, but the underlying storage
+        // object is gone. The service must detect this, regenerate, and reuse the same
+        // PhotoVersionUrl row (UpdateAsync, not AddAsync).
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var storageKey = $"photogallery/{albumId}/{photoId}/thumbnail.jpg";
+
+        var cachedUrl = new PhotoVersionUrl
+        {
+            Id = Guid.NewGuid(),
+            PhotoId = photoId,
+            Quality = QualityType.Thumbnail,
+            PresignedUrl = "http://minio/STALE-url",
+            ExpiresAt = now.AddDays(5),
+            GeneratedAt = now,
+            IsActive = true
+        };
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" };
+
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(cachedUrl);
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityIncludingInactiveAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(cachedUrl);
+        _mockPhotoRepository
+            .Setup(x => x.GetByIdAsync(photoId))
+            .ReturnsAsync(photo);
+
+        // Storage says the object is GONE on the verification call,
+        // but PRESENT on the subsequent regeneration call (we mock the same key for
+        // both because regeneration also calls ExistsAsync internally; the file came
+        // back, e.g., a backfill ran in between, OR the regeneration uses the same
+        // key). For this test we simulate: verification = false, regeneration = true.
+        // We use a sequence so the first call returns false and the next returns true.
+        _mockStorageProvider
+            .SetupSequence(x => x.ExistsAsync(storageKey))
+            .ReturnsAsync(false)   // D008 verification: object is missing
+            .ReturnsAsync(true);   // GeneratePhotoVersionUrlAsync's internal check
+        _mockStorageProvider
+            .Setup(x => x.GetUrlAsync(storageKey, It.IsAny<int>()))
+            .ReturnsAsync("http://minio/FRESH-url");
+
+        // Act
+        var result = await _service.GetPhotoVersionUrlAsync(photoId, QualityType.Thumbnail);
+
+        // Assert: stale URL was NOT returned; fresh URL was generated.
+        Assert.Equal("http://minio/FRESH-url", result);
+
+        // The existing row must be UPDATED in place (not a new row added) — otherwise
+        // the unique constraint on (PhotoId, Quality) would be violated.
+        _mockUrlRepository.Verify(x => x.UpdateAsync(It.IsAny<PhotoVersionUrl>()), Times.AtLeastOnce);
+        _mockUrlRepository.Verify(x => x.AddAsync(It.IsAny<PhotoVersionUrl>()), Times.Never);
+
+        // ExistsAsync must have been called on the verification path.
+        _mockStorageProvider.Verify(x => x.ExistsAsync(storageKey), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task GetPhotoVersionUrlAsync_WhenCachedUrlPointsToMissingFileAndStorageStaysGone_ReturnsNull()
+    {
+        // Arrange: cached URL exists, storage says missing on BOTH the verification call
+        // and the regeneration call. Result: null (caller renders placeholder).
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var storageKey = $"photogallery/{albumId}/{photoId}/thumbnail.jpg";
+
+        var cachedUrl = new PhotoVersionUrl
+        {
+            Id = Guid.NewGuid(),
+            PhotoId = photoId,
+            Quality = QualityType.Thumbnail,
+            PresignedUrl = "http://minio/STALE-url",
+            ExpiresAt = now.AddDays(5),
+            GeneratedAt = now,
+            IsActive = true
+        };
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" };
+
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(cachedUrl);
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityIncludingInactiveAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(cachedUrl);
+        _mockPhotoRepository
+            .Setup(x => x.GetByIdAsync(photoId))
+            .ReturnsAsync(photo);
+        _mockStorageProvider
+            .Setup(x => x.ExistsAsync(storageKey))
+            .ReturnsAsync(false);   // gone, and stays gone
+
+        // Act
+        var result = await _service.GetPhotoVersionUrlAsync(photoId, QualityType.Thumbnail);
+
+        // Assert: null — storage genuinely gone, caller should render placeholder.
+        Assert.Null(result);
+
+        // The stale URL must NOT have been returned.
+        // We did NOT generate a new URL because the file is gone.
+        _mockStorageProvider.Verify(x => x.GetUrlAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+
+        // No AddAsync (would violate unique constraint).
+        _mockUrlRepository.Verify(x => x.AddAsync(It.IsAny<PhotoVersionUrl>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetPhotoVersionUrlAsync_WhenVerifyCachedUrlsDisabled_DoesNotCallExistsAsyncOnCachedPath()
+    {
+        // Arrange: VerifyCachedUrls=false (legacy / opt-out behavior).
+        // Cached URL exists and is valid; service must return it WITHOUT calling ExistsAsync.
+        var photoId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var cachedUrl = new PhotoVersionUrl
+        {
+            Id = Guid.NewGuid(),
+            PhotoId = photoId,
+            Quality = QualityType.Thumbnail,
+            PresignedUrl = "http://minio/cached-url",
+            ExpiresAt = now.AddDays(5),
+            GeneratedAt = now,
+            IsActive = true
+        };
+
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(cachedUrl);
+
+        var serviceNoVerify = BuildServiceWithVerifyCachedUrls(verify: false);
+
+        // Act
+        var result = await serviceNoVerify.GetPhotoVersionUrlAsync(photoId, QualityType.Thumbnail);
+
+        // Assert: cached URL returned, ExistsAsync never called.
+        Assert.Equal("http://minio/cached-url", result);
+        _mockStorageProvider.Verify(x => x.ExistsAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CachePhotoVersionUrlAsync_WhenInactiveRowExists_UpdatesExistingRowAndReactivates()
+    {
+        // Arrange: this exercises the upsert path inside CachePhotoVersionUrlAsync after
+        // D008's repository change. Prior to D008, GetByPhotoAndQualityAsync filtered by
+        // IsActive=true, so an inactive row was invisible to the cache-write path and a
+        // duplicate AddAsync would throw on the unique (PhotoId, Quality) index.
+        //
+        // D008 adds GetByPhotoAndQualityIncludingInactiveAsync, which returns the inactive
+        // row so the service can UPDATE it in place (overwriting PresignedUrl, IsActive=true,
+        // ExpiresAt, GeneratedAt).
+        //
+        // We trigger the cache-write path by calling GetPhotoVersionUrlAsync with no active
+        // cached row (GetByPhotoAndQualityAsync returns null), but an inactive row IS
+        // present (GetByPhotoAndQualityIncludingInactiveAsync returns it). After regeneration,
+        // the existing row must be Update()d, not Add()ed, and IsActive must be true.
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var storageKey = $"photogallery/{albumId}/{photoId}/thumbnail.jpg";
+
+        var inactiveRow = new PhotoVersionUrl
+        {
+            Id = Guid.NewGuid(),
+            PhotoId = photoId,
+            Quality = QualityType.Thumbnail,
+            PresignedUrl = "http://minio/old-and-invalidated",
+            ExpiresAt = now.AddDays(-1),
+            GeneratedAt = now.AddDays(-10),
+            IsActive = false   // <- inactive
+        };
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" };
+
+        // Active lookup returns null (no usable cached row).
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync((PhotoVersionUrl?)null);
+
+        // Including-inactive lookup returns the inactive row.
+        _mockUrlRepository
+            .Setup(x => x.GetByPhotoAndQualityIncludingInactiveAsync(photoId, QualityType.Thumbnail))
+            .ReturnsAsync(inactiveRow);
+
+        _mockPhotoRepository
+            .Setup(x => x.GetByIdAsync(photoId))
+            .ReturnsAsync(photo);
+        _mockStorageProvider
+            .Setup(x => x.ExistsAsync(storageKey))
+            .ReturnsAsync(true);
+        _mockStorageProvider
+            .Setup(x => x.GetUrlAsync(storageKey, It.IsAny<int>()))
+            .ReturnsAsync("http://minio/fresh-after-reactivation");
+
+        PhotoVersionUrl? capturedUpdate = null;
+        _mockUrlRepository
+            .Setup(x => x.UpdateAsync(It.IsAny<PhotoVersionUrl>()))
+            .Callback<PhotoVersionUrl>(u => capturedUpdate = u)
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _service.GetPhotoVersionUrlAsync(photoId, QualityType.Thumbnail);
+
+        // Assert: fresh URL returned.
+        Assert.Equal("http://minio/fresh-after-reactivation", result);
+
+        // The inactive row was updated in place (not a new row added).
+        _mockUrlRepository.Verify(x => x.UpdateAsync(It.IsAny<PhotoVersionUrl>()), Times.AtLeastOnce);
+        _mockUrlRepository.Verify(x => x.AddAsync(It.IsAny<PhotoVersionUrl>()), Times.Never);
+
+        // The captured row was reactivated and given the fresh URL.
+        Assert.NotNull(capturedUpdate);
+        Assert.Equal(inactiveRow.Id, capturedUpdate!.Id);
+        Assert.True(capturedUpdate.IsActive, "Row must be reactivated after overwrite.");
+        Assert.Equal("http://minio/fresh-after-reactivation", capturedUpdate.PresignedUrl);
     }
 }
