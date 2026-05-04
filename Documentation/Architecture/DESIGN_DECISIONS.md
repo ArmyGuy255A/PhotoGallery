@@ -553,6 +553,360 @@ public void Photo_StoragePath_Should_Follow_Convention()
 
 ---
 
+## D006: Frontend Testing Strategy — Playwright-First for User-Visible Behavior
+
+**Status**: ✅ Approved  
+**Date**: Phase 13 (2026-05-04)  
+**Approved By**: User  
+**Related**: [D004 TDD Standard](#d004-tdd-as-development-standard) • [Pre-Implementation Checklist](../Guides/PRE-IMPLEMENTATION-CHECKLIST.md)
+
+### Context
+The Angular frontend ships with Karma + Jasmine, but existing specs only cover trivial component constructors. A real-world bug surfaced (broken-thumbnail icon on album-detail cards while the upload component shows the correct image) that lives in the *integration* between three layers:
+1. Backend pre-signed URL generation (`PhotoVersionUrlService`).
+2. MinIO storage state (object actually present or not).
+3. Browser image loading (`<img>` element behavior on 404).
+
+Karma specs with mocked `HttpClient` cannot observe any of these interactions. The bug is invisible to unit tests by construction. We need a frontend test strategy that exercises the real browser, real backend, and real storage in concert.
+
+### Decision
+- **Primary frontend test tier**: **Playwright** end-to-end tests under `FE.PhotoGallery/e2e/` against a running backend (`http://localhost:5026`) and live MinIO container.
+- **Lean Page Object Model**: tests reference `e2e/pages/*.page.ts` *only when a page object actually pays for itself* — that is, when more than one spec uses the same selectors or the same flow. For v1 (two specs), we still introduce page objects for the two screens we touch (`AlbumDetailPage`, `PhotoUploadPage`) because those screens are reused across both specs and are the natural future extension points. We do NOT introduce a `BasePage` abstract class until a third page proves the abstraction is needed (YAGNI).
+- **Fixtures** (`e2e/fixtures/*.fixture.ts`): authenticated browser context, sample photo paths from `SamplePhotos/`.
+- **Helpers** (`e2e/helpers/*.ts`): polling helpers (`wait-for-processing.ts`), assertion helpers (`assert-image-loads.ts`).
+- **Multi-browser**: Chromium, Firefox, WebKit (per existing `playwright.config.ts`).
+- **Karma is retained for pure component logic** (formatters, pipes, simple input validation). It receives no new investment for integration scenarios.
+- **Stable selectors**: components expose `data-testid` attributes; tests never select on CSS classes or text content.
+
+### Rationale
+- The most important class of frontend bugs in PhotoGallery are integration bugs (URL generation × storage state × DOM behavior). Playwright is the only tier that catches them.
+- Page Object Model produces tests that survive UI refactoring — selectors live in one place per page.
+- `data-testid` attributes are immune to styling and i18n changes.
+- Real browser execution catches issues mocks would miss: image decoding, CORS, cookie behavior, redirect handling, pre-signed URL signature validation.
+- Avoids the well-known anti-pattern of "100% green Karma + production bug": mocked HTTP responses lie because they only reflect the developer's mental model.
+
+### Implications
+- Every new user-visible feature ships with a Playwright spec under `e2e/`.
+- New components get `data-testid` attributes from the start.
+- VS Code tasks `Tests: Frontend E2E (Playwright)` and `Tests: Frontend E2E UI Mode` provide one-click runs.
+- CI must run `npm run e2e` against a real backend + MinIO (Docker Compose).
+- `qa-quality-control-skill` owns E2E test development; `playwright-testing-skill` provides the Page Object Model template.
+
+### Implementation
+**Files (new):**
+- `FE.PhotoGallery/e2e/pages/album-detail.page.ts` — album cards, photo grid.
+- `FE.PhotoGallery/e2e/pages/photo-upload.page.ts` — file chooser, in-component thumbnails.
+- `FE.PhotoGallery/e2e/fixtures/auth.fixture.ts` — authenticated context.
+- `FE.PhotoGallery/e2e/fixtures/data.fixture.ts` — sample photos.
+- `FE.PhotoGallery/e2e/helpers/wait-for-processing.ts` — polls `GET /api/photos/{photoId}/status` until `percentComplete === 100`.
+- `FE.PhotoGallery/e2e/helpers/assert-image-loads.ts` — verifies `naturalWidth > 0` and `complete === true`.
+- `FE.PhotoGallery/e2e/photo-upload-and-display.spec.ts` — regression spec for the broken-thumbnail bug.
+- `FE.PhotoGallery/e2e/admin-reconcile.spec.ts` — exercises the D007 admin endpoint.
+
+> Intentionally NOT created in v1: `e2e/pages/base.page.ts`, `e2e/pages/login.page.ts`. We use the existing `DISABLE_AUTH=true` Dev mode to skip login entirely, and we don't need a base class for two page objects. Add when justified.
+
+**Files (modified):**
+- `FE.PhotoGallery/src/app/components/albums/album-detail.component.ts` — add `data-testid` attributes.
+- `FE.PhotoGallery/src/app/components/albums/photo-upload.component.ts` — add `data-testid` attributes.
+- `.vscode/tasks.json` — add Playwright tasks.
+
+**Tests:**
+- All Playwright specs run via `npm run e2e` from `FE.PhotoGallery/`.
+- Existing Karma specs (`*.spec.ts` in `src/`) remain green; they are not migrated.
+
+### Example: Page Object + Spec
+```typescript
+// e2e/pages/album-detail.page.ts
+import { Page, Locator, expect } from '@playwright/test';
+
+export class AlbumDetailPage {
+  readonly photoCards: Locator;
+
+  constructor(readonly page: Page) {
+    this.photoCards = page.getByTestId('photo-card');
+  }
+
+  async goto(albumId: string) {
+    await this.page.goto(`/albums/${albumId}`);
+    await expect(this.page.getByTestId('album-detail-root')).toBeVisible();
+  }
+
+  async assertAllImagesLoaded() {
+    const cards = await this.photoCards.all();
+    for (const card of cards) {
+      const img = card.getByTestId('photo-card-image');
+      await expect(img).toBeVisible();
+      const naturalWidth = await img.evaluate((el: HTMLImageElement) => el.naturalWidth);
+      expect(naturalWidth).toBeGreaterThan(0);
+    }
+  }
+}
+
+// e2e/photo-upload-and-display.spec.ts
+import { test } from './fixtures/auth.fixture';
+import { AlbumDetailPage } from './pages/album-detail.page';
+import { PhotoUploadPage } from './pages/photo-upload.page';
+import { waitForProcessing } from './helpers/wait-for-processing';
+import { createAlbumViaApi } from './helpers/api';
+
+test('uploaded photo appears with valid thumbnail in album cards', async ({ page, sampleJpeg }) => {
+  const album = await createAlbumViaApi(page);
+  const detail = new AlbumDetailPage(page);
+  await detail.goto(album.id);
+
+  // The upload response carries the photoId we'll poll on, NOT the albumId.
+  const { photoId } = await new PhotoUploadPage(page).uploadFile(sampleJpeg);
+  await waitForProcessing(page, photoId);
+
+  await page.reload();
+  await detail.assertAllImagesLoaded();
+});
+```
+
+### Alternatives Considered
+- ❌ **Karma for everything**: Cannot observe real browser image-load behavior. Misses the entire bug class that prompted this decision.
+- ❌ **Cypress**: Single-process, single-tab, weaker multi-browser story. Playwright is already configured in this repo.
+- ❌ **Manual QA only**: Doesn't scale, regresses constantly, defeats CI value.
+- ❌ **Migrate existing Karma specs**: Sunk cost; existing specs work for what they test, just don't expand their scope.
+
+---
+
+## D007: Storage/Database Consistency Reconciliation
+
+**Status**: ✅ Approved  
+**Date**: Phase 13 (2026-05-04)  
+**Approved By**: User  
+**Related**: [D003 Image Processing](#d003-image-processing-with-compression-profiles--per-quality-tracking) • [D005 Storage Path Standard](#d005-storage-path-structure-standard)
+
+### Context
+The existing `PhotoConsistencyChecker` only validates `ProcessingQueueItem` *records*: it answers "does this photo have 4 queue items, all Complete, covering all 4 qualities?" — but it **never** verifies actual storage objects exist. Drift accumulates over time:
+- A photo's `ProcessingQueueItem` rows say `Complete`, but `thumbnail.jpg` is missing from MinIO (manual deletion, failed retention sweep, bucket migration).
+- A storage object exists but no `ProcessingQueueItem` row tracks it (recovered from backup without DB sync).
+- `original.jpg` is gone but the `Photo` row remains.
+
+Symptom: the user reports cards showing broken-image icons because the `ThumbnailUrl` in the album-photos response points to a deleted MinIO object. The cached pre-signed URL is "valid" by signature; the storage object is not.
+
+### Decision
+A new **`StorageConsistencyService`** (scoped) reconciles DB state against storage state. It is invoked from two places:
+1. A new **`StorageConsistencyWorker`** `BackgroundService` runs hourly (configurable).
+2. A new admin endpoint `POST /api/photos/admin/reconcile-storage` (`[Authorize(Roles="Admin")]`) **synchronously** triggers it on demand and returns the summary report. This is intentional for v1 — admins are technical users with no SLA, the dataset bounded by photo count is small in practice, and a sync endpoint sidesteps the complexity of a separate job-status table. (Future v2 may move to 202 Accepted + job-id polling if the sync wait becomes painful.)
+
+The service classifies each `(photoId, quality)` pair into one of four cases:
+
+| Storage state | Queue item state | Action |
+|---------------|------------------|--------|
+| Missing | None | Insert `Pending` `ProcessingQueueItem` (regenerate from `original.jpg`). Ensure parent `ProcessingQueue` exists; if not, create it as `Pending`. |
+| Missing | `Complete` | Flip item to `Pending`, reset `RetryCount=0`, `LastError=null`, `NextRetryTime=null`, `CompletedAt=null`. Then **regenerate the cached `PhotoVersionUrl` row in place** (per D008's overwrite pattern — does NOT just set `IsActive=false`, because the next caching call would hit the unique-constraint violation). Reopen the parent `ProcessingQueue` if it was `Complete` (set `Status=Pending`, `CompletedAt=null`, `ErrorMessage=null`). |
+| Present | None | Insert `Complete` `ProcessingQueueItem` with `CompletedAt = UtcNow` (back-fill DB record). Ensure parent `ProcessingQueue` exists; if not, create it. Then call the existing `PhotoConsistencyChecker.MarkQueueCompleteIfReadyAsync` to re-derive queue status. |
+| Present | `Complete` | No-op. |
+
+Edge cases (explicit rules):
+- **`Photo` row exists but no `ProcessingQueue`**: an upload completed `_photoRepository.AddAsync` but `_imageProcessor.QueuePhotoAsync` failed (`PhotosController.cs:154-158` swallows that exception by design). The reconciler **creates** the missing `ProcessingQueue`, then proceeds with the four-quality classification above.
+- **`original.jpg` missing**: log a warning at WARN level. Do NOT auto-delete the `Photo` row in v1 (too destructive). Skip per-quality reconciliation for that photo since regeneration would fail anyway.
+- **Items in `Processing` state**: skip — never touch in-flight items. This is the closest the worker comes to coordinating with `PhotoProcessingWorker`.
+- **Items in `Error` state with `RetryCount >= MaxRetries`**: leave alone (don't re-queue exhausted-retry items forever). Log at INFO level so admins can intervene.
+- **Items in `Error` state with `RetryCount < MaxRetries`**: treat as Pending if storage is missing (reset retry metadata as above); treat as Complete if storage is present.
+
+The service exposes `Task<ConsistencyReport> RunOnceAsync(CancellationToken)` returning per-photo and aggregate counts.
+
+> **Concurrency note (best-effort, not strict-mutual-exclusion)**: `ProcessingQueueItemRepository.GetPendingItemsAsync` is a plain `SELECT` with no atomic claim/update (`ProcessingQueueItemRepository.cs:17-23`). The "skip Processing items" rule reduces the race window but does not eliminate it: between the consistency service reading an item as `Complete` and writing it back as `Pending`, `PhotoProcessingWorker` could theoretically claim and start processing the same item. Under the current single-instance, single-worker assumption this is acceptable — the worst outcome is a duplicate processing run on a single quality, which is idempotent (overwrites the same storage key). We document this explicitly so a future move to multi-instance hosting triggers a coordination redesign (e.g., row-version tokens, advisory locks, or a queue claim table).
+
+> **Worker overlap (admin trigger vs hourly tick)**: a `SemaphoreSlim(1, 1)` guards `RunOnceAsync` so two concurrent invocations (admin endpoint + worker tick) serialize. The second caller awaits the first.
+
+### Rationale
+- **Separation of concerns**: `PhotoConsistencyChecker` validates queue records (D003 concern); `StorageConsistencyService` validates storage objects (D005 concern). They answer different questions.
+- **Storage-as-presence-source-of-truth**: when DB and storage disagree on *whether a quality version exists*, real bytes on disk are the ground truth — back-fill or re-queue accordingly. Note: D007 repairs **presence drift only**, not file integrity. A corrupted-but-present file is still classified `Complete`. File integrity validation (e.g., re-decoding to verify the file is a valid JPEG) is explicitly out of scope for v1; if a corrupt file ships from broken hardware or partial uploads, that is a separate problem with separate solutions (storage-layer checksums, re-validation worker).
+- **Idempotent**: running the service N times produces the same result as running it once.
+- **Best-effort concurrency**: under single-worker assumptions, "skip Processing items" is sufficient. The semaphore prevents admin/worker double-runs. A future move to multi-instance hosting would need a real coordination mechanism — flagged in the implementation comments.
+- **On-demand admin trigger**: lets admins re-converge after manual storage operations without waiting for the next worker tick.
+
+### Implications
+- Two new production files: `Services/Processing/StorageConsistencyService.cs` and `Services/Processing/StorageConsistencyWorker.cs`.
+- One new admin endpoint: `POST /api/photos/admin/reconcile-storage`.
+- Three new config keys: `PhotoProcessing:ConsistencyCheckIntervalHours` (default 1), `PhotoProcessing:ConsistencyCheckEnabled` (default true), and (per D008) `BlobStorage:VerifyCachedUrls`.
+- One new xUnit test file: `PhotoGallery.Tests/StorageConsistencyServiceTests.cs`.
+- One new Playwright spec: `e2e/admin-reconcile.spec.ts`.
+- The existing `PhotoProcessingWorker` automatically picks up `Pending` items the consistency service inserts — no changes needed there.
+
+### Implementation
+**Files (new):**
+- `PhotoGallery/Services/Processing/StorageConsistencyService.cs` — scoped, contains the `RunOnceAsync` logic.
+- `PhotoGallery/Services/Processing/StorageConsistencyWorker.cs` — `BackgroundService` mirroring `PhotoProcessingWorker`'s `PeriodicTimer` pattern.
+- `PhotoGallery.Tests/StorageConsistencyServiceTests.cs` — RED tests covering all four classification cases.
+
+**Files (modified):**
+- `PhotoGallery/Controllers/PhotosController.cs` — add admin endpoint.
+- `PhotoGallery/Program.cs` — register `AddScoped<StorageConsistencyService>()` and `AddHostedService<StorageConsistencyWorker>()`.
+- `PhotoGallery/appsettings.json` — add the three config keys.
+
+**Tests:**
+- xUnit tests use `Moq` for `IStorageProvider`, `IPhotoRepository`, `IProcessingQueueItemRepository`, `IProcessingQueueRepository`, `IPhotoVersionUrlRepository`.
+- Tests verify each of the four classification cases plus: original-missing, missing-`ProcessingQueue` for a `Photo`, items in `Processing` state are skipped, `Error` items at max retries are left alone, retry metadata reset on `Error→Pending`, idempotency, and the semaphore prevents concurrent `RunOnceAsync` invocations.
+- Playwright spec uploads a photo, **captures the photoId from the upload response** (`PhotoUploadInfo.PhotoId` per `PhotosController.cs:147-152`), waits for processing using `GET /api/photos/{photoId}/status` until `percentComplete = 100`, then deletes one quality from MinIO via the S3 client, calls the admin reconcile endpoint synchronously (returns when reconciliation completes), and asserts all four qualities are present in storage and the photo card image loads.
+
+### Example: Service Shape
+```csharp
+public class StorageConsistencyService
+{
+    // The four storage-relevant qualities. Note: D005 documents storage paths as
+    // {original/high/medium/low/raw}.jpg, but the actual QualityType enum is
+    // Thumbnail/Low/Medium/High (no raw). This is a known pre-existing doc/code
+    // drift in D005 — D007 follows the enum, since that's what ImageProcessingService
+    // and PhotoVersionUrlService both use today. A separate cleanup pass should
+    // either update D005 or add a 'raw' quality to align them; that work is out
+    // of scope for D007.
+    private static readonly QualityType[] AllQualities =
+    {
+        QualityType.Thumbnail,
+        QualityType.Low,
+        QualityType.Medium,
+        QualityType.High,
+    };
+
+    private readonly SemaphoreSlim _runLock = new(1, 1);
+
+    public async Task<ConsistencyReport> RunOnceAsync(CancellationToken ct)
+    {
+        await _runLock.WaitAsync(ct);
+        try
+        {
+            var report = new ConsistencyReport();
+
+            await foreach (var photo in _photoRepo.StreamAllAsync(ct))
+            {
+                var prefix = $"photogallery/{photo.AlbumId}/{photo.Id}/";
+                var presentKeys = (await _storage.ListAsync(prefix)).ToHashSet();
+
+                if (!presentKeys.Contains($"{prefix}original.jpg"))
+                {
+                    _logger.LogWarning("Photo {PhotoId} missing original.jpg in storage", photo.Id);
+                    report.MissingOriginalCount++;
+                    continue; // No source to regenerate from.
+                }
+
+                var queue = await EnsureQueueAsync(photo.Id, ct);
+                var items = (await _itemRepo.GetByPhotoIdAsync(photo.Id)).ToList();
+
+                foreach (var quality in AllQualities)
+                {
+                    var key = $"{prefix}{quality.ToString().ToLower()}.jpg";
+                    var present = presentKeys.Contains(key);
+                    var item = items.FirstOrDefault(i => i.Quality == quality);
+                    await ReconcileAsync(photo, queue, quality, present, item, report, ct);
+                }
+            }
+
+            _logger.LogInformation("Consistency cycle: {Report}", report);
+            return report;
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+}
+```
+
+### Alternatives Considered
+- ❌ **Extend `PhotoConsistencyChecker`**: Conflates two concerns (queue-record validation vs storage-object validation). Violates SRP.
+- ❌ **Auto-delete orphan storage objects** (object exists but no `Photo` row): too destructive for v1; can be added later behind a flag.
+- ❌ **Auto-delete `Photo` rows with missing `original.jpg`**: same reasoning — log a warning instead.
+- ❌ **No worker, only on-demand admin endpoint**: drift accumulates silently between admin actions; unacceptable.
+- ❌ **Run on every photo upload**: massive overhead (ListAsync per upload); the worker model amortizes the cost.
+
+---
+
+## D008: Cached Pre-Signed URL Storage Verification
+
+**Status**: ✅ Approved  
+**Date**: Phase 13 (2026-05-04)  
+**Approved By**: User  
+**Related**: [D002 Storage Provider Abstraction](#d002-storage-provider-abstraction-layer) • [D007 Storage/Database Consistency Reconciliation](#d007-storagedatabase-consistency-reconciliation)
+
+### Context
+`PhotoVersionUrlService.GetPhotoVersionUrlAsync` returns cached pre-signed URLs from the `PhotoVersionUrl` table when they are `IsActive=true` and not yet expired. It performs **no check** that the underlying storage object still exists. When the object has been deleted (manual cleanup, failed sweep, drift between DB and storage), the cached URL is "valid" by signature — MinIO verifies the signature and then returns 404. The browser renders the broken-image icon.
+
+The internal `GeneratePhotoVersionUrlAsync` method already does an `ExistsAsync` check before generating a URL. Only the cached-return path on lines 60–72 of `PhotoVersionUrlService.cs` lacks it.
+
+### Decision
+When returning a cached pre-signed URL:
+1. Call `IStorageProvider.ExistsAsync(storageKey)` first (controlled by the `BlobStorage:VerifyCachedUrls` config key).
+2. If the object exists, return the cached URL as today.
+3. If the object is missing, **regenerate by overwriting the existing row in place** (do NOT insert a new row), then fall through to `GeneratePhotoVersionUrlAsync` (which itself returns `null` if the object is genuinely gone — letting the caller surface a placeholder).
+
+> **Why "overwrite in place" instead of "set IsActive=false then insert new"**: the table has a unique index on `(PhotoId, Quality)` regardless of `IsActive` (`PhotoVersionUrlConfiguration.cs:35`). Inserting a second row would throw `UNIQUE constraint failed`. The repository's existing `GetByPhotoAndQualityAsync` filters by `IsActive` (returns null for inactive rows), so the cache-write path would currently fail to find the inactive row and try to insert a duplicate. To enable the in-place overwrite, **`IPhotoVersionUrlRepository` gains a new method `GetByPhotoAndQualityIncludingInactiveAsync`**, and `PhotoVersionUrlService.CachePhotoVersionUrlAsync` uses it for the upsert lookup. Existing read-path callers continue to use the active-only variant.
+
+> **Race window (eventual invalidation, not strict prevention)**: between thread A's `ExistsAsync(false)` and A's row update, thread B may read the same active row and return its stale URL. We accept this — at most one stale response leaks per drift event, and the next call self-heals. Documented as eventual invalidation, not strict prevention.
+
+Config gate `BlobStorage:VerifyCachedUrls` defaults:
+- **Development**: `true` — catches drift immediately during testing.
+- **Production**: `true` — verification cost (1 HEAD per cached URL on cold-cache lookups) is small relative to the cost of a user seeing broken images. Operators may flip to `false` once D007's worker has been keeping prod drift at zero for a sustained period.
+
+### Rationale
+- **Correctness over latency**: an extra HEAD request per cached URL is far cheaper than rendering a broken image to the user.
+- **Self-healing in place**: overwriting the existing row triggers regeneration on the same call, which writes a fresh URL pointing to the (presumably re-created) object. Subsequent callers see the fresh URL.
+- **Avoids unique-constraint violation**: the `(PhotoId, Quality)` unique index prevents inserting a second row, so the design must update the existing row rather than insert a sibling.
+- **Minimal code change**: one new method call (`ExistsAsync`), one new repository method (`GetByPhotoAndQualityIncludingInactiveAsync`), and a small change to `CachePhotoVersionUrlAsync` to use it. No API surface changes.
+
+### Implications
+- Album list endpoints have +1 storage HEAD per cached URL when the cache is cold or when `VerifyCachedUrls=true`. Acceptable.
+- `IPhotoVersionUrlRepository` adds `GetByPhotoAndQualityIncludingInactiveAsync` (used only by the cache-write path).
+- `PhotoVersionUrlServiceTests.cs` gains tests covering: (a) cached-URL-points-to-missing-file regenerates and overwrites the row in place; (b) overwrite reactivates a previously-inactive row without violating the unique constraint; (c) eventual-invalidation race is documented and accepted.
+- Frontend gains a defensive `(error)` handler on `<img>` tags so the existing SVG placeholder shows even if a stale URL slips through during the race window.
+
+### Implementation
+**Files (modified):**
+- `PhotoGallery/Services/PhotoVersionUrlService.cs` — modify cached-return path to verify with `ExistsAsync`; on miss, regenerate (which now overwrites the existing row in place via the new repository method).
+- `PhotoGallery/Interfaces/IPhotoVersionUrlRepository.cs` — add `GetByPhotoAndQualityIncludingInactiveAsync`.
+- `PhotoGallery/Data/Repositories/PhotoVersionUrlRepository.cs` — implement the new method (same query, no `IsActive` filter).
+- `PhotoGallery/appsettings.json` — add `BlobStorage:VerifyCachedUrls = true`.
+- `PhotoGallery/appsettings.Production.json` — set `BlobStorage:VerifyCachedUrls = true` (operators may flip to false later).
+- `FE.PhotoGallery/src/app/components/albums/album-detail.component.ts` — add `(error)` handler that clears `photo.thumbnailUrl` so the SVG placeholder shows.
+- `FE.PhotoGallery/src/app/components/albums/photo-upload.component.ts` — add the same defensive `(error)` handler.
+
+**Tests:**
+- `PhotoGallery.Tests/PhotoVersionUrlServiceTests.cs` — new tests: cached-URL-points-to-missing-file triggers regeneration; regeneration overwrites the existing row (no unique-constraint violation); inactive row is reactivated by overwrite.
+- `FE.PhotoGallery/e2e/photo-upload-and-display.spec.ts` — verifies images load (`naturalWidth > 0`) for every photo card.
+
+### Example: Modified Cached Path
+```csharp
+if (cachedUrl != null && cachedUrl.IsActive && cachedUrl.ExpiresAt > DateTime.UtcNow)
+{
+    if (_verifyCachedUrls)
+    {
+        var storageKey = BuildStorageKey(photo, quality);
+        var stillExists = await _storageProvider.ExistsAsync(storageKey);
+        if (!stillExists)
+        {
+            _logger.LogWarning("Cached URL for {PhotoId}/{Quality} points to missing object; regenerating",
+                photoId, quality);
+            // GeneratePhotoVersionUrlAsync calls CachePhotoVersionUrlAsync, which now uses
+            // GetByPhotoAndQualityIncludingInactiveAsync to find the existing row and overwrite it.
+            // This avoids the unique-constraint violation that would occur if we inserted a new row.
+            return await GeneratePhotoVersionUrlAsync(photoId, quality, shouldCache);
+        }
+    }
+    return cachedUrl.PresignedUrl;
+}
+```
+
+```csharp
+// PhotoVersionUrlRepository.cs (new method)
+public async Task<PhotoVersionUrl?> GetByPhotoAndQualityIncludingInactiveAsync(Guid photoId, QualityType quality)
+{
+    return await _dbSet
+        .Where(pvu => pvu.PhotoId == photoId && pvu.Quality == quality)
+        .FirstOrDefaultAsync();
+}
+```
+
+### Alternatives Considered
+- ❌ **Always re-verify (no config gate)**: prod overhead unjustified once D007 worker is keeping drift bounded.
+- ❌ **Verify in a background sweep only (no per-request check)**: leaves a window where the user sees broken images.
+- ❌ **Trust the cache absolutely**: status quo; produces the very bug this decision exists to fix.
+- ❌ **Catch 404 on the `<img>` element only**: addresses the symptom (placeholder) but not the cause (stale cached URL stays cached).
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:
@@ -578,7 +932,7 @@ When a new feature is proposed:
 
 ---
 
-**Last Updated**: 2026-05-03  
-**Total Decisions**: 5  
+**Last Updated**: 2026-05-04  
+**Total Decisions**: 8  
 **All Approved**: ✅ Yes  
-**In Implementation**: All phases through Phase 12
+**In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008)
