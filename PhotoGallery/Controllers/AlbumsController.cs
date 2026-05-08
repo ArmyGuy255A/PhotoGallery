@@ -16,14 +16,14 @@ namespace PhotoGallery.Controllers;
 public class AlbumsController : ControllerBase
 {
     private readonly IAlbumRepository _albumRepository;
-    private readonly IRepository<Photo> _photoRepository;
+    private readonly IPhotoRepository _photoRepository;
     private readonly IAccessCodeRepository _accessCodeRepository;
     private readonly PhotoVersionUrlService _urlService;
     private readonly ILogger<AlbumsController> _logger;
 
     public AlbumsController(
         IAlbumRepository albumRepository,
-        IRepository<Photo> photoRepository,
+        IPhotoRepository photoRepository,
         IAccessCodeRepository accessCodeRepository,
         PhotoVersionUrlService urlService,
         ILogger<AlbumsController> logger)
@@ -188,12 +188,19 @@ public class AlbumsController : ControllerBase
     }
 
     /// <summary>
-    /// Get all photos in an album
+    /// Get photos in an album with pagination.
+    /// Pagination parameters are optional — when omitted, all photos are returned in one page
+    /// (preserves backward compatibility with the original list response).
     /// </summary>
     /// <param name="albumId">Album ID</param>
-    /// <returns>List of photos in the album with pre-signed URLs</returns>
+    /// <param name="page">1-based page number (default 1)</param>
+    /// <param name="pageSize">Items per page (default 20, max 100)</param>
+    /// <returns>Paginated list of photos with pre-signed URLs</returns>
     [HttpGet("{albumId}/photos")]
-    public async Task<ActionResult<List<PhotoListDto>>> GetAlbumPhotos(string albumId)
+    public async Task<ActionResult<PaginatedPhotosResponse>> GetAlbumPhotos(
+        string albumId,
+        [FromQuery] int? page = null,
+        [FromQuery] int? pageSize = null)
     {
         if (!Guid.TryParse(albumId, out var albumGuid))
             return BadRequest("Invalid album ID");
@@ -209,10 +216,20 @@ public class AlbumsController : ControllerBase
         if (album.OwnerId != userId && !isAdmin)
             return Forbid();
 
-        var allPhotos = await _photoRepository.GetAllAsync();
-        var albumPhotos = new List<PhotoListDto>();
+        // Album-scoped query (replaces full table scan)
+        var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(albumGuid);
 
-        foreach (var p in allPhotos.Where(x => x.AlbumId == albumGuid))
+        // Sort: newest first
+        var ordered = albumPhotos.OrderByDescending(p => p.UploadDate).ToList();
+        var totalCount = ordered.Count;
+
+        // Apply pagination if requested
+        var (effectivePage, effectivePageSize) = NormalizePagination(page, pageSize, totalCount);
+        var pageStart = (effectivePage - 1) * effectivePageSize;
+        var paged = ordered.Skip(pageStart).Take(effectivePageSize).ToList();
+
+        var result = new List<PhotoListDto>(paged.Count);
+        foreach (var p in paged)
         {
             var photoDto = new PhotoListDto
             {
@@ -224,21 +241,53 @@ public class AlbumsController : ControllerBase
 
             try
             {
-                // Get pre-signed URLs for Thumbnail and Medium
                 photoDto.ThumbnailUrl = await _urlService.GetPhotoVersionUrlAsync(p.Id, Enums.QualityType.Thumbnail);
                 photoDto.MediumUrl = await _urlService.GetPhotoVersionUrlAsync(p.Id, Enums.QualityType.Medium);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to get pre-signed URLs for photo {PhotoId}", p.Id);
-                // Continue without URLs - they may not be generated yet
             }
 
-            albumPhotos.Add(photoDto);
+            result.Add(photoDto);
         }
 
-        _logger.LogInformation("Retrieved {PhotoCount} photos from album {AlbumId}", albumPhotos.Count, albumGuid);
-        return Ok(albumPhotos);
+        _logger.LogInformation(
+            "Retrieved photos {Start}-{End} of {Total} for album {AlbumId}",
+            pageStart + 1, pageStart + result.Count, totalCount, albumGuid);
+
+        return Ok(new PaginatedPhotosResponse
+        {
+            Photos = result,
+            TotalCount = totalCount,
+            Page = effectivePage,
+            PageSize = effectivePageSize,
+            HasMore = pageStart + result.Count < totalCount
+        });
+    }
+
+    /// <summary>
+    /// Clamp pagination params to safe defaults. Used by both album and (future) other endpoints.
+    /// </summary>
+    private static (int page, int pageSize) NormalizePagination(int? page, int? pageSize, int totalCount)
+    {
+        const int defaultPageSize = 20;
+        const int maxPageSize = 100;
+
+        // If neither provided, return everything (backward compat: page=1, size=totalCount)
+        if (!page.HasValue && !pageSize.HasValue)
+        {
+            return (1, Math.Max(totalCount, 1));
+        }
+
+        var p = page.GetValueOrDefault(1);
+        var s = pageSize.GetValueOrDefault(defaultPageSize);
+
+        if (p < 1) p = 1;
+        if (s < 1) s = defaultPageSize;
+        if (s > maxPageSize) s = maxPageSize;
+
+        return (p, s);
     }
 
     /// <summary>
@@ -476,6 +525,18 @@ public class PhotoListDto
     public string UploadedBy { get; set; } = string.Empty;
     public string? ThumbnailUrl { get; set; }
     public string? MediumUrl { get; set; }
+}
+
+/// <summary>
+/// Paginated response envelope for photo lists.
+/// </summary>
+public class PaginatedPhotosResponse
+{
+    public List<PhotoListDto> Photos { get; set; } = new();
+    public int TotalCount { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public bool HasMore { get; set; }
 }
 
 /// <summary>

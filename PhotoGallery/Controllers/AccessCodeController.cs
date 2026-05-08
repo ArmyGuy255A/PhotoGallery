@@ -85,14 +85,22 @@ public class AccessCodeController : ControllerBase
     }
 
     /// <summary>
-    /// Get all photos in an album (requires valid access code).
+    /// Get photos in an album (requires valid access code) with pagination.
     /// Returns short-lived (15-min) pre-signed thumbnail URLs that bypass the long-lived cache,
     /// so revoked access codes don't leak download links.
+    ///
+    /// Pagination is optional — when omitted, all photos are returned in one page
+    /// (preserves backward compatibility).
     /// </summary>
     /// <param name="code">Access code</param>
-    /// <returns>List of photos in the album</returns>
+    /// <param name="page">1-based page number (default 1)</param>
+    /// <param name="pageSize">Items per page (default 20, max 100)</param>
+    /// <returns>Paginated list of photos in the album</returns>
     [HttpGet("{code}/photos")]
-    public async Task<ActionResult<List<PublicPhotoListDto>>> GetAlbumPhotos(string code)
+    public async Task<ActionResult<PaginatedPublicPhotosResponse>> GetAlbumPhotos(
+        string code,
+        [FromQuery] int? page = null,
+        [FromQuery] int? pageSize = null)
     {
         var accessCode = await _accessCodeRepository.GetByCodeAsync(code);
         if (accessCode == null)
@@ -109,19 +117,30 @@ public class AccessCodeController : ControllerBase
         // Use scoped query (not full table scan)
         var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(accessCode.AlbumId);
 
-        var result = new List<PublicPhotoListDto>();
-        foreach (var photo in albumPhotos)
+        // Sort: newest first
+        var ordered = albumPhotos.OrderByDescending(p => p.UploadDate).ToList();
+        var totalCount = ordered.Count;
+
+        var (effectivePage, effectivePageSize) = NormalizePagination(page, pageSize, totalCount);
+        var pageStart = (effectivePage - 1) * effectivePageSize;
+        var paged = ordered.Skip(pageStart).Take(effectivePageSize).ToList();
+
+        var result = new List<PublicPhotoListDto>(paged.Count);
+        foreach (var photo in paged)
         {
             string? thumbnailUrl = null;
+            string? mediumUrl = null;
             try
             {
                 thumbnailUrl = await _urlService.GenerateShortLivedUrlAsync(
                     photo.Id, QualityType.Thumbnail, PublicUrlTtlMinutes);
+                mediumUrl = await _urlService.GenerateShortLivedUrlAsync(
+                    photo.Id, QualityType.Medium, PublicUrlTtlMinutes);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Failed to generate short-lived thumbnail URL for photo {PhotoId} (continuing)", photo.Id);
+                    "Failed to generate short-lived URLs for photo {PhotoId} (continuing)", photo.Id);
             }
 
             result.Add(new PublicPhotoListDto
@@ -130,13 +149,46 @@ public class AccessCodeController : ControllerBase
                 FileName = photo.FileName,
                 UploadDate = photo.UploadDate,
                 ThumbnailUrl = thumbnailUrl,
+                MediumUrl = mediumUrl,
                 AvailableQualities = await GetAvailableQualities(photo.Id.ToString())
             });
         }
 
-        _logger.LogInformation("Retrieved {PhotoCount} photos from album {AlbumId} via code", albumPhotos.Count, album.Id);
+        _logger.LogInformation(
+            "Retrieved photos {Start}-{End} of {Total} from album {AlbumId} via code",
+            pageStart + 1, pageStart + result.Count, totalCount, album.Id);
 
-        return Ok(result);
+        return Ok(new PaginatedPublicPhotosResponse
+        {
+            Photos = result,
+            TotalCount = totalCount,
+            Page = effectivePage,
+            PageSize = effectivePageSize,
+            HasMore = pageStart + result.Count < totalCount
+        });
+    }
+
+    /// <summary>
+    /// Clamp pagination params. Same algorithm as AlbumsController.NormalizePagination.
+    /// </summary>
+    private static (int page, int pageSize) NormalizePagination(int? page, int? pageSize, int totalCount)
+    {
+        const int defaultPageSize = 20;
+        const int maxPageSize = 100;
+
+        if (!page.HasValue && !pageSize.HasValue)
+        {
+            return (1, Math.Max(totalCount, 1));
+        }
+
+        var p = page.GetValueOrDefault(1);
+        var s = pageSize.GetValueOrDefault(defaultPageSize);
+
+        if (p < 1) p = 1;
+        if (s < 1) s = defaultPageSize;
+        if (s > maxPageSize) s = maxPageSize;
+
+        return (p, s);
     }
 
     /// <summary>
@@ -318,7 +370,7 @@ public class PhotoListItemDto
 
 /// <summary>
 /// DTO for public photo list (returned to access-code clients).
-/// Includes a short-lived (15-min) thumbnail URL so the browser can load images
+/// Includes short-lived (15-min) thumbnail and medium URLs so the browser can load images
 /// directly from blob storage without proxying through the web server.
 /// </summary>
 public class PublicPhotoListDto
@@ -327,7 +379,20 @@ public class PublicPhotoListDto
     public string FileName { get; set; } = string.Empty;
     public DateTime UploadDate { get; set; }
     public string? ThumbnailUrl { get; set; }
+    public string? MediumUrl { get; set; }
     public List<string> AvailableQualities { get; set; } = new();
+}
+
+/// <summary>
+/// Paginated response envelope for public photo lists.
+/// </summary>
+public class PaginatedPublicPhotosResponse
+{
+    public List<PublicPhotoListDto> Photos { get; set; } = new();
+    public int TotalCount { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public bool HasMore { get; set; }
 }
 
 /// <summary>

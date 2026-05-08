@@ -7,6 +7,7 @@ import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 import { CartService, CartQuality } from '../../services/cart.service';
 import { CartPanelComponent } from './cart-panel.component';
+import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { environment } from '../../../environments/environment';
 
 interface PublicPhoto {
@@ -14,6 +15,7 @@ interface PublicPhoto {
   fileName: string;
   uploadDate: string;
   thumbnailUrl?: string;
+  mediumUrl?: string;
   availableQualities?: string[];
 }
 
@@ -38,7 +40,7 @@ interface CodeValidation {
 @Component({
   selector: 'app-code-gallery',
   standalone: true,
-  imports: [CommonModule, FormsModule, CartPanelComponent],
+  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent],
   template: `
     <div class="code-gallery">
       <header class="gallery-header">
@@ -67,10 +69,13 @@ interface CodeValidation {
         </div>
 
         <div *ngIf="photos.length > 0" class="photo-grid">
-          <article *ngFor="let photo of photos" class="photo-card">
-            <div class="photo-thumb">
+          <article *ngFor="let photo of photos; let i = index" class="photo-card">
+            <div class="photo-thumb" (click)="openModal(i)" role="button" tabindex="0"
+                 (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)"
+                 [attr.aria-label]="'View ' + photo.fileName">
               <img *ngIf="photo.thumbnailUrl" [src]="photo.thumbnailUrl" [alt]="photo.fileName">
               <div *ngIf="!photo.thumbnailUrl" class="thumb-placeholder">📷</div>
+              <div class="thumb-hover-overlay">🔍 View</div>
             </div>
             <div class="photo-meta">
               <div class="filename" [title]="photo.fileName">{{ photo.fileName }}</div>
@@ -91,6 +96,15 @@ interface CodeValidation {
           </article>
         </div>
       </main>
+
+      <app-photo-modal
+        [photos]="modalPhotos"
+        [(currentIndex)]="modalIndex"
+        [isOpen]="modalOpen"
+        [showCartButton]="true"
+        (closed)="modalOpen = false"
+        (cartAction)="onModalAddToCart($event)">
+      </app-photo-modal>
 
       <app-cart-panel
         [isOpen]="cartOpen"
@@ -196,6 +210,7 @@ interface CodeValidation {
     }
 
     .photo-thumb {
+      position: relative;
       width: 100%;
       aspect-ratio: 1;
       background: #f5f5f5;
@@ -203,12 +218,37 @@ interface CodeValidation {
       align-items: center;
       justify-content: center;
       overflow: hidden;
+      cursor: pointer;
+    }
+
+    .photo-thumb:focus {
+      outline: 2px solid #0066cc;
+      outline-offset: -2px;
     }
 
     .photo-thumb img {
       width: 100%;
       height: 100%;
       object-fit: cover;
+    }
+
+    .thumb-hover-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .photo-thumb:hover .thumb-hover-overlay,
+    .photo-thumb:focus .thumb-hover-overlay {
+      opacity: 1;
     }
 
     .thumb-placeholder {
@@ -275,6 +315,10 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   cartOpen = false;
   cartCount = 0;
 
+  // Modal state
+  modalOpen = false;
+  modalIndex = 0;
+
   private destroy$ = new Subject<void>();
 
   constructor(
@@ -303,6 +347,28 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
   }
 
+  /** Photos transformed for the PhotoModalComponent — uses mediumUrl as displayUrl. */
+  get modalPhotos(): ModalPhoto[] {
+    return this.photos.map(p => ({
+      photoId: p.photoId,
+      fileName: p.fileName,
+      thumbnailUrl: p.thumbnailUrl,
+      displayUrl: p.mediumUrl ?? p.thumbnailUrl
+    }));
+  }
+
+  openModal(index: number): void {
+    this.modalIndex = index;
+    this.modalOpen = true;
+  }
+
+  onModalAddToCart(modalPhoto: ModalPhoto): void {
+    const photo = this.photos.find(p => p.photoId === modalPhoto.photoId);
+    if (photo) {
+      this.onAddToCart(photo);
+    }
+  }
+
   isInCart(photo: PublicPhoto): boolean {
     const quality = this.selectedQuality[photo.photoId] || 'Medium';
     return this.cart.contains(photo.photoId, quality);
@@ -317,7 +383,6 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
       quality
     });
     if (!added) {
-      // Either duplicate (already in cart) or cart full
       if (this.cart.count >= 100) {
         alert('Cart is full (100 items max). Please download or remove items first.');
       }
@@ -348,12 +413,13 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
 
   private loadPhotos(): void {
     const apiUrl = environment.apiUrl || '';
-    this.http.get<PublicPhoto[]>(`${apiUrl}/api/code/${this.code}/photos`)
+    this.http.get<{ photos: PublicPhoto[]; totalCount: number; page: number; pageSize: number; hasMore: boolean }>(
+      `${apiUrl}/api/code/${this.code}/photos`
+    )
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: (data) => {
-          this.photos = data || [];
-          // Default each photo to Medium quality
+          this.photos = data?.photos ?? [];
           for (const p of this.photos) {
             if (!this.selectedQuality[p.photoId]) {
               this.selectedQuality[p.photoId] = 'Medium';

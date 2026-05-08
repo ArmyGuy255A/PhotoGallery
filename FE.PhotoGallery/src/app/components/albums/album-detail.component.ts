@@ -5,6 +5,7 @@ import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
 import { AccessCodeFormComponent } from './access-code-form.component';
+import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { Subject, interval, Observable } from 'rxjs';
 import { takeUntil, switchMap } from 'rxjs/operators';
 
@@ -37,7 +38,7 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent],
+  imports: [CommonModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
@@ -70,7 +71,10 @@ interface Album {
             </div>
 
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
-              <div *ngFor="let photo of photos" class="photo-card" data-testid="photo-card" [attr.data-photo-id]="photo.id">
+              <div *ngFor="let photo of photos; let i = index" class="photo-card" data-testid="photo-card"
+                   [attr.data-photo-id]="photo.id"
+                   (click)="openModal(i)" role="button" tabindex="0"
+                   (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)">
                 <div class="photo-status-badge" [ngClass]="getStatusClass(photo)" data-testid="photo-status-badge">
                   <span *ngIf="photo.processingStatus === 'Complete'">✓</span>
                   <span *ngIf="photo.processingStatus === 'Processing'">⟳</span>
@@ -170,6 +174,14 @@ interface Album {
           {{ errorMessage }}
         </div>
       </main>
+
+      <app-photo-modal
+        [photos]="modalPhotos"
+        [(currentIndex)]="modalIndex"
+        [isOpen]="modalOpen"
+        [showCartButton]="false"
+        (closed)="modalOpen = false">
+      </app-photo-modal>
     </div>
   `,
   styles: [`
@@ -536,6 +548,10 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   copiedCode: string | null = null;
   copiedLink: string | null = null;
 
+  // Photo modal state
+  modalOpen = false;
+  modalIndex = 0;
+
   private destroy$ = new Subject<void>();
 
   constructor(
@@ -632,9 +648,12 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
 
   loadPhotos(): void {
     const apiUrl = environment.apiUrl || '';
-    this.http.get<Photo[]>(`${apiUrl}/api/albums/${this.albumId}/photos`).pipe(takeUntil(this.destroy$)).subscribe({
+    // Backend now returns a paginated envelope { photos, totalCount, page, pageSize, hasMore }
+    this.http.get<{ photos: Photo[]; totalCount: number; page: number; pageSize: number; hasMore: boolean }>(
+      `${apiUrl}/api/albums/${this.albumId}/photos`
+    ).pipe(takeUntil(this.destroy$)).subscribe({
       next: (data) => {
-        this.photos = data || [];
+        this.photos = data?.photos ?? [];
       },
       error: (error) => {
         console.error('Error loading photos:', error);
@@ -748,5 +767,20 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   onThumbnailError(photo: Photo): void {
     console.warn('Thumbnail failed to load for photo', photo.id, photo.fileName);
     photo.thumbnailUrl = undefined;
+  }
+
+  /** Photos transformed for the PhotoModalComponent — uses mediumUrl as displayUrl. */
+  get modalPhotos(): ModalPhoto[] {
+    return this.photos.map(p => ({
+      photoId: p.id,
+      fileName: p.fileName,
+      thumbnailUrl: p.thumbnailUrl,
+      displayUrl: p.mediumUrl ?? p.thumbnailUrl
+    }));
+  }
+
+  openModal(index: number): void {
+    this.modalIndex = index;
+    this.modalOpen = true;
   }
 }
