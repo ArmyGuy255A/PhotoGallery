@@ -248,6 +248,18 @@ PhotoGallery sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` in two 
 
 Additionally, `GoogleAuthService` enables `use_fedcm_for_prompt: true` so modern Chrome uses the FedCM API (no postMessage at all) — defense in depth for environments where the COOP header can't be controlled.
 
+#### If you still see the COOP error after pulling these fixes
+
+`ng serve` reads `serve.options.headers` **only at dev-server boot**. If the angular.json change came in via `git pull` while ng serve was already running, HMR will not apply the new header. Symptoms:
+
+- `curl -I http://localhost:4300/` returns no `Cross-Origin-Opener-Policy` header (or returns `same-origin`)
+- Browser DevTools shows the GIS COOP error on every login attempt
+- Backend logs show `DisableAuthMiddleware` requests but no `ExternalLogin: received request` lines
+
+Fix: **fully stop and restart `ng serve`** (`Ctrl+C` then `ng serve` again). HMR is not enough.
+
+Use `LoginComponent`'s `[LoginComponent] ngOnInit — auth flow build: <date>` console marker to confirm you've loaded the latest bundle.
+
 ### CORS scoped to the SPA origin
 
 Backend CORS is named `AllowFrontendDev` and scoped to `ConfigurationSettings.Frontend.Url` (env var `Frontend__Url`, or `Frontend:Url` in `appsettings.{Environment}.json`). It permits credentials so future cookie-based flows Just Work. `AllowAnyOrigin` is deliberately avoided — it's incompatible with `AllowCredentials` and weakens prod parity.

@@ -253,6 +253,11 @@ export class LoginComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
+    // Build marker — easy way to confirm the latest FE bundle is loaded
+    // when troubleshooting auth issues. If you don't see this in the
+    // browser console, ng serve is running a stale bundle (restart it).
+    console.info('[LoginComponent] ngOnInit — auth flow build: 2026-05-09 v2');
+
     // If already authenticated, redirect to dashboard.
     if (this.authService.isAuthenticatedSync()) {
       this.router.navigate(['/dashboard']);
