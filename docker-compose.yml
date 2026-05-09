@@ -61,8 +61,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # PhotoGallery Backend (ASP.NET)
+  # PhotoGallery Backend (ASP.NET) — opt-in via 'full-container' profile.
+  # For dev, run the backend with `dotnet watch run` instead (faster iteration,
+  # hot-reload on save). This service is only here for full-container demos /
+  # CI smoke tests. Bring it up explicitly with:
+  #   docker-compose --profile full-container up -d
   backend:
+    profiles: ["full-container"]
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -83,12 +88,11 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    volumes:
-      - ./PhotoGallery:/app
-    working_dir: /app
 
-  # PhotoGallery Frontend (Angular)
+  # PhotoGallery Frontend (Angular) — opt-in via 'full-container' profile.
+  # For dev, run with `ng serve` instead.
   frontend:
+    profiles: ["full-container"]
     build:
       context: ./FE.PhotoGallery
       dockerfile: Dockerfile
@@ -98,8 +102,6 @@ services:
       - "4200:4200"
     depends_on:
       - backend
-    volumes:
-      - ./FE.PhotoGallery:/app
 
 volumes:
   postgres_data:
