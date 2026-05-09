@@ -170,6 +170,18 @@ app.UseRouting();
 // Enable CORS (before authentication)
 app.UseCors("DevelopmentPolicy");
 
+// Required by Google Identity Services popup flow:
+// the popup uses window.postMessage back to the opener, which browsers
+// block when the opener's Cross-Origin-Opener-Policy is "same-origin".
+// "same-origin-allow-popups" keeps cross-origin isolation for the rest
+// of the page while permitting the GIS popup to communicate.
+// See Documentation/Architecture/AUTHENTICATION.md → COOP for GIS popup.
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups";
+    await next();
+});
+
 // Add DISABLE_AUTH middleware (before UseAuthentication)
 app.UseMiddleware<DisableAuthMiddleware>();
 

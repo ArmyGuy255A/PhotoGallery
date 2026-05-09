@@ -233,6 +233,21 @@ If everything above checks out and the error persists, wait 5 minutes (rare prop
 
 PhotoGallery uses the **Google Identity Services (GIS) popup flow** in the browser (see `FE.PhotoGallery/src/app/services/auth/providers/google-auth.service.ts`). GIS validates the calling origin against the OAuth client's *Authorized JavaScript origins* list before opening the consent popup. Redirect URIs only apply to server-side authorization-code flows (the legacy `LoginController.GoogleCallback` path).
 
+### COOP for the GIS popup
+
+The GIS popup posts the credential back to the opener tab via `window.postMessage`. Browsers block that when the opener's `Cross-Origin-Opener-Policy` is `same-origin` (the default for many dev servers and for cross-origin-isolated production sites). Symptom in DevTools:
+
+```
+client:381 Cross-Origin-Opener-Policy policy would block the window.postMessage call.
+```
+
+PhotoGallery sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` in two places to keep dev and prod parity:
+
+- **Dev server** — `FE.PhotoGallery/angular.json` → `serve.options.headers`
+- **Backend** — `PhotoGallery/Program.cs` middleware (runs before the static file pipeline so every response carries the header)
+
+Additionally, `GoogleAuthService` enables `use_fedcm_for_prompt: true` so modern Chrome uses the FedCM API (no postMessage at all) — defense in depth for environments where the COOP header can't be controlled.
+
 ## Frontend Integration
 
 ### Login

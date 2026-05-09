@@ -57,6 +57,12 @@ export class GoogleAuthService implements IdentityProvider {
         this.tokenReadyResolver?.(this.token);
       },
       ux_mode: 'popup',
+      // FedCM bypasses the legacy postMessage popup channel, which
+      // browsers block when the opener page's COOP is "same-origin".
+      // The dev server (angular.json) and production responses also
+      // set Cross-Origin-Opener-Policy: same-origin-allow-popups so
+      // older browsers without FedCM still work.
+      use_fedcm_for_prompt: true,
     });
     // Logged once at first sign-in attempt so devs can verify the (origin, clientId)
     // pair against Google Cloud Console's Authorized JavaScript origins list when
