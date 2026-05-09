@@ -5,6 +5,7 @@ import { AlbumsCreateComponent } from './components/albums/albums-create.compone
 import { AlbumDetailComponent } from './components/albums/album-detail.component';
 import { AlbumEditComponent } from './components/albums/album-edit.component';
 import { CodeGalleryComponent } from './components/code-gallery/code-gallery.component';
+import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.component';
 import { authGuard, adminGuard } from './services/auth.guard';
 
 export const routes: Routes = [
@@ -47,6 +48,9 @@ export const routes: Routes = [
     // Stub redirect — Slice B will replace with a real component at integration time.
     path: 'shared-albums',
     redirectTo: '/dashboard'
+    path: 'shared-albums',
+    component: SharedAlbumsComponent,
+    canActivate: [authGuard]
   },
   {
     path: '',

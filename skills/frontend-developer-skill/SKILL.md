@@ -14,9 +14,32 @@ description: |
   - **coreui-expert-skill** - Ensures UI follows CoreUI component patterns and responsive design
   - **photogallery-auth-skill** - Implements JWT token handling and auth guards
   - **playwright-testing-skill** - Works with QA agent for E2E test validation
+  
+  This skill delegates to copilot-dev-team plugin meta-skills for procedural detail: `coreui-component-recipe` (CoreUI Pro component scaffolding), `angular-service-recipe` (services / inject() / Signals / RxJS), `angular-tdd-jasmine` (Karma + Jasmine specs), `runtime-env-config` (env-driven config baked at container start), and `app-jwt-claims` (JWT claim shape). Auto-trigger these when their conditions match.
 ---
 
 # Frontend Developer Skill: PhotoGallery Angular Implementation
+
+## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin provides procedural meta-skills that this skill delegates to. They auto-trigger by description match. If there is a conflict, prefer the meta-skill (it is canonical).
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Adding/modifying a CoreUI component | `coreui-component-recipe` | — |
+| Adding any `*Service` (HTTP client, state, auth) | `angular-service-recipe` | — |
+| Writing Karma + Jasmine specs | `angular-tdd-jasmine` | — |
+| Wiring runtime env / API base URL / feature flags | `runtime-env-config` | — |
+| Reading/parsing JWT in the FE (roles/claims) | — | `app-jwt-claims` |
+| SOLID/DRY validation | `solid-dry-principles` | — |
+
+**Workflow callouts:**
+
+- *→ Component creation / CoreUI usage steps — consult `coreui-component-recipe`.*
+- *→ Service creation steps (any `*Service` class) — consult `angular-service-recipe`.*
+- *→ Test-writing steps — consult `angular-tdd-jasmine`.*
+- *→ Environment / config / API base URL steps — consult `runtime-env-config`.*
+- *→ JWT interceptor / auth guard steps — consult `app-jwt-claims` and `identity-and-jwt`.*
 
 ## Your Role
 
@@ -37,9 +60,26 @@ You are the frontend developer building PhotoGallery's user interface using Angu
 - **photogallery-architect-skill** - Know component structure and dependency injection
 - **photogallery-auth-skill** - Understand JWT token flow and role-based access
 
+## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin provides procedural meta-skills that this skill delegates to. They auto-trigger by description match. If there is a conflict, prefer the meta-skill (it is canonical).
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Adding/modifying a CoreUI component | `coreui-component-recipe` | — |
+| Adding any `*Service` (HTTP client, state, auth) | `angular-service-recipe` | — |
+| Writing Karma + Jasmine specs | `angular-tdd-jasmine` | — |
+| Wiring runtime env / API base URL / feature flags | `runtime-env-config` | — |
+| Reading/parsing JWT in the FE (roles/claims) | — | `app-jwt-claims` |
+| SOLID/DRY validation | `solid-dry-principles` | — |
+
 ## Phase 7: Frontend Architecture Setup
 
+*→ Consult [`runtime-env-config`](../runtime-env-config/SKILL.md) to wire API base URL and feature flags into container startup.*
+
 ### Step 1: Install CoreUI Packages
+
+*→ Consult [`coreui-component-recipe`](../coreui-component-recipe/SKILL.md) for component scaffolding patterns.*
 
 ```bash
 npm install @coreui/angular-pro @coreui/icons-pro @coreui/coreui-pro --save
@@ -144,6 +184,8 @@ export class AdminLayoutComponent {
 
 ### Step 4: Setup HTTP Interceptor for JWT
 
+*→ Consult [`app-jwt-claims`](../app-jwt-claims/SKILL.md) for JWT claim parsing and [`identity-and-jwt`](../identity-and-jwt/SKILL.md) for token lifecycle.*
+
 ```typescript
 // src/app/services/http-token.interceptor.ts
 import { Injectable } from '@angular/core';
@@ -212,6 +254,8 @@ export class AdminGuard implements CanActivate {
 ```
 
 ## Phase 8: Angular Components
+
+*→ Consult [`coreui-component-recipe`](../coreui-component-recipe/SKILL.md) for all component scaffolding and [`angular-tdd-jasmine`](../angular-tdd-jasmine/SKILL.md) for Karma + Jasmine testing.*
 
 ### Login Page Component
 
@@ -961,6 +1005,8 @@ export class PhotoGalleryComponent implements OnInit {
 
 ## Angular Services
 
+*→ Consult [`angular-service-recipe`](../angular-service-recipe/SKILL.md) for service scaffolding with `@Injectable({ providedIn: 'root' })`, `inject()`, Signals, and RxJS patterns.*
+
 ### Auth Service
 
 ```typescript
@@ -1117,3 +1163,13 @@ Before committing, verify:
 - **Angular:** https://angular.io/docs
 - **Bootstrap 5:** https://getbootstrap.com/docs/5.0/
 - **Related Skills:** clean-architecture-guide, coreui-expert-skill, photogallery-auth-skill, playwright-testing-skill
+
+## Cross-cutting plugin skills (always-on)
+
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — temp/debug files MUST go in `.copilot/scratch/<task-id>/`.
+- `secret-hygiene` — never commit secrets or tokens. The `secret-scan` hook pre-checks writes.
+- `commit-conventions` — follow the canonical commit-message format.
+- `branch-strategy-u-prefix` — all work on `u/<actor>/<type>/<scope>` branches; never commit to `main`/`master`/`develop`.
+- `copilot-memory-update` — when a durable cross-session decision is made, update GitHub Copilot personal memory.

@@ -14,6 +14,7 @@
 
     <ItemGroup>
         <PackageReference Include="AWSSDK.S3" Version="4.0.22.1" />
+        <PackageReference Include="Azure.Communication.Email" Version="1.0.1" />
         <PackageReference Include="Azure.Storage.Blobs" Version="12.27.0" />
         <PackageReference Include="Google.Apis.Auth" Version="1.69.0" />
         <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="9.0.4" />
@@ -26,6 +27,7 @@
         <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.1" />
         <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.8.0" />
         <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+        <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.6" />
         <PackageReference Include="Serilog" Version="4.1.0" />
         <PackageReference Include="Serilog.AspNetCore" Version="8.0.0" />
         <PackageReference Include="Serilog.Sinks.Console" Version="5.1.1" />
