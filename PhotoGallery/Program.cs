@@ -121,10 +121,12 @@ builder.Services.AddScoped<IPhotoVersionUrlRepository, PhotoVersionUrlRepository
 builder.Services.AddScoped<IAccessCodeRepository, AccessCodeRepository>();
 builder.Services.AddScoped<IProcessingQueueRepository, ProcessingQueueRepository>();
 builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRepository>();
+builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
 // Register services
 builder.Services.AddScoped<PhotoVersionUrlService>();
 builder.Services.AddScoped<ZipDownloadService>();
+builder.Services.AddScoped<GdprService>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
