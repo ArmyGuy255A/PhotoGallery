@@ -1,6 +1,6 @@
-﻿using PhotoGallery.Enums;
+﻿using Authentication.Enums;
 
-namespace PhotoGallery.Classes;
+namespace Authentication.Classes;
 
 public class ExternalUserInfo
 {

@@ -1,3 +1,12 @@
+/**
+ * Playwright tests require the backend to run with ASPNETCORE_ENVIRONMENT=Test
+ * so that DISABLE_AUTH=true (via appsettings.Test.json). The dev environment
+ * will eventually run real Google auth and tests would otherwise need a real
+ * Google account.
+ *
+ * Local: $env:ASPNETCORE_ENVIRONMENT="Test"; dotnet watch run --project PhotoGallery
+ * CI:    set in workflow YAML before invoking 'npm run e2e'
+ */
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({

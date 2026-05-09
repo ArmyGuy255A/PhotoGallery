@@ -14,9 +14,32 @@ description: |
   - **coreui-expert-skill** - Ensures UI follows CoreUI component patterns and responsive design
   - **photogallery-auth-skill** - Implements JWT token handling and auth guards
   - **playwright-testing-skill** - Works with QA agent for E2E test validation
+  
+  This skill delegates to copilot-dev-team plugin meta-skills for procedural detail: `coreui-component-recipe` (CoreUI Pro component scaffolding), `angular-service-recipe` (services / inject() / Signals / RxJS), `angular-tdd-jasmine` (Karma + Jasmine specs), `runtime-env-config` (env-driven config baked at container start), and `app-jwt-claims` (JWT claim shape). Auto-trigger these when their conditions match.
 ---
 
 # Frontend Developer Skill: PhotoGallery Angular Implementation
+
+## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin provides procedural meta-skills that this skill delegates to. They auto-trigger by description match. If there is a conflict, prefer the meta-skill (it is canonical).
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Adding/modifying a CoreUI component | `coreui-component-recipe` | — |
+| Adding any `*Service` (HTTP client, state, auth) | `angular-service-recipe` | — |
+| Writing Karma + Jasmine specs | `angular-tdd-jasmine` | — |
+| Wiring runtime env / API base URL / feature flags | `runtime-env-config` | — |
+| Reading/parsing JWT in the FE (roles/claims) | — | `app-jwt-claims` |
+| SOLID/DRY validation | `solid-dry-principles` | — |
+
+**Workflow callouts:**
+
+- *→ Component creation / CoreUI usage steps — consult `coreui-component-recipe`.*
+- *→ Service creation steps (any `*Service` class) — consult `angular-service-recipe`.*
+- *→ Test-writing steps — consult `angular-tdd-jasmine`.*
+- *→ Environment / config / API base URL steps — consult `runtime-env-config`.*
+- *→ JWT interceptor / auth guard steps — consult `app-jwt-claims` and `identity-and-jwt`.*
 
 ## Your Role
 
