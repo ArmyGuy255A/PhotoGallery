@@ -105,6 +105,7 @@ builder.Services.AddScoped<ZipDownloadService>();
 builder.Services.AddSingleton<WatermarkService>();
 builder.Services.AddScoped<GdprService>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+builder.Services.AddScoped<GdprService>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();

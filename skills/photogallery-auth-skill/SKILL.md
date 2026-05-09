@@ -44,6 +44,19 @@ PhotoGallery's authentication system has three components:
 - ✅ Issues JWT tokens for stateless API authentication
 - ✅ Allows development bypass (DISABLE_AUTH=true for testing)
 
+## Plugin Meta-Skills
+
+Authentication has many moving parts; the `copilot-dev-team` plugin breaks them into focused meta-skills. This skill stays PhotoGallery-specific (which IDPs we use, which roles, where session state lives); it defers to the plugin meta-skills for the underlying mechanics.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| JWT issuance / validation / refresh | `identity-and-jwt` | — |
+| Defining/parsing JWT claim shape | `app-jwt-claims` | — |
+| Wiring Google / EntraID / KeyCloak as IDP | `identity-providers-recipe` | — |
+| Custom ASP.NET Identity user/role store | `aspnet-identity-custom-provider` | — |
+| Local KeyCloak for development | `keycloak-local-dev` | — |
+| Any step writing secrets / connection strings / signing keys | `secret-hygiene` | — |
+
 ## The Three Auth Layers
 
 ### 1. External Authentication (OAuth Providers)
@@ -114,6 +127,8 @@ public async Task<IActionResult> GoogleCallback(string code, string state)
 - **Visitor** - No authenticated actions (see below for Visitor)
 
 **Key Concept:** Roles are stored in our database, determined at login, added as claims to JWT token.
+
+→ **Consult:** `app-jwt-claims` for claim shape definition and role parsing strategies.
 
 #### How Role-Based Access Works
 
@@ -211,6 +226,8 @@ public async Task<IActionResult> ListAlbums()
 3. Browser includes JWT in Authorization header for API calls
 4. API validates JWT and extracts claims
 
+→ **Consult:** `identity-and-jwt` for JWT issuance, validation, token lifetime, and refresh strategies.
+
 #### JWT Token Structure
 
 ```
@@ -280,7 +297,7 @@ builder.Services.AddAuthentication(options =>
     {
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(jwtSettings["Secret"])),
+            Encoding.UTF8.GetBytes(jwtSettings["Secret"])),  // → consult secret-hygiene
         ValidateIssuer = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidateAudience = true,
@@ -336,6 +353,8 @@ public async Task<IActionResult> RefreshToken([FromBody] RefreshTokenRequest req
 **Design:** Each OAuth provider is a separate class, registered via interface
 
 **Goal:** Add Facebook or Microsoft without changing existing Google code
+
+→ **Consult:** `identity-providers-recipe` for Google, EntraID, and KeyCloak wiring patterns.
 
 ### Provider Pattern
 
@@ -626,6 +645,8 @@ public async Task<IActionResult> UploadPhotos(int id)
 
 ## User Persistence with Entity Framework
 
+→ **Consult:** `aspnet-identity-custom-provider` if customizing user/role store beyond standard EF Core mapping.
+
 **User Entity:**
 ```csharp
 public class User : Entity
@@ -797,6 +818,8 @@ public class AuthService : IAuthService
 ```
 
 ## Configuration (appsettings.json)
+
+→ **Consult:** `secret-hygiene` for every secret, client credential, and signing key in this configuration.
 
 ```json
 {
