@@ -1,5 +1,6 @@
 export const environment = {
   production: false,
-  apiUrl: 'http://localhost:5105',
-  googleClientId: '165223638218-ftkkhe1crodtisec90m38v1hdoe0b7ab.apps.googleusercontent.com'  // dev OAuth client; non-secret (public identifier embedded in client bundle)
+  apiUrl: 'http://localhost:5105'
+  // googleClientId is now fetched at runtime from GET /api/config/public.
+  // See RuntimeConfigService and provideAppInitializer in app.config.ts.
 };

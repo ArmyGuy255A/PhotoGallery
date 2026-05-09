@@ -1,6 +1,6 @@
-import { AfterViewInit, Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { IdentityProvider, IdentityProviderType } from '../identity-provider';
-import { environment } from '../../../../environments/environment';
+import { RuntimeConfigService } from '../../runtime-config.service';
 
 declare const google: any;
 
@@ -19,9 +19,12 @@ export class GoogleAuthService implements IdentityProvider {
   readonly containerId = 'google-signin';
   public status: GoogleAuthStatus = GoogleAuthStatus.Idle;
 
+  private readonly runtimeConfig = inject(RuntimeConfigService);
+
   token: string;
   private tokenReadyResolver: ((token: string) => void) | null = null;
   private tokenReadyPromise: Promise<string>;
+  private gisInitialized = false;
 
   constructor() {
     this.token = '';
@@ -29,26 +32,38 @@ export class GoogleAuthService implements IdentityProvider {
     this.tokenReadyPromise = new Promise(resolve => {
       this.tokenReadyResolver = resolve;
     });
+  }
 
+  /**
+   * Lazy-init Google Identity Services on first use. The clientId comes from
+   * the backend at runtime via RuntimeConfigService — APP_INITIALIZER guarantees
+   * it's loaded before any user-driven sign-in flow can fire.
+   */
+  private ensureGisInitialized(): void {
+    if (this.gisInitialized) return;
+    const clientId = this.runtimeConfig.googleClientId;
+    if (!clientId) {
+      console.error('GoogleAuthService: googleClientId is empty — check backend Google:ClientId config');
+      return;
+    }
     google.accounts.id.initialize({
-      client_id: environment.googleClientId,
+      client_id: clientId,
       callback: (response: any) => {
         this.token = response.credential;
-
-        // Resolve the pending promise
         this.tokenReadyResolver?.(this.token);
       },
       ux_mode: 'popup',
     });
+    this.gisInitialized = true;
   }
 
   async signIn(): Promise<string> {
+    this.ensureGisInitialized();
     if (this.token) {
       return this.token;
     }
 
-    return this.tokenReadyPromise; 
-
+    return this.tokenReadyPromise;
   }
 
   private async handleCredentialResponse(response: any): Promise<void> {
@@ -88,6 +103,7 @@ export class GoogleAuthService implements IdentityProvider {
     const button = document.getElementById(containerId);
     if (!button) return;
 
+    this.ensureGisInitialized();
 
     google.accounts.id.renderButton(button, {
       type: 'text',
