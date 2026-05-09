@@ -52,7 +52,8 @@ test.describe('Admin reconcile-storage endpoint', () => {
     const listResponse = await request.get(`${BACKEND_BASE_URL}/api/albums/${album.id}/photos`, {
       headers: adminAuthHeaders()
     });
-    const photos = (await listResponse.json()) as Array<{ id: string; fileName: string }>;
+    const listJson = await listResponse.json() as { photos: Array<{ id: string; fileName: string }> };
+    const photos = listJson.photos ?? [];
     const uploaded = photos.find(p => p.fileName === photoFileName)!;
     await waitForPhotoProcessing(request, uploaded.id);
 

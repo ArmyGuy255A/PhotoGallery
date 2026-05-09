@@ -114,7 +114,8 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
     });
 
     if (response.ok()) {
-      const photos = await response.json();
+      const json = await response.json();
+      const photos = Array.isArray(json) ? json : (json.photos ?? []);
       console.log(`✅ Album contains ${photos.length} photos`);
       photos.forEach((photo: any, idx: number) => {
         console.log(`   ${idx + 1}. ${photo.fileName} (${photo.fileSize} bytes)`);
@@ -185,7 +186,8 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
     );
 
     if (response.ok()) {
-      const photos = await response.json();
+      const json = await response.json();
+      const photos = Array.isArray(json) ? json : (json.photos ?? []);
       console.log(`✅ Access code grants access to ${photos.length} photos`);
     } else {
       console.log(`⚠️  Failed to access photos with code: ${response.status()}`);

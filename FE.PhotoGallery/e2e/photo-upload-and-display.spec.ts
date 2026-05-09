@@ -48,7 +48,8 @@ test.describe('Photo upload + display regression', () => {
       headers: adminAuthHeaders()
     });
     expect(listResponse.ok(), `List photos failed: ${listResponse.status()}`).toBeTruthy();
-    const photos = (await listResponse.json()) as Array<{ id: string; fileName: string }>;
+    const listJson = await listResponse.json() as { photos: Array<{ id: string; fileName: string }> };
+    const photos = listJson.photos ?? [];
     const uploaded = photos.find(p => p.fileName === photoFileName);
     expect(uploaded, `Uploaded photo "${photoFileName}" not found in album listing`).toBeDefined();
 
