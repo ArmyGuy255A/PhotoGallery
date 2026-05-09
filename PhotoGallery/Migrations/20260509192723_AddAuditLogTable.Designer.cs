@@ -2,17 +2,20 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PhotoGallery.Data;
 
 #nullable disable
 
-namespace PhotoGallery.Data.Migrations
+namespace PhotoGallery.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260509192723_AddAuditLogTable")]
+    partial class AddAuditLogTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.1");
@@ -610,35 +613,6 @@ namespace PhotoGallery.Data.Migrations
                     b.ToTable("ProcessingQueueItems");
                 });
 
-            modelBuilder.Entity("PhotoGallery.Models.SavedAccessCode", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("AccessCodeId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("SavedAt")
-                        .HasColumnType("datetime");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(450)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AccessCodeId");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("UserId", "AccessCodeId")
-                        .IsUnique();
-
-                    b.ToTable("SavedAccessCodes");
-                });
-
             modelBuilder.Entity("PhotoGallery.Models.User", b =>
                 {
                     b.Property<string>("Id")
@@ -920,25 +894,6 @@ namespace PhotoGallery.Data.Migrations
                     b.Navigation("Photo");
 
                     b.Navigation("ProcessingQueue");
-                });
-
-            modelBuilder.Entity("PhotoGallery.Models.SavedAccessCode", b =>
-                {
-                    b.HasOne("PhotoGallery.Models.AccessCode", "AccessCode")
-                        .WithMany()
-                        .HasForeignKey("AccessCodeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("PhotoGallery.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("AccessCode");
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("PhotoGallery.Models.UserAccessLog", b =>
