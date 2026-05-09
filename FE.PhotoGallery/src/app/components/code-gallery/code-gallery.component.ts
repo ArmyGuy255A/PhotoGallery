@@ -373,7 +373,7 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     private cart: CartService,
     private authService: AuthService
   ) {
-    this.isAuthenticated = this.authService.isAuthenticated();
+    this.isAuthenticated = this.authService.isAuthenticatedSync();
   }
 
   ngOnInit(): void {

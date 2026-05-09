@@ -452,8 +452,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   logout(): void {
-    this.authService.logout().subscribe(() => {
-      window.location.href = '/login';
-    });
+    this.authService.logout();
+    window.location.href = '/login';
   }
 }
