@@ -1,7 +1,9 @@
 ---
 name: photogallery-playwright
 description: |
-  End-to-end testing expertise for PhotoGallery using Playwright. This skill covers E2E test structure, page objects, fixtures, user flows, assertions, visual regression testing, authentication testing, CI/CD integration, and reporting. Use this whenever writing E2E tests for PhotoGallery, testing UI components, automating user workflows, verifying authentication flows, testing photo uploads, validating album management, or setting up test automation in GitHub Actions. Explains how to test across browsers (Chrome, Firefox, Safari), handle asynchronous operations, test responsive design, and generate test reports. This skill delegates to copilot-dev-team plugin meta-skills: `playwright-bootstrap` (first-time install / config / runner), `playwright-test-recipe` (canonical test + page-object pattern + auth fixture), and `app-jwt-claims` (JWT shape used by the auth fixture). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
+  End-to-end testing expertise for PhotoGallery using Playwright. This skill covers E2E test structure, page objects, fixtures, user flows, assertions, visual regression testing, authentication testing, CI/CD integration, and reporting. Use this whenever writing E2E tests for PhotoGallery, testing UI components, automating user workflows, verifying authentication flows, testing photo uploads, validating album management, or setting up test automation in GitHub Actions. Explains how to test across browsers (Chrome, Firefox, Safari), handle asynchronous operations, test responsive design, and generate test reports.
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `playwright-bootstrap` (first-time install / config / runner), `playwright-test-recipe` (canonical test + page-object pattern + auth fixture), and `app-jwt-claims` (JWT shape used by the auth fixture). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # Playwright E2E Testing Guide for PhotoGallery
@@ -17,6 +19,12 @@ The `copilot-dev-team` plugin's `playwright-bootstrap` and `playwright-test-reci
 | Triaging a flaky e2e test | `playwright-test-recipe` | — |
 | Building the sign-in / auth fixture | `playwright-test-recipe` | `app-jwt-claims`, `identity-and-jwt` |
 | Reading runtime env (API URL) in tests | — | `runtime-env-config` |
+
+**Workflow callouts:**
+
+- *→ Setup / install / config sections — consult `playwright-bootstrap`.*
+- *→ Test authoring / page-object sections — consult `playwright-test-recipe`.*
+- *→ Auth fixture / sign-in helper sections — consult `playwright-test-recipe` + `app-jwt-claims`.*
 
 ## What is Playwright?
 
@@ -816,10 +824,13 @@ await page.locator('.btn-primary').click();
 
 **Key Takeaway:** Playwright makes it easy to test real user workflows. Use Page Objects for maintainability, data-testid for reliability, fixtures for setup, and run tests in CI/CD for confidence that features work.
 
+
 ## Cross-cutting plugin skills (always-on)
 
-- `scratch-discipline` — exploratory Playwright probes in `.copilot/scratch/<task-id>/`.
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — exploratory Playwright probes in .copilot/scratch/<task-id>/.
 - `secret-hygiene` — never hardcode test passwords / tokens; use env or fixture-issued tokens.
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
-- `copilot-memory-update` — record durable e2e policy decisions (e.g., browser matrix, retries).
+- `copilot-memory-update` — record durable e2e policy decisions (browser matrix, retries).
