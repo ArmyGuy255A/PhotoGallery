@@ -25,7 +25,7 @@ import { IdentityProviderType } from '../../services/auth/identity-provider';
         <h1>Photo Gallery</h1>
         <p class="subtitle">Professional Photo Sharing Platform</p>
 
-        <div id="google-signin-container" class="google-signin-container"></div>
+        <div id="google-signin-container" class="google-signin-container" (click)="signInGoogle()"></div>
 
         <p class="info-text">
           Sign in with your Google account to access your photo albums and share them with clients.
@@ -256,7 +256,7 @@ export class LoginComponent implements OnInit {
     // Build marker — easy way to confirm the latest FE bundle is loaded
     // when troubleshooting auth issues. If you don't see this in the
     // browser console, ng serve is running a stale bundle (restart it).
-    console.info('[LoginComponent] ngOnInit — auth flow build: 2026-05-09 v2');
+    console.info('[LoginComponent] ngOnInit — auth flow build: 2026-05-09 v3');
 
     // If already authenticated, redirect to dashboard.
     if (this.authService.isAuthenticatedSync()) {
@@ -264,23 +264,52 @@ export class LoginComponent implements OnInit {
       return;
     }
 
-    // Mount Google's official Sign-in button via GIS once the DOM is ready.
-    setTimeout(() => {
-      this.authService.renderProviderButton(
+    // Mount Google's official Sign-in button via GIS once the DOM is ready,
+    // then begin awaiting the credential. The GIS button click opens the
+    // popup (handled inside its own iframe); the GIS callback fires on
+    // success and resolves the promise that signIn() awaits, which then
+    // POSTs the idToken to /api/auth/external-login.
+    //
+    // Eager-await is necessary because clicks INSIDE the cross-origin GIS
+    // iframe don't bubble to our wrapper's (click) handler. We also keep the
+    // template's (click)="signInGoogle()" handler as a fallback for clicks
+    // that hit the wrapper's padding (matches the VerdantIQ pattern).
+    setTimeout(async () => {
+      await this.authService.renderProviderButton(
         IdentityProviderType.Google,
         'google-signin-container'
       );
+      this.beginGoogleSignIn();
     }, 0);
   }
 
   /**
-   * Kept for backwards compatibility with any template handlers; the GIS
-   * button itself drives the popup + token exchange via the service.
+   * Click handler bound to the wrapper div around the GIS-rendered button.
+   * Mirrors VerdantIQ's pattern. Kicks off the same eager-await pipeline
+   * that ngOnInit started, so a click that lands on the wrapper's padding
+   * (rather than the iframe button) still drives sign-in.
    */
-  async loginWithGoogle(): Promise<void> {
-    const success = await this.authService.googleSignIn();
-    if (success) {
-      this.router.navigate(['/dashboard']);
+  signInGoogle(): void {
+    console.info('[LoginComponent] signInGoogle clicked');
+    this.beginGoogleSignIn();
+  }
+
+  /**
+   * Idempotent — multiple awaiters share the same promise inside
+   * GoogleAuthService, so calling this from both ngOnInit and the click
+   * handler is safe.
+   */
+  private async beginGoogleSignIn(): Promise<void> {
+    try {
+      const success = await this.authService.googleSignIn();
+      if (success) {
+        console.info('[LoginComponent] googleSignIn returned true — redirecting to /dashboard');
+        this.router.navigate(['/dashboard']);
+      } else {
+        console.warn('[LoginComponent] googleSignIn returned false');
+      }
+    } catch (err) {
+      console.error('[LoginComponent] googleSignIn threw', err);
     }
   }
 
