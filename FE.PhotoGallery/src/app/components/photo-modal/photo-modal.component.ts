@@ -102,10 +102,17 @@ export interface ModalPhoto {
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      font-size: 28px;
-      line-height: 1;
+      font-size: 24px;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
+      /* Flex centering ensures the × glyph sits exactly in the middle of the circle
+         regardless of font metrics (line-height alone is unreliable across fonts). */
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      padding: 0;
+      font-family: Arial, sans-serif;
     }
 
     .close-btn:hover {
@@ -123,10 +130,15 @@ export interface ModalPhoto {
       width: 56px;
       height: 56px;
       border-radius: 50%;
-      font-size: 36px;
-      line-height: 1;
+      font-size: 32px;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      padding: 0;
+      font-family: Arial, sans-serif;
     }
 
     .nav-btn:hover {

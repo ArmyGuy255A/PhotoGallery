@@ -2,9 +2,23 @@
 name: clean-architecture-guide
 description: |
   Clean Architecture principles and patterns guide for PhotoGallery. This skill explains the layered architecture approach—Domain (core business logic), Infrastructure (data access, external services), and Presentation (API endpoints). Use this whenever designing PhotoGallery's overall structure, organizing code into layers, defining domain entities, creating repositories/specifications, or making architectural decisions about where business logic belongs. Covers dependency flows, domain-driven design patterns, and vertical slicing for feature organization. Referenced by yogo-architect skill for architectural compliance checks.
+  
+  This skill delegates to copilot-dev-team plugin meta-skills: `clean-architecture-review` (canonical Clean Architecture review checklist, layer rules, dependency direction), `folder-hygiene` (project layout), and `solid-dry-principles` (SOLID + DRY). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # Clean Architecture Guide for PhotoGallery
+
+## Plugin Meta-Skills
+
+This skill is the PhotoGallery-flavored layering guide; the canonical Clean Architecture rules live in the `copilot-dev-team` plugin's `clean-architecture-review` meta-skill. Defer to it on any conflict.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Reviewing layer placement / dependency direction | `clean-architecture-review` | — |
+| Project folder structure questions | `folder-hygiene` | — |
+| SOLID / DRY application within a layer | `solid-dry-principles` | — |
+| Multi-implementation provider design | — | `provider-abstraction-pattern` |
+| Splitting bounded contexts | — | `microservice-decomposition` |
 
 ## What is Clean Architecture?
 
@@ -213,6 +227,8 @@ public class AlbumResponseDto
 
 ## Dependency Flow (Golden Rule)
 
+*→ consult `clean-architecture-review` for canonical layer placement and dependency direction validation*
+
 ```
 Presentation Layer
       ↓ depends on ↓
@@ -232,6 +248,8 @@ Infrastructure implements Domain interfaces
 ```
 
 ## How to Organize Code
+
+*→ consult `folder-hygiene` for project structure validation and folder naming standards*
 
 ### Option 1: Layered Organization (Traditional)
 ```
@@ -534,6 +552,8 @@ public class AlbumRepositoryTests
 ```
 
 ## Anti-Patterns to Avoid
+
+*→ consult `solid-dry-principles` for enforcing single responsibility, DRY violations, and SOLID compliance*
 
 ### ❌ Domain Depending on Infrastructure
 ```csharp
