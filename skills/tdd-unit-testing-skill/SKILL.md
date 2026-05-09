@@ -3,8 +3,6 @@ name: photogallery-tdd-unit-testing
 description: |
   Test-Driven Development (TDD) expertise for PhotoGallery backend testing. Use this skill BEFORE implementing any backend features, API endpoints, or services. This skill guides the creation of comprehensive xUnit tests that define expected behavior, serve as regression detectors, and validate SOLID principles. Every feature starts with unit tests, then implementation follows to make tests pass.
   
-  This skill delegates to copilot-dev-team plugin meta-skills: `aspnet-tdd-xunit` (canonical xUnit + WebApplicationFactory workflow, Arrange-Act-Assert, naming, fakes vs mocks) and `solid-dry-principles` (test-design implications of SOLID). Auto-trigger these when their conditions match. The plugin's `aspnet-tdd-xunit` is canonical — prefer it on conflict.
-  
   **CRITICAL: This skill MUST be invoked BEFORE any implementation work begins.**
   
   **Use this skill for:**
@@ -20,11 +18,15 @@ description: |
   **Related skills that depend on this:**
   - **backend-developer** - MUST consult TDD before writing any code
   - **photogallery-architect-skill** - Tests validate SOLID/DRY compliance
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `aspnet-tdd-xunit` (canonical xUnit + WebApplicationFactory workflow, Arrange-Act-Assert, naming, fakes vs mocks) and `solid-dry-principles` (test-design implications of SOLID). Auto-trigger these when their conditions match. The plugin's `aspnet-tdd-xunit` is canonical — prefer it on conflict.
 ---
 
 # Test-Driven Development (TDD) Skill: PhotoGallery Backend Testing
 
 ## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin's `aspnet-tdd-xunit` is the canonical reference for the TDD workflow. This skill stays focused on PhotoGallery-specific test design (Photos, Albums, AccessCodes, Storage abstractions, Image processing); it defers to `aspnet-tdd-xunit` for general xUnit patterns. Plugin meta-skills auto-trigger by description match — prefer them on conflict.
 
 | Phase / situation | MUST consult | Consider |
 | --- | --- | --- |
@@ -34,7 +36,11 @@ description: |
 | Validating that tests cover SOLID compliance | `solid-dry-principles` | — |
 | Test scratch / probe code | — | `scratch-discipline` |
 
-The `copilot-dev-team` plugin's `aspnet-tdd-xunit` is the canonical reference for the TDD workflow. This skill stays focused on PhotoGallery-specific test design (Photos, Albums, AccessCodes, Storage abstractions, Image processing); it defers to `aspnet-tdd-xunit` for general xUnit patterns.
+**Workflow callouts** (where each meta-skill triggers inside this skill's existing phases):
+
+- *→ Phase 1 (Test Design) and Phase 2 (RED) — consult `aspnet-tdd-xunit` for canonical Arrange-Act-Assert, naming, and fixture patterns.*
+- *→ Phase 3 (GREEN) and Phase 4 (REFACTOR) — consult `solid-dry-principles` to ensure refactors don't violate SOLID.*
+- *→ Any DB-touching test — consult `aspnet-tdd-xunit` (DbTestBase patterns) and `efcore-migration-safer` (migration-aware tests).*
 
 ## Core Principle
 
@@ -57,8 +63,6 @@ Before writing ANY production code:
 3. **List test cases** - Each test validates one behavior
 4. **Write test class** - Name: `{FeatureName}Tests` in `PhotoGallery.Tests`
 5. **Write test methods** - Follow Arrange-Act-Assert pattern
-
-*→ consult `aspnet-tdd-xunit` for Arrange-Act-Assert patterns, test naming conventions, and fixture design.*
 
 ### Phase 2: Red Phase (Tests Fail)
 
@@ -107,8 +111,6 @@ public class Photo
 
 Run tests - they pass ✓
 
-*→ consult `solid-dry-principles` to validate that GREEN-phase code follows SOLID principles.*
-
 ### Phase 4: Refactor Phase (Keep Tests Passing)
 
 Improve code quality while tests verify nothing breaks:
@@ -138,8 +140,6 @@ public class Photo
 ```
 
 Run tests - they still pass ✓
-
-*→ consult `solid-dry-principles` to ensure refactored code maintains SOLID compliance and improves design.*
 
 ## Test Structure Pattern
 
@@ -216,8 +216,6 @@ public void AccessCode_Should_Detect_Expiration()
 ### 2. Repository Tests (Data Access)
 
 **Purpose**: Validate CRUD operations and queries
-
-*→ consult `aspnet-tdd-xunit` and `efcore-migration-safer` for DbContext mocking, in-memory database patterns, and EF Core-specific test fixtures.*
 
 ```csharp
 [Fact]
@@ -561,9 +559,12 @@ Tests are your insurance policy:
 
 **Result**: Feature is complete, tested, and follows architecture
 
+
 ## Cross-cutting plugin skills (always-on)
 
-- `scratch-discipline` — probe/spike code in `.copilot/scratch/<task-id>/`, not committed test files.
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — probe/spike code in .copilot/scratch/<task-id>/, not committed test files.
 - `secret-hygiene` — no secrets in test fixtures or appsettings.Test.json.
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.

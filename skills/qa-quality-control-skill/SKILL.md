@@ -3,8 +3,6 @@ name: qa-quality-control
 description: |
   Expert quality control and E2E testing guide for PhotoGallery using Playwright. Use this skill to validate PhotoGallery features end-to-end, ensure workflows work correctly, test accessibility compliance, and verify multi-browser compatibility. This skill orchestrates comprehensive testing using the playwright-testing-skill and validates that all features (auth, albums, photos, access codes) work correctly across browsers and devices. Covers test planning, test case creation, E2E workflow validation, accessibility testing, multi-browser testing, and CI/CD integration. Includes step-by-step guidance for testing: authentication flows, album CRUD operations, photo uploads, access code generation, visitor gallery access, and responsive design across mobile/tablet/desktop.
   
-  This skill delegates to copilot-dev-team plugin meta-skills: `playwright-bootstrap` (Playwright install/config), `playwright-test-recipe` (canonical e2e + page-object + auth-fixture pattern), `pr-review-checklist` (PR-review gate), `release-notes` (release format), and `project-board-sync` (GitHub Project v2 column sync). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
-  
   **Dispatch this agent for:**
   - Phase 9: Testing infrastructure setup
   - Feature validation after backend/frontend implementation
@@ -17,6 +15,8 @@ description: |
   - **clean-architecture-guide** - Understands service layer for test mocking
   - **backend-developer-skill** - Collaborates on backend validation
   - **frontend-developer-skill** - Collaborates on frontend validation
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `playwright-bootstrap` (Playwright install/config), `playwright-test-recipe` (canonical e2e + page-object + auth-fixture pattern), `pr-review-checklist` (PR-review gate), `release-notes` (release format), and `project-board-sync` (GitHub Project v2 column sync). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # QA Quality Control Skill: PhotoGallery E2E Testing
@@ -32,6 +32,13 @@ QA work crosses several disciplines (e2e authoring, review hygiene, release mana
 | Final PR-review / quality gate | `pr-review-checklist` | — |
 | Drafting release notes for a sprint/version | — | `release-notes` |
 | Moving issues across the GitHub Project board | — | `project-board-sync` |
+
+**Workflow callouts:**
+
+- *→ E2E test authoring — consult `playwright-test-recipe` (and `playwright-bootstrap` for first-time setup).*
+- *→ PR / quality-gate sections — consult `pr-review-checklist`.*
+- *→ Release-tagging / sprint-close sections — consult `release-notes`.*
+- *→ Project-board management sections — consult `project-board-sync`.*
 
 ## Your Role
 
@@ -55,8 +62,6 @@ You are the quality control expert ensuring PhotoGallery works correctly end-to-
 ## Phase 9: Testing Infrastructure
 
 ### Step 1: Project Setup
-
-→ **Consult `playwright-bootstrap`** for first-time Playwright project setup, dependency installation, and config scaffolding.
 
 ```bash
 npm install -D @playwright/test
@@ -117,8 +122,6 @@ export default defineConfig({
 ```
 
 ### Step 3: Login Fixture
-
-→ **Consult `playwright-test-recipe`** for canonical auth fixture pattern, best practices for login state reuse, and test isolation.
 
 ```typescript
 // tests/e2e/fixtures/auth.fixture.ts
@@ -323,8 +326,6 @@ export class PhotoGalleryPage {
 ```
 
 ## Test Cases
-
-→ **Consult `playwright-test-recipe`** for e2e test patterns, page-object design, and fixture best practices. All spec files below follow this pattern.
 
 ### Authentication Tests
 
@@ -646,8 +647,6 @@ jobs:
 
 ## Quality Checklist
 
-→ **Consult `pr-review-checklist`** before merging to ensure comprehensive PR-review gate compliance and QA sign-off.
-
 Before release, verify:
 
 - [ ] All E2E tests pass (Chrome, Firefox, Safari, mobile)
@@ -678,11 +677,6 @@ Before release, verify:
 
 For questions about:
 - **Test patterns** → Consult `playwright-testing-skill`
-- **Test authoring & e2e recipes** → Consult `playwright-test-recipe`
-- **First-time Playwright setup** → Consult `playwright-bootstrap`
-- **PR review gate** → Consult `pr-review-checklist`
-- **Release notes & sprint closure** → Consult `release-notes`
-- **GitHub Project board sync** → Consult `project-board-sync`
 - **Backend integration** → Consult `backend-developer-skill`
 - **Frontend integration** → Consult `frontend-developer-skill`
 - **Architecture** → Consult `photogallery-architect-skill`
@@ -694,9 +688,12 @@ For questions about:
 - **axe DevTools:** https://www.deque.com/axe/devtools/
 - **Related Skills:** playwright-testing-skill, backend-developer-skill, frontend-developer-skill
 
+
 ## Cross-cutting plugin skills (always-on)
 
-- `scratch-discipline` — QA probes / repro scripts in `.copilot/scratch/<task-id>/`.
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — QA probes / repro scripts in .copilot/scratch/<task-id>/.
 - `secret-hygiene` — never hardcode test passwords / tokens in committed e2e specs.
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
