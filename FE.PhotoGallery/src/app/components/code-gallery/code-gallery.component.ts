@@ -6,6 +6,7 @@ import { HttpClient } from '@angular/common/http';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 import { CartService, CartQuality } from '../../services/cart.service';
+import { AuthService } from '../../services/auth.service';
 import { CartPanelComponent } from './cart-panel.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { environment } from '../../../environments/environment';
@@ -45,10 +46,22 @@ interface CodeValidation {
     <div class="code-gallery">
       <header class="gallery-header">
         <h1>{{ album?.albumTitle || 'Photo Gallery' }}</h1>
-        <button class="cart-button" (click)="cartOpen = true" [class.has-items]="cartCount > 0">
-          🛒 Cart
-          <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
-        </button>
+        <div class="header-actions">
+          <button
+            *ngIf="isAuthenticated"
+            class="save-button"
+            (click)="onSaveToAccount()"
+            [disabled]="saving || saved"
+            [title]="saved ? 'Saved to your account' : 'Save this album to your account'">
+            <span *ngIf="!saved && !saving">⭐ Save to my account</span>
+            <span *ngIf="saving">Saving...</span>
+            <span *ngIf="saved" class="saved-feedback">✓ Saved</span>
+          </button>
+          <button class="cart-button" (click)="cartOpen = true" [class.has-items]="cartCount > 0">
+            🛒 Cart
+            <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
+          </button>
+        </div>
       </header>
 
       <div *ngIf="loading" class="loading">Loading album...</div>
@@ -145,6 +158,36 @@ interface CodeValidation {
       cursor: pointer;
       font-size: 14px;
       font-weight: 500;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .save-button {
+      background: white;
+      border: 2px solid #2e7d32;
+      color: #2e7d32;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .save-button:hover:not(:disabled) {
+      background: #e8f5e9;
+    }
+
+    .save-button:disabled {
+      cursor: default;
+    }
+
+    .save-button .saved-feedback {
+      color: #2e7d32;
+      font-weight: 600;
     }
 
     .cart-button:hover {
@@ -314,6 +357,9 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   errorMessage = '';
   cartOpen = false;
   cartCount = 0;
+  isAuthenticated = false;
+  saving = false;
+  saved = false;
 
   // Modal state
   modalOpen = false;
@@ -324,8 +370,11 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private http: HttpClient,
-    private cart: CartService
-  ) {}
+    private cart: CartService,
+    private authService: AuthService
+  ) {
+    this.isAuthenticated = this.authService.isAuthenticated();
+  }
 
   ngOnInit(): void {
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
@@ -387,6 +436,36 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
         alert('Cart is full (100 items max). Please download or remove items first.');
       }
     }
+  }
+
+  /**
+   * EPIC-02 Slice B — save the current access code to the authenticated
+   * user's account. Idempotent on the server side. Shows ✓ Saved for 2s.
+   */
+  onSaveToAccount(): void {
+    if (this.saving || this.saved || !this.code) return;
+    this.saving = true;
+    const apiUrl = environment.apiUrl || '';
+    this.http.post(`${apiUrl}/api/account/access-codes`, { code: this.code })
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: () => {
+          this.saving = false;
+          this.saved = true;
+          setTimeout(() => { this.saved = false; }, 2000);
+        },
+        error: (err) => {
+          this.saving = false;
+          console.error('Failed to save access code:', err);
+          if (err?.status === 401) {
+            alert('Please sign in to save this album.');
+          } else if (err?.status === 400) {
+            alert(err?.error ?? 'This access code cannot be saved.');
+          } else {
+            alert('Failed to save. Please try again.');
+          }
+        }
+      });
   }
 
   private loadAlbum(): void {
