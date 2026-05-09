@@ -40,6 +40,18 @@ CoreUI is a professional UI kit for Angular with pre-built, customizable compone
 
 **PhotoGallery's UI Goal:** Build admin dashboard for album/photo management, inspired by https://coreui.io/demos/angular/5.5/modern/#/dashboard
 
+## Plugin Meta-Skills
+
+`copilot-dev-team`'s `coreui-component-recipe` ships an authoritative reference catalog for CoreUI Pro 5.4 (catalog, forms, theming, Pro-only widgets) and is auto-triggered by description match. Defer to it for component selection and patterns.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Picking a CoreUI Pro component for a feature | `coreui-component-recipe` | — |
+| Theming / SCSS variable customization | `coreui-component-recipe` (theming reference) | — |
+| Building forms with CoreUI inputs/validation | `coreui-component-recipe` (forms reference) | — |
+| Wrapping CoreUI in an Angular service | — | `angular-service-recipe` |
+| Writing specs for a CoreUI-using component | — | `angular-tdd-jasmine` |
+
 ## Installation & Setup
 
 ### Verify CoreUI Installation

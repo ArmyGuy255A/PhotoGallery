@@ -1,14 +1,17 @@
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
-WORKDIR /app
+WORKDIR /src
 
-# Copy project file
-COPY PhotoGallery.csproj .
-RUN dotnet restore
+# Copy project file from the PhotoGallery subdirectory and restore.
+# The build context is the repo root (see docker-compose.yml).
+COPY PhotoGallery/PhotoGallery.csproj PhotoGallery/
+RUN dotnet restore PhotoGallery/PhotoGallery.csproj
 
-# Copy source
-COPY . .
-RUN dotnet publish -c Release -o /app/publish
+# Copy the rest of the source tree
+COPY PhotoGallery/ PhotoGallery/
+
+WORKDIR /src/PhotoGallery
+RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:9.0

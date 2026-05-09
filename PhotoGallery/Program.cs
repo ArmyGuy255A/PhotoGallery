@@ -10,6 +10,7 @@ using PhotoGallery.Interfaces;
 using PhotoGallery.Middleware;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
+using PhotoGallery.Services.Email;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
 using Serilog;
@@ -129,6 +130,17 @@ builder.Services.AddSingleton<WatermarkService>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
+
+// Register email service via configuration-driven factory (mock for dev/tests, Azure for prod).
+var emailProvider = builder.Configuration["Email:Provider"] ?? "mock";
+if (emailProvider.Equals("azure", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<IEmailService, AzureCommunicationEmailService>();
+}
+else
+{
+    builder.Services.AddSingleton<IEmailService, MockEmailService>();
+}
 
 // Register consistency checker for validating photo processing completion
 builder.Services.AddScoped<PhotoConsistencyChecker>();

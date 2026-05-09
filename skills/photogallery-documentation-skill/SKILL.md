@@ -83,6 +83,8 @@ Documentation/
 
 ### Design Decision Format
 
+**→ consult `markdown-doc-formatter`** for document formatting conventions.
+
 Every design decision follows this structure:
 
 ```markdown
@@ -166,6 +168,8 @@ Design decision states requirement → Write tests to validate requirement
 
 ## Mermaid Diagram Types (Never ASCII Art)
 
+**→ consult `mermaid-diagram-curator`** for diagram format standards and `class-diagram-from-code`, `er-diagram-from-efcore`, `sequence-diagram-recipe`, or `data-flow-diagram-security` for code-first diagram generation.
+
 - **Flowcharts**: System flows, decision trees, processes
 - **Sequence Diagrams**: Request flows, interactions
 - **Class Diagrams**: Object relationships
@@ -186,6 +190,8 @@ sequenceDiagram
 ```
 
 ## Standards
+
+**→ consult `markdown-doc-formatter` and `secret-hygiene`** for content standards.
 
 ### File Naming
 - CamelCase: `DESIGN_DECISIONS.md`, `SYSTEM_ARCHITECTURE.md`

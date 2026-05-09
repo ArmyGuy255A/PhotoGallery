@@ -3,6 +3,8 @@ name: photogallery-tdd-unit-testing
 description: |
   Test-Driven Development (TDD) expertise for PhotoGallery backend testing. Use this skill BEFORE implementing any backend features, API endpoints, or services. This skill guides the creation of comprehensive xUnit tests that define expected behavior, serve as regression detectors, and validate SOLID principles. Every feature starts with unit tests, then implementation follows to make tests pass.
   
+  This skill delegates to copilot-dev-team plugin meta-skills: `aspnet-tdd-xunit` (canonical xUnit + WebApplicationFactory workflow, Arrange-Act-Assert, naming, fakes vs mocks) and `solid-dry-principles` (test-design implications of SOLID). Auto-trigger these when their conditions match. The plugin's `aspnet-tdd-xunit` is canonical — prefer it on conflict.
+  
   **CRITICAL: This skill MUST be invoked BEFORE any implementation work begins.**
   
   **Use this skill for:**
@@ -64,6 +66,8 @@ Before writing ANY production code:
 4. **Write test class** - Name: `{FeatureName}Tests` in `PhotoGallery.Tests`
 5. **Write test methods** - Follow Arrange-Act-Assert pattern
 
+*→ consult `aspnet-tdd-xunit` for Arrange-Act-Assert patterns, test naming conventions, and fixture design.*
+
 ### Phase 2: Red Phase (Tests Fail)
 
 ```csharp
@@ -111,6 +115,8 @@ public class Photo
 
 Run tests - they pass ✓
 
+*→ consult `solid-dry-principles` to validate that GREEN-phase code follows SOLID principles.*
+
 ### Phase 4: Refactor Phase (Keep Tests Passing)
 
 Improve code quality while tests verify nothing breaks:
@@ -140,6 +146,8 @@ public class Photo
 ```
 
 Run tests - they still pass ✓
+
+*→ consult `solid-dry-principles` to ensure refactored code maintains SOLID compliance and improves design.*
 
 ## Test Structure Pattern
 
@@ -216,6 +224,8 @@ public void AccessCode_Should_Detect_Expiration()
 ### 2. Repository Tests (Data Access)
 
 **Purpose**: Validate CRUD operations and queries
+
+*→ consult `aspnet-tdd-xunit` and `efcore-migration-safer` for DbContext mocking, in-memory database patterns, and EF Core-specific test fixtures.*
 
 ```csharp
 [Fact]

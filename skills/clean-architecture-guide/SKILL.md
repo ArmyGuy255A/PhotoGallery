@@ -233,6 +233,8 @@ public class AlbumResponseDto
 
 ## Dependency Flow (Golden Rule)
 
+*→ consult `clean-architecture-review` for canonical layer placement and dependency direction validation*
+
 ```
 Presentation Layer
       ↓ depends on ↓
@@ -252,6 +254,8 @@ Infrastructure implements Domain interfaces
 ```
 
 ## How to Organize Code
+
+*→ consult `folder-hygiene` for project structure validation and folder naming standards*
 
 ### Option 1: Layered Organization (Traditional)
 ```
@@ -554,6 +558,8 @@ public class AlbumRepositoryTests
 ```
 
 ## Anti-Patterns to Avoid
+
+*→ consult `solid-dry-principles` for enforcing single responsibility, DRY violations, and SOLID compliance*
 
 ### ❌ Domain Depending on Infrastructure
 ```csharp

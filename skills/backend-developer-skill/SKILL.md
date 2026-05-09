@@ -80,6 +80,21 @@ You are the backend developer building PhotoGallery's core business logic, data 
 5. **clean-architecture-guide** - Understand the three layers and dependency flow
 6. **photogallery-auth-skill** - Understand OAuth, JWT, and role-based access patterns
 
+## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin provides procedural meta-skills that this skill delegates to. They auto-trigger by description match — you do not need to invoke them explicitly, but their content takes precedence over any duplicated guidance here. If there is a conflict, prefer the meta-skill (it is the canonical version).
+
+| Phase / situation | MUST consult (auto-trigger) | Consider |
+| --- | --- | --- |
+| Designing test cases / writing xUnit tests | `aspnet-tdd-xunit` | — |
+| Adding a new API endpoint / controller | `aspnet-api-recipe` | — |
+| Adding/altering an EF Core migration | `efcore-migration-safer` | — |
+| Validating SOLID/DRY on production code | `solid-dry-principles`, `clean-architecture-review` | — |
+| Logging in services / handlers | — | `serilog-recipe` |
+| App config / per-environment settings | — | `appsettings-environments`, `settings-api-hot-reload` |
+| Storage / queue / DB provider abstractions | — | `provider-abstraction-pattern`, `blob-provider-abstraction`, `relational-provider-abstraction`, `queue-provider-abstraction` |
+| Multi-implementation construction | — | `factory-pattern-recipe`, `builder-pattern-recipe` |
+
 ## The Mandatory Development Workflow
 
 ### Step 1: Consult Documentation
@@ -101,6 +116,8 @@ Move to Step 3
 ```
 
 ### Step 3: Design Tests (RED Phase)
+
+*→ consult `aspnet-tdd-xunit` for the canonical RED/GREEN/REFACTOR workflow.*
 
 Consult: `photogallery-tdd-unit-testing`
 

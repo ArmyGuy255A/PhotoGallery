@@ -47,6 +47,8 @@ Playwright is a modern end-to-end testing framework that:
 
 ## Installation & Setup
 
+→ **Consult `playwright-bootstrap`** for first-time Playwright setup in a fresh repo: workspace structure, `package.json`, `playwright.config.ts`, browser installation, CI scaffolding.
+
 ### Install Playwright
 
 ```bash
@@ -242,6 +244,8 @@ await expect(async () => {
 
 ### Page Objects (Recommended Pattern)
 
+→ **Consult `playwright-test-recipe`** for the canonical Page Object Model, locator strategy (semantic first: `getByRole`, `getByLabel`, then `getByTestId`), and page-object class structure. This section shows PhotoGallery-specific page objects; the plugin recipe covers the underlying patterns.
+
 **Base Page Object:**
 ```typescript
 // pages/base.page.ts
@@ -343,6 +347,8 @@ test('user can create an album', async ({ page }) => {
 ## Testing Common PhotoGallery Workflows
 
 ### 1. Authentication Testing
+
+→ **Consult `playwright-test-recipe` + `app-jwt-claims`** for auth fixture patterns, test-token endpoint minting (backend-minted JWT), storage state, and role-based fixtures. PhotoGallery uses `DISABLE_AUTH=true` in dev; production tests rely on the backend test-token endpoint.
 
 ```typescript
 import { test, expect } from '@playwright/test';
