@@ -196,7 +196,7 @@ The OAuth 2.0 Client used by both frontend (GIS popup) and backend (token exchan
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `Error 400: invalid_request` — *Missing required parameter: client_id* | `Google:ClientId` not set in backend config (FE fetches it from `/api/config/public` at runtime) | Set `Google__ClientId` env var or `Google:ClientId` in `appsettings.Development.json`, restart backend |
-| `Error 401: invalid_client` — *no registered origin* | The browser's origin (e.g. `http://localhost:4200`) is not in the OAuth client's *Authorized JavaScript origins* | Add the origin in Google Cloud Console (steps below); wait ~30s for propagation |
+| `Error 401: invalid_client` — *no registered origin* | The browser's origin (e.g. `http://localhost:4300`) is not in the OAuth client's *Authorized JavaScript origins* | Add the origin in Google Cloud Console (steps below); wait ~30s for propagation |
 | `Error 400: redirect_uri_mismatch` | Backend exchanged a code with a `redirect_uri` not in the OAuth client's *Authorized redirect URIs* | Add the exact redirect URI; values must match scheme + host + port + path |
 
 ### Configuring the OAuth client
@@ -204,7 +204,7 @@ The OAuth 2.0 Client used by both frontend (GIS popup) and backend (token exchan
 1. Open [console.cloud.google.com](https://console.cloud.google.com/) → **APIs & Services** → **Credentials**
 2. Click your OAuth 2.0 Client ID (the value in `Google:ClientId`)
 3. Under **Authorized JavaScript origins**, add the origins your SPA will load from. For a typical local dev setup:
-   - `http://localhost:4200` (Angular `ng serve`)
+   - `http://localhost:4300` (Angular `ng serve`)
    - `http://localhost:5105` (backend, if it ever serves the SPA itself)
    - Plus any production / staging origins (`https://yourdomain.com`)
 4. Under **Authorized redirect URIs**, add the backend callback URL(s):

@@ -89,7 +89,7 @@ This script automatically:
 - Starts PostgreSQL and MinIO in Docker
 - Starts the ASP.NET Backend on port 5105
 - Starts the Angular Frontend on port 4200
-- Opens your browser to http://localhost:4200
+- Opens your browser to http://localhost:4300
 
 For more options:
 ```powershell
@@ -106,7 +106,7 @@ See [STARTUP_GUIDE.md](./STARTUP_GUIDE.md) for detailed documentation.
 docker-compose up -d
 
 # Access services:
-# Frontend: http://localhost:4200
+# Frontend: http://localhost:4300
 # Backend API: http://localhost:5105
 # MinIO Console: http://localhost:9000
 ```
@@ -125,7 +125,7 @@ dotnet run
 cd FE.PhotoGallery
 npm install
 ng serve
-# Frontend runs on http://localhost:4200
+# Frontend runs on http://localhost:4300
 ```
 
 **MinIO (in Docker):**

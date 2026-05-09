@@ -45,7 +45,7 @@ The startup script automates launching the complete development stack:
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Frontend | http://localhost:4200 | N/A (Auth disabled) |
+| Frontend | http://localhost:4300 | N/A (Auth disabled) |
 | Backend API | http://localhost:5105 | N/A (Auth disabled) |
 | MinIO Console | http://localhost:9000 | minioadmin / minioadmin-password |
 | PostgreSQL | localhost:5432 | keycloak / keycloak-password |

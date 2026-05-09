@@ -64,7 +64,7 @@ echo ====================================================
 echo  All services started!
 echo ====================================================
 echo.
-echo Frontend:  http://localhost:4200
+echo Frontend:  http://localhost:4300
 echo Backend:   http://localhost:5105
 echo MinIO:     http://localhost:9000
 echo PostgreSQL: localhost:5432

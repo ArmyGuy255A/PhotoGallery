@@ -2,7 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 import { adminAuthHeaders, createAlbumViaApi } from './fixtures/auth.fixture';
 
 const BACKEND_BASE_URL = process.env['BACKEND_BASE_URL'] ?? 'http://localhost:5105';
-const FRONTEND_BASE_URL = process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:4200';
+const FRONTEND_BASE_URL = process.env['FRONTEND_BASE_URL'] ?? 'http://localhost:4300';
 
 /**
  * The Angular AppComponent's ngOnInit unconditionally calls

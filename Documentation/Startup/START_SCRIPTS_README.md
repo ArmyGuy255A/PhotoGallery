@@ -40,7 +40,7 @@
 ================================================
 
 📊 Service Status:
-  Frontend:  http://localhost:4200
+  Frontend:  http://localhost:4300
   Backend:   http://localhost:5105
   MinIO:     http://localhost:9000 (Username: minioadmin, Password: minioadmin-password)
   PostgreSQL: localhost:5432
@@ -123,7 +123,7 @@ ng serve
 
 | Service | URL | Purpose |
 |---------|-----|---------|
-| Frontend | http://localhost:4200 | Web UI for photo gallery |
+| Frontend | http://localhost:4300 | Web UI for photo gallery |
 | Backend | http://localhost:5105 | API endpoints |
 | MinIO Console | http://localhost:9000 | S3-compatible storage |
 | PostgreSQL | localhost:5432 | Database |
@@ -205,7 +205,7 @@ For faster startup times:
 ## Next Steps
 
 After startup:
-1. Navigate to http://localhost:4200
+1. Navigate to http://localhost:4300
 2. Explore the dashboard
 3. Try creating an album
 4. Test photo upload functionality

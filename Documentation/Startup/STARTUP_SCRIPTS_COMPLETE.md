@@ -68,7 +68,7 @@ The PhotoGallery application now has fully automated startup scripts that launch
 - Reports any failures clearly
 
 ✅ **Auto-Open Browser**
-- Opens http://localhost:4200 when ready
+- Opens http://localhost:4300 when ready
 
 ✅ **Service Status Display**
 - Shows URLs for all services
@@ -80,7 +80,7 @@ The PhotoGallery application now has fully automated startup scripts that launch
 
 ### Service Responsiveness
 ```
-Frontend:   http://localhost:4200     ✓ HTTP 200
+Frontend:   http://localhost:4300     ✓ HTTP 200
 Backend:    http://localhost:5105     ✓ HTTP 200
 MinIO:      http://localhost:9000     ✓ HTTP 200
 PostgreSQL: localhost:5432            ✓ Connected
@@ -124,7 +124,7 @@ cd D:\repos\PhotoGallery\PhotoGallery
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| Frontend | http://localhost:4200 | N/A (auto-logged in) |
+| Frontend | http://localhost:4300 | N/A (auto-logged in) |
 | Backend API | http://localhost:5105 | JWT via frontend |
 | MinIO Console | http://localhost:9000 | minioadmin / minioadmin-password |
 | PostgreSQL | localhost:5432 | postgres / postgres |
