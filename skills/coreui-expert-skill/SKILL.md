@@ -2,9 +2,29 @@
 name: coreui-angular
 description: |
   CoreUI Angular Pro expert for PhotoGallery UI. This skill covers CoreUI Angular Pro components (buttons, cards, modals, forms, tables, alerts, spinners), layout patterns (containers, rows, columns), styling and theming, dashboard design patterns, form validation, and accessibility. Use this whenever building PhotoGallery UI components, creating pages, styling layouts, designing dashboards, building forms, implementing tables or modals, selecting icons from coreui-icons-pro, or ensuring UI consistency. Consult this skill to match CoreUI admin dashboard patterns and maintain consistent styling across the application. Explains how to use CoreUI utilities, responsive design, and component composition.
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `coreui-component-recipe` (canonical CoreUI Pro 5.4 component catalog, theming, Pro-only widgets, forms patterns) and `angular-service-recipe` / `angular-tdd-jasmine` for the surrounding Angular plumbing. Auto-trigger these when their conditions match. The plugin's `coreui-component-recipe` is the canonical reference — prefer it when there's a conflict.
 ---
 
 # CoreUI Angular Pro Expert Guide for PhotoGallery
+
+## Plugin Meta-Skills
+
+`copilot-dev-team`'s `coreui-component-recipe` ships an authoritative reference catalog for CoreUI Pro 5.4 (catalog, forms, theming, Pro-only widgets) and is auto-triggered by description match. Defer to it for component selection and patterns.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Picking a CoreUI Pro component for a feature | `coreui-component-recipe` | — |
+| Theming / SCSS variable customization | `coreui-component-recipe` (theming reference) | — |
+| Building forms with CoreUI inputs/validation | `coreui-component-recipe` (forms reference) | — |
+| Wrapping CoreUI in an Angular service | — | `angular-service-recipe` |
+| Writing specs for a CoreUI-using component | — | `angular-tdd-jasmine` |
+
+**Workflow callouts:**
+
+- *→ Component-pick / catalog sections — consult `coreui-component-recipe` for the canonical catalog and Pro-only widgets.*
+- *→ Theming / SCSS sections — consult `coreui-component-recipe` (theming reference).*
+- *→ Form-building sections — consult `coreui-component-recipe` (forms reference).*
 
 ## What is CoreUI?
 
@@ -116,6 +136,8 @@ Bootstrap 5 based, 12-column responsive grid
 
 ### Buttons
 
+*→ consult `coreui-component-recipe` for the canonical button catalog and variants*
+
 ```html
 <!-- Standard buttons -->
 <button cButton color="primary">Primary</button>
@@ -208,6 +230,8 @@ Bootstrap 5 based, 12-column responsive grid
 ```
 
 ### Forms & Input
+
+*→ consult `coreui-component-recipe` (forms reference) for CoreUI form inputs, validation patterns, and Pro form widgets*
 
 ```html
 <!-- Form group (label + input) -->
@@ -695,6 +719,8 @@ export class AppComponent {}
 
 ## Styling & Utilities
 
+*→ consult `coreui-component-recipe` (theming reference) for SCSS customization, CSS variables, and theme overrides*
+
 ### Spacing (Margin & Padding)
 
 ```html
@@ -972,3 +998,11 @@ export class PhotoGridComponent {
 ---
 
 **Key Takeaway:** CoreUI provides professional, accessible components following Bootstrap 5. Use the grid system for layout, components for structure, utilities for styling, and icons for visual communication. Maintain consistency by using CoreUI components throughout PhotoGallery.
+
+## Cross-cutting plugin skills (always-on)
+
+- `scratch-discipline` — temp files in `.copilot/scratch/<task-id>/`.
+- `secret-hygiene` — no secrets in components or env files.
+- `commit-conventions` — canonical commit-message format.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable cross-session decisions.

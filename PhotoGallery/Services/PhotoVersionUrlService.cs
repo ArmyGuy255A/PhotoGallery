@@ -160,8 +160,14 @@ public class PhotoVersionUrlService
     /// <param name="photoId">Photo identifier</param>
     /// <param name="quality">Quality version</param>
     /// <param name="ttlMinutes">URL lifetime in minutes (default 15)</param>
+    /// <param name="watermarked">If true and quality is Medium, returns URL to the watermarked variant.
+    ///   Used for public/guest viewing per D009. Other qualities ignore this flag.</param>
     /// <returns>Pre-signed URL or null if photo/file does not exist</returns>
-    public async Task<string?> GenerateShortLivedUrlAsync(Guid photoId, QualityType quality, int ttlMinutes = 15)
+    public async Task<string?> GenerateShortLivedUrlAsync(
+        Guid photoId,
+        QualityType quality,
+        int ttlMinutes = 15,
+        bool watermarked = false)
     {
         if (ttlMinutes <= 0)
         {
@@ -177,11 +183,31 @@ public class PhotoVersionUrlService
                 return null;
             }
 
-            var storageKey = BuildStorageKey(photo.AlbumId, photoId, quality);
+            // Watermarked variant only exists for Medium quality
+            var useWatermarked = watermarked && quality == QualityType.Medium;
+            var storageKey = useWatermarked
+                ? BuildWatermarkedMediumStorageKey(photo.AlbumId, photoId)
+                : BuildStorageKey(photo.AlbumId, photoId, quality);
 
             var exists = await _storageProvider.ExistsAsync(storageKey);
             if (!exists)
             {
+                if (useWatermarked)
+                {
+                    // Watermarked variant not yet generated — fall back to the unwatermarked Medium.
+                    // This keeps guests from seeing a placeholder in the brief window between
+                    // photo upload and watermark generation.
+                    _logger.LogInformation(
+                        "Watermarked variant not present for photo {PhotoId}; falling back to unwatermarked Medium",
+                        photoId);
+                    var fallbackKey = BuildStorageKey(photo.AlbumId, photoId, quality);
+                    if (!await _storageProvider.ExistsAsync(fallbackKey))
+                    {
+                        _logger.LogWarning("Photo version file not found in storage: {StorageKey}", fallbackKey);
+                        return null;
+                    }
+                    return await _storageProvider.GetUrlAsync(fallbackKey, ttlMinutes);
+                }
                 _logger.LogWarning("Photo version file not found in storage: {StorageKey}", storageKey);
                 return null;
             }
@@ -201,6 +227,14 @@ public class PhotoVersionUrlService
             _logger.LogError(ex, "Error generating short-lived URL for photo {PhotoId} quality {Quality}", photoId, quality);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Storage key for the watermarked Medium variant. Reference: D009.
+    /// </summary>
+    internal static string BuildWatermarkedMediumStorageKey(Guid albumId, Guid photoId)
+    {
+        return $"photogallery/{albumId}/{photoId}/medium-watermarked.jpg";
     }
 
     /// <summary>

@@ -30,9 +30,33 @@ description: |
   - **photogallery-architect-skill** - Validates SOLID/DRY compliance on all code changes
   - **clean-architecture-guide** - Ensures code follows Domain/Infrastructure/Presentation layering
   - **photogallery-auth-skill** - Applies authentication patterns for protected endpoints
+
+  This skill delegates to copilot-dev-team plugin meta-skills for procedural detail: `aspnet-api-recipe` (controller/endpoint scaffolding), `aspnet-tdd-xunit` (test-first workflow), `efcore-migration-safer` (migrations), `clean-architecture-review` (layering), and `solid-dry-principles` (refactor validation). Auto-trigger these when their conditions match.
 ---
 
 # Backend Developer Skill: PhotoGallery ASP.NET Implementation with TDD
+
+## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin provides procedural meta-skills that this skill delegates to. They auto-trigger by description match — you do not need to invoke them explicitly, but their content takes precedence over any duplicated guidance here. If there is a conflict, prefer the meta-skill (it is canonical).
+
+| Phase / situation | MUST consult (auto-trigger) | Consider |
+| --- | --- | --- |
+| Designing test cases / writing xUnit tests | `aspnet-tdd-xunit` | — |
+| Adding a new API endpoint / controller | `aspnet-api-recipe` | — |
+| Adding/altering an EF Core migration | `efcore-migration-safer` | — |
+| Validating SOLID/DRY on production code | `solid-dry-principles`, `clean-architecture-review` | — |
+| Logging in services / handlers | — | `serilog-recipe` |
+| App config / per-environment settings | — | `appsettings-environments`, `settings-api-hot-reload` |
+| Storage / queue / DB provider abstractions | — | `provider-abstraction-pattern`, `blob-provider-abstraction`, `relational-provider-abstraction`, `queue-provider-abstraction` |
+| Multi-implementation construction | — | `factory-pattern-recipe`, `builder-pattern-recipe` |
+
+**Workflow callouts** (where each meta-skill triggers inside this skill's existing phases):
+
+- *→ Step 3 RED phase / Step 4 (write tests) — consult `aspnet-tdd-xunit` for canonical xUnit + WebApplicationFactory patterns.*
+- *→ Step 5 GREEN / Step 6 BLUE / Step 8 SOLID validation — consult `solid-dry-principles` and `clean-architecture-review`.*
+- *→ Phase 6 (API endpoints) — consult `aspnet-api-recipe` for the canonical 6-step endpoint workflow.*
+- *→ Any EF Core migration step — consult `efcore-migration-safer`.*
 
 ## Your Role
 
@@ -109,6 +133,8 @@ Run: `dotnet test PhotoGallery.Tests`
 Result: Tests PASS ✓
 
 ### Step 5: Refactor (BLUE Phase)
+
+*→ consult `solid-dry-principles` and `clean-architecture-review` for architecture validation.*
 
 Improve code quality while keeping tests passing:
 
@@ -412,6 +438,8 @@ public class AlbumService : IAlbumService
 
 ### Step 5: Create EF Migration
 
+*→ consult `efcore-migration-safer` for the canonical migration workflow.*
+
 ```bash
 dotnet ef migrations add InitialAlbumSchema --startup-project PhotoGallery
 dotnet ef database update --startup-project PhotoGallery
@@ -714,6 +742,8 @@ public class ImageProcessingService : IImageProcessor
 
 ## Phase 6: API Endpoints
 
+*→ consult `aspnet-api-recipe` for the canonical controller/endpoint scaffolding workflow.*
+
 ### Albums Controller
 
 ```csharp
@@ -832,3 +862,13 @@ Before committing, verify:
 - **EF Core:** https://learn.microsoft.com/en-us/ef/core/
 - **JWT:** https://tools.ietf.org/html/rfc7519
 - **Related Skills:** clean-architecture-guide, photogallery-architect-skill, photogallery-auth-skill
+
+## Cross-cutting plugin skills (always-on)
+
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — temp/debug/troubleshoot files MUST go in `.copilot/scratch/<task-id>/`, never in the repo root or feature folders.
+- `secret-hygiene` — never commit secrets, connection strings, or tokens. The plugin's `secret-scan` hook pre-checks writes.
+- `commit-conventions` — follow the canonical commit-message format.
+- `branch-strategy-u-prefix` — all work on `u/<actor>/<type>/<scope>` branches; never commit to `main`/`master`/`develop`.
+- `copilot-memory-update` — when a durable cross-session decision is made, update GitHub Copilot personal memory.

@@ -2,9 +2,29 @@
 name: clean-architecture-guide
 description: |
   Clean Architecture principles and patterns guide for PhotoGallery. This skill explains the layered architecture approach—Domain (core business logic), Infrastructure (data access, external services), and Presentation (API endpoints). Use this whenever designing PhotoGallery's overall structure, organizing code into layers, defining domain entities, creating repositories/specifications, or making architectural decisions about where business logic belongs. Covers dependency flows, domain-driven design patterns, and vertical slicing for feature organization. Referenced by yogo-architect skill for architectural compliance checks.
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `clean-architecture-review` (canonical Clean Architecture review checklist, layer rules, dependency direction), `folder-hygiene` (project layout), and `solid-dry-principles` (SOLID + DRY). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # Clean Architecture Guide for PhotoGallery
+
+## Plugin Meta-Skills
+
+This skill is the PhotoGallery-flavored layering guide; the canonical Clean Architecture rules live in the `copilot-dev-team` plugin's `clean-architecture-review` meta-skill. Defer to it on any conflict.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Reviewing layer placement / dependency direction | `clean-architecture-review` | — |
+| Project folder structure questions | `folder-hygiene` | — |
+| SOLID / DRY application within a layer | `solid-dry-principles` | — |
+| Multi-implementation provider design | — | `provider-abstraction-pattern` |
+| Splitting bounded contexts | — | `microservice-decomposition` |
+
+**Workflow callouts:**
+
+- *→ Layer / dependency-flow sections — consult `clean-architecture-review`.*
+- *→ Folder structure / project layout sections — consult `folder-hygiene`.*
+- *→ SOLID enforcement sections — consult `solid-dry-principles`.*
 
 ## What is Clean Architecture?
 
@@ -671,3 +691,11 @@ album.AddPhoto(photo);  // Domain event raised internally
 ---
 
 **Key Takeaway:** Clean Architecture is about creating code that's independent of frameworks, testable, and focused on the domain. Dependencies point inward. The domain is the innermost circle that knows nothing about infrastructure or frameworks.
+
+## Cross-cutting plugin skills (always-on)
+
+- `scratch-discipline` — layering experiments / probes in `.copilot/scratch/<task-id>/`.
+- `secret-hygiene` — no secrets in any layer.
+- `commit-conventions` — canonical commit-message format.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable layering decisions.

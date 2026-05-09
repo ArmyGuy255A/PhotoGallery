@@ -15,9 +15,30 @@ description: |
   - **clean-architecture-guide** - Understands service layer for test mocking
   - **backend-developer-skill** - Collaborates on backend validation
   - **frontend-developer-skill** - Collaborates on frontend validation
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `playwright-bootstrap` (Playwright install/config), `playwright-test-recipe` (canonical e2e + page-object + auth-fixture pattern), `pr-review-checklist` (PR-review gate), `release-notes` (release format), and `project-board-sync` (GitHub Project v2 column sync). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # QA Quality Control Skill: PhotoGallery E2E Testing
+
+## Plugin Meta-Skills
+
+QA work crosses several disciplines (e2e authoring, review hygiene, release management); each is owned by a focused `copilot-dev-team` plugin meta-skill. This skill stays PhotoGallery-specific (which user flows are critical, what counts as a release-blocker); it defers to the plugin meta-skills for the underlying procedures.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Authoring an e2e test | `playwright-test-recipe` | — |
+| First-time Playwright setup | — | `playwright-bootstrap` |
+| Final PR-review / quality gate | `pr-review-checklist` | — |
+| Drafting release notes for a sprint/version | — | `release-notes` |
+| Moving issues across the GitHub Project board | — | `project-board-sync` |
+
+**Workflow callouts:**
+
+- *→ E2E test authoring — consult `playwright-test-recipe` (and `playwright-bootstrap` for first-time setup).*
+- *→ PR / quality-gate sections — consult `pr-review-checklist`.*
+- *→ Release-tagging / sprint-close sections — consult `release-notes`.*
+- *→ Project-board management sections — consult `project-board-sync`.*
 
 ## Your Role
 
@@ -666,3 +687,14 @@ For questions about:
 - **Accessibility Testing:** https://www.w3.org/WAI/test-evaluate/
 - **axe DevTools:** https://www.deque.com/axe/devtools/
 - **Related Skills:** playwright-testing-skill, backend-developer-skill, frontend-developer-skill
+
+
+## Cross-cutting plugin skills (always-on)
+
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — QA probes / repro scripts in .copilot/scratch/<task-id>/.
+- `secret-hygiene` — never hardcode test passwords / tokens in committed e2e specs.
+- `commit-conventions` — canonical commit-message format.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable QA-policy decisions (browser matrix, release criteria).
