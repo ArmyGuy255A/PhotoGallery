@@ -58,6 +58,11 @@ export class GoogleAuthService implements IdentityProvider {
       },
       ux_mode: 'popup',
     });
+    // Logged once at first sign-in attempt so devs can verify the (origin, clientId)
+    // pair against Google Cloud Console's Authorized JavaScript origins list when
+    // the popup fails with "no registered origin".
+    // See Documentation/Architecture/AUTHENTICATION.md → "Still seeing Error 401".
+    console.info(`[GIS init] origin=${window.location.origin} clientId=${clientId}`);
     this.gisInitialized = true;
   }
 

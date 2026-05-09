@@ -212,6 +212,23 @@ The OAuth 2.0 Client used by both frontend (GIS popup) and backend (token exchan
    - Plus production redirect URI
 5. **Save**. Google takes up to ~30 seconds to propagate the new origins; if sign-in still fails, wait and retry before assuming a code bug.
 
+### Still seeing `Error 401: invalid_client — no registered origin`?
+
+Even with the right origin saved, exact-string matching trips people up. Verify all of these:
+
+- [ ] You're editing the **same OAuth client** whose ID the backend serves at `GET /api/config/public`. Run:
+  ```powershell
+  curl http://localhost:5105/api/config/public
+  ```
+  The `googleClientId` returned must match the **Client ID** shown on the OAuth client edit page in Google Console. If they don't match, you're configuring the wrong client.
+- [ ] The registered origin is **exactly** `http://localhost:4300` — no trailing slash, no path, lowercase scheme/host.
+- [ ] Scheme matches: `http://` (not `https://`) for `localhost`. Mixing schemes is a common silent failure.
+- [ ] Port matches what `ng serve` actually bound to. If you see `Port 4300 is already in use` and accept a fallback (e.g. `4301`), the popup will fail because that port isn't registered.
+- [ ] You're testing in a **fresh browser tab / incognito** — Google's GIS SDK aggressively caches the previous origin/client config in some cases.
+- [ ] In the browser DevTools console, `GoogleAuthService` logs `[GIS init] origin=… clientId=…` on first sign-in attempt. The `origin` MUST be one of the registered Authorized JavaScript origins.
+
+If everything above checks out and the error persists, wait 5 minutes (rare propagation delay) before assuming a deeper bug.
+
 ### Why the FE needs JavaScript origins, not just redirect URIs
 
 PhotoGallery uses the **Google Identity Services (GIS) popup flow** in the browser (see `FE.PhotoGallery/src/app/services/auth/providers/google-auth.service.ts`). GIS validates the calling origin against the OAuth client's *Authorized JavaScript origins* list before opening the consent popup. Redirect URIs only apply to server-side authorization-code flows (the legacy `LoginController.GoogleCallback` path).
