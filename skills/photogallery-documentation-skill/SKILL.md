@@ -21,9 +21,26 @@ description: |
   - Create diagrams using Mermaid syntax (no ASCII art)
   - Onboard new team members with complete knowledge base
 
+  This skill delegates to copilot-dev-team plugin meta-skills: `markdown-doc-formatter` (canonical Markdown formatting), `mermaid-diagram-curator` (Mermaid diagram standards), `class-diagram-from-code` / `er-diagram-from-efcore` / `sequence-diagram-recipe` / `data-flow-diagram-security` (the code-first 4-diagram suite), `release-notes` (release-note format), and `epic-and-stories` (epic/story breakdown). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
+
 ---
 
 # PhotoGallery Documentation Skill
+
+## Plugin Meta-Skills
+
+Documentation work is mostly about format consistency; the `copilot-dev-team` plugin owns the canonical formats. This skill stays focused on PhotoGallery-specific docs (Documentation/Architecture/DESIGN_DECISIONS.md, Guides/, etc.); it defers to plugin meta-skills for formatting and diagram patterns.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Writing/formatting any Markdown doc | `markdown-doc-formatter` | — |
+| Adding/updating any Mermaid diagram | `mermaid-diagram-curator` | — |
+| Generating a class diagram from code | — | `class-diagram-from-code` |
+| Generating an ER diagram from EF Core model | — | `er-diagram-from-efcore` |
+| Auth / data-flow sequence diagrams | — | `sequence-diagram-recipe` |
+| Security / accreditation DFDs | — | `data-flow-diagram-security` |
+| Drafting release notes | — | `release-notes` |
+| Decomposing requirements → epics → stories | — | `epic-and-stories` |
 
 ## Your Role
 
@@ -58,6 +75,8 @@ Documentation/
 ## Creating Architecture Documents
 
 ### Design Decision Format
+
+**→ consult `markdown-doc-formatter`** for document formatting conventions.
 
 Every design decision follows this structure:
 
@@ -142,6 +161,8 @@ Design decision states requirement → Write tests to validate requirement
 
 ## Mermaid Diagram Types (Never ASCII Art)
 
+**→ consult `mermaid-diagram-curator`** for diagram format standards and `class-diagram-from-code`, `er-diagram-from-efcore`, `sequence-diagram-recipe`, or `data-flow-diagram-security` for code-first diagram generation.
+
 - **Flowcharts**: System flows, decision trees, processes
 - **Sequence Diagrams**: Request flows, interactions
 - **Class Diagrams**: Object relationships
@@ -162,6 +183,8 @@ sequenceDiagram
 ```
 
 ## Standards
+
+**→ consult `markdown-doc-formatter` and `secret-hygiene`** for content standards.
 
 ### File Naming
 - CamelCase: `DESIGN_DECISIONS.md`, `SYSTEM_ARCHITECTURE.md`
@@ -205,3 +228,12 @@ sequenceDiagram
 > - Decisions are traceable
 
 **This Documentation folder is the project's brain.** Keep it healthy. 🧠
+
+## Cross-cutting plugin skills (always-on)
+
+- `scratch-discipline` — doc drafts / outlines in `.copilot/scratch/<task-id>/` until ready.
+- `secret-hygiene` — no secrets, internal URLs, or PII in committed docs.
+- `commit-conventions` — canonical commit-message format (esp. `docs:` prefix).
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable doc-policy decisions.
+- `markdown-doc-formatter` — applies to every Markdown file in the repo.
