@@ -828,3 +828,64 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
 - `copilot-memory-update` — record durable e2e policy decisions (browser matrix, retries).
+
+
+## PR-Validation Workflow (executor view)
+
+The `pg-qa-quality-control` agent owns the end-to-end PR-validation flow (see `qa-quality-control-skill` for the orchestrator view). This skill / `pg-playwright-tester` agent is the **executor** for Steps 4 (author missing specs) and 5 (run the suite).
+
+> *→ Authoring patterns — consult `playwright-test-recipe` (plugin canonical).*
+> *→ First-time setup — consult `playwright-bootstrap`.*
+
+### Step 4: Author missing specs
+
+After the QA orchestrator hands you a list of user-visible changes (from the PR diff), for each change:
+
+1. **Locate the matching feature** — e.g., a new `AlbumShareDialog` component in FE, a new `POST /api/albums/{id}/share` endpoint in BE.
+2. **Check existing coverage** — search `tests/e2e/` for tests that exercise the affected route or component:
+   ```pwsh
+   Select-String -Path tests/e2e/tests/**/*.spec.ts -Pattern '(AlbumShare|albums/.*/share)'
+   ```
+3. **Author a spec** following the project's page-object conventions (one class per page under `tests/e2e/tests/pages/`, semantic locators preferred, storage-state auth fixture). See `playwright-test-recipe` for the canonical pattern.
+4. **Use `data-testid` only when no semantic locator exists.** If you need one, request the FE change from `pg-angular-coreui-dev` rather than adding it yourself.
+5. **One spec per behavior.** A `share-dialog opens and emits the correct payload` is one test. A `share dialog handles invalid emails` is another test, not a branch in the first.
+
+### Step 5: Run the suite
+
+```pwsh
+Push-Location tests/e2e
+# First run on a fresh checkout / new branch only:
+npx playwright install --with-deps
+# Scoped run for fast feedback:
+npx playwright test --grep "<feature-name>" --reporter=list
+# Full suite before declaring qa-passed:
+npx playwright test --reporter=list,html
+Pop-Location
+```
+
+Capture artifacts:
+- `tests/e2e/playwright-report/index.html` — for the PR comment link.
+- `tests/e2e/test-results/` — traces and screenshots on failure.
+
+### What you hand back to the orchestrator
+
+A structured summary:
+
+```
+{
+  "specsAdded": ["tests/e2e/tests/album-share.spec.ts"],
+  "results": { "passed": 42, "failed": 1, "skipped": 0 },
+  "failures": [
+    { "test": "share dialog > handles invalid emails", "reason": "expected error message not visible", "repro": "npx playwright test album-share --grep 'invalid emails'" }
+  ],
+  "reportPath": "tests/e2e/playwright-report/index.html"
+}
+```
+
+The orchestrator then composes the PR comment (Step 6 in `qa-quality-control-skill`).
+
+### What you don't do
+
+- Don't post the PR comment yourself — that's the orchestrator's job (so the comment is single-source).
+- Don't fix the production code that caused the failure — file the failure summary and hand back.
+- Don't invent stack-state fixtures for new auth flows without coordinating with `pg-aspnet-backend-dev`.

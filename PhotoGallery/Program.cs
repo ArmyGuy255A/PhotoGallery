@@ -1,9 +1,10 @@
+using Authentication;
+using Authentication.Services;
+using Configuration;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
 using PhotoGallery.Data;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Interfaces;
@@ -14,9 +15,12 @@ using PhotoGallery.Services.Email;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
 using Serilog;
-using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Bind strongly-typed configuration first so downstream registrations can use it.
+// Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
+builder.Services.AddConfigurationServices(builder.Configuration, out var settings);
 
 // Configure Serilog
 builder.Host.UseSerilog((context, configuration) =>
@@ -50,52 +54,23 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Configure JWT Bearer authentication
-var jwtKey = builder.Configuration["Authentication:Jwt:Key"];
-if (!string.IsNullOrEmpty(jwtKey))
-{
-    builder.Services.AddAuthentication(options =>
-        {
-            options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
-        })
-        .AddCookie()
-        .AddJwtBearer(options =>
-        {
-            options.TokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-                ValidateIssuer = true,
-                ValidIssuer = builder.Configuration["Authentication:Jwt:Issuer"],
-                ValidateAudience = true,
-                ValidAudience = builder.Configuration["Authentication:Jwt:Audience"],
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.Zero
-            };
-        })
-        .AddGoogle(google =>
-        {
-            google.ClientId = builder.Configuration["Google:ClientId"];
-            google.ClientSecret = builder.Configuration["Google:ClientSecret"];
-        });
-}
-else
-{
-    builder.Services.AddAuthentication(options =>
-        {
-            options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = GoogleDefaults.AuthenticationScheme;
-        })
-        .AddCookie()
-        .AddGoogle(google =>
-        {
-            google.ClientId = builder.Configuration["Google:ClientId"];
-            google.ClientSecret = builder.Configuration["Google:ClientSecret"];
-        });
-}
+// Configure JWT Bearer authentication via the Authentication sub-project.
+// JwtTokenService and the JwtBearer scheme are both registered here.
+// Reference: photogallery-auth-skill — JWT issuance + validation
+builder.Services.AddAuthenticationServices(settings);
 
-builder.Services.AddScoped<JwtTokenService>();
+// Cookie + Google OAuth schemes are still wired here because they're used by the
+// legacy server-side OAuth callback flow (AuthController.Login + GoogleCallback).
+// Once the frontend fully switches to the GIS popup → /api/auth/external-login flow,
+// these can be removed.
+builder.Services.AddAuthentication()
+    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddGoogle(google =>
+    {
+        google.ClientId = settings.Google.ClientId;
+        google.ClientSecret = settings.Google.ClientSecret;
+    });
+
 builder.Services.AddScoped<IExternalAuthService, ExternalAuthService>();
 
 // Register storage provider based on configuration

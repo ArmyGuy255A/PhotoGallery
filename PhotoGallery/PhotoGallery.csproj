@@ -9,6 +9,11 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\Authentication\Authentication.csproj" />
+        <ProjectReference Include="..\Configuration\Configuration.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
         <None Update="app.db" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     </ItemGroup>
 
