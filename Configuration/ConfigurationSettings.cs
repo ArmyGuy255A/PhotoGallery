@@ -19,6 +19,7 @@ public class ConfigurationSettings
     public BlobStorage BlobStorage { get; set; } = new();
     public Email Email { get; set; } = new();
     public PhotoProcessing PhotoProcessing { get; set; } = new();
+    public Frontend Frontend { get; set; } = new();
     public List<string> AdminUsers { get; set; } = new();
     public bool DISABLE_AUTH { get; set; }
     public string AllowedHosts { get; set; } = "*";
@@ -101,4 +102,18 @@ public class AzureCommunicationServices
 public class PhotoProcessing
 {
     public int IntervalSeconds { get; set; } = 5;
+}
+
+/// <summary>
+/// Frontend integration settings. Currently used by the backend's CORS
+/// policy to whitelist the SPA origin without hardcoding it. Configure
+/// via Frontend:Url in appsettings.json or the Frontend__Url env var.
+/// </summary>
+public class Frontend
+{
+    /// <summary>
+    /// Base URL of the SPA. Defaults to the Angular dev server on :4300.
+    /// Override per-environment (e.g. https://photogallery.example.com).
+    /// </summary>
+    public string Url { get; set; } = "http://localhost:4300";
 }

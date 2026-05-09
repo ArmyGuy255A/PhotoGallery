@@ -43,14 +43,19 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 });
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
-// Configure CORS
+// Configure CORS — AllowFrontendDev is scoped to the SPA origin from
+// ConfigurationSettings.Frontend.Url (env var Frontend__Url) and permits
+// credentials so future cookie-based flows Just Work. AllowAnyOrigin is
+// avoided because it's incompatible with AllowCredentials and weakens
+// prod parity. Mirrors VerdantIQ's named-policy pattern.
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("DevelopmentPolicy", cors =>
+    options.AddPolicy("AllowFrontendDev", cors =>
     {
-        cors.AllowAnyOrigin()
+        cors.WithOrigins(settings.Frontend.Url)
+            .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowAnyHeader();
+            .AllowCredentials();
     });
 });
 
@@ -168,7 +173,7 @@ app.UseHttpsRedirection();
 app.UseRouting();
 
 // Enable CORS (before authentication)
-app.UseCors("DevelopmentPolicy");
+app.UseCors("AllowFrontendDev");
 
 // Required by Google Identity Services popup flow:
 // the popup uses window.postMessage back to the opener, which browsers

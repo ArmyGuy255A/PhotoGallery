@@ -248,6 +248,21 @@ PhotoGallery sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` in two 
 
 Additionally, `GoogleAuthService` enables `use_fedcm_for_prompt: true` so modern Chrome uses the FedCM API (no postMessage at all) — defense in depth for environments where the COOP header can't be controlled.
 
+### CORS scoped to the SPA origin
+
+Backend CORS is named `AllowFrontendDev` and scoped to `ConfigurationSettings.Frontend.Url` (env var `Frontend__Url`, or `Frontend:Url` in `appsettings.{Environment}.json`). It permits credentials so future cookie-based flows Just Work. `AllowAnyOrigin` is deliberately avoided — it's incompatible with `AllowCredentials` and weakens prod parity.
+
+```jsonc
+// appsettings.Development.json (gitignored)
+{
+  "Frontend": {
+    "Url": "http://localhost:4300"
+  }
+}
+```
+
+Override per-environment to whitelist the production / staging SPA origin (e.g. `https://photogallery.example.com`).
+
 ## Frontend Integration
 
 ### Login
