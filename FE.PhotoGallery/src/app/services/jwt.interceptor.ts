@@ -6,7 +6,7 @@ import {
   HttpEvent
 } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { AuthService } from './auth.service';
+import { AuthService, TokenType } from './auth.service';
 
 /**
  * HTTP Interceptor that automatically adds JWT token to requests
@@ -19,7 +19,7 @@ export class JwtInterceptor implements HttpInterceptor {
     req: HttpRequest<any>,
     next: HttpHandler
   ): Observable<HttpEvent<any>> {
-    const token = this.authService.getToken();
+    const token = this.authService.getToken(TokenType.AppToken);
 
     if (token) {
       req = req.clone({

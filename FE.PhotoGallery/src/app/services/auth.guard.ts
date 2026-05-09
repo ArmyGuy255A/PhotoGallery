@@ -17,7 +17,7 @@ export const authGuard: CanActivateFn = (
   const router = inject(Router);
   const authService = inject(AuthService);
   
-  const isAuthenticated = authService.isAuthenticated();
+  const isAuthenticated = authService.isAuthenticatedSync();
 
   if (!isAuthenticated) {
     // Redirect to login instead of calling loginWithGoogle
