@@ -59,16 +59,19 @@ export class AuthService {
     if (!provider) throw new Error(`Unknown provider: ${providerType}`);
 
     const idToken = await provider.signIn();
-    return this.signInWithToken(idToken);
+    return this.signInWithToken(idToken, providerType);
   }
 
-  async signInWithToken(token: string): Promise<boolean> {
+  async signInWithToken(token: string, providerType: IdentityProviderType = IdentityProviderType.Google): Promise<boolean> {
     this.setToken(TokenType.IdpToken, token);
     const idpToken = this.getToken(TokenType.IdpToken);
 
     try {
       const result: any = await this.http
-        .post(`${environment.apiUrl}/api/auth/external-login`, { idToken: idpToken })
+        .post(`${environment.apiUrl}/api/auth/external-login`, {
+          provider: providerType,
+          idToken: idpToken
+        })
         .toPromise();
 
       const appToken = result?.token;

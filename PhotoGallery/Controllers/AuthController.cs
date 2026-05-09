@@ -53,6 +53,12 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = "idToken is required." });
         }
 
+        if (string.IsNullOrEmpty(request.Provider))
+        {
+            _logger.LogWarning("ExternalLogin: provider is empty");
+            return BadRequest(new { error = "provider is required." });
+        }
+
         try
         {
             var token = await _externalAuthService.HandleExternalLoginAsync(request.Provider, request.IdToken);
