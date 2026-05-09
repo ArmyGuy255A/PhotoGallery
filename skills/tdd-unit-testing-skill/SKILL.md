@@ -20,11 +20,15 @@ description: |
   **Related skills that depend on this:**
   - **backend-developer** - MUST consult TDD before writing any code
   - **photogallery-architect-skill** - Tests validate SOLID/DRY compliance
+
+  This skill delegates to copilot-dev-team plugin meta-skills: `aspnet-tdd-xunit` (canonical xUnit + WebApplicationFactory workflow, Arrange-Act-Assert, naming, fakes vs mocks) and `solid-dry-principles` (test-design implications of SOLID). Auto-trigger these when their conditions match. The plugin's `aspnet-tdd-xunit` is canonical — prefer it on conflict.
 ---
 
 # Test-Driven Development (TDD) Skill: PhotoGallery Backend Testing
 
 ## Plugin Meta-Skills
+
+The `copilot-dev-team` plugin's `aspnet-tdd-xunit` is the canonical reference for the TDD workflow. This skill stays focused on PhotoGallery-specific test design (Photos, Albums, AccessCodes, Storage abstractions, Image processing); it defers to `aspnet-tdd-xunit` for general xUnit patterns. Plugin meta-skills auto-trigger by description match — prefer them on conflict.
 
 | Phase / situation | MUST consult | Consider |
 | --- | --- | --- |
@@ -34,7 +38,11 @@ description: |
 | Validating that tests cover SOLID compliance | `solid-dry-principles` | — |
 | Test scratch / probe code | — | `scratch-discipline` |
 
-The `copilot-dev-team` plugin's `aspnet-tdd-xunit` is the canonical reference for the TDD workflow. This skill stays focused on PhotoGallery-specific test design (Photos, Albums, AccessCodes, Storage abstractions, Image processing); it defers to `aspnet-tdd-xunit` for general xUnit patterns.
+**Workflow callouts** (where each meta-skill triggers inside this skill's existing phases):
+
+- *→ Phase 1 (Test Design) and Phase 2 (RED) — consult `aspnet-tdd-xunit` for canonical Arrange-Act-Assert, naming, and fixture patterns.*
+- *→ Phase 3 (GREEN) and Phase 4 (REFACTOR) — consult `solid-dry-principles` to ensure refactors don't violate SOLID.*
+- *→ Any DB-touching test — consult `aspnet-tdd-xunit` (DbTestBase patterns) and `efcore-migration-safer` (migration-aware tests).*
 
 ## Core Principle
 
@@ -561,9 +569,12 @@ Tests are your insurance policy:
 
 **Result**: Feature is complete, tested, and follows architecture
 
+
 ## Cross-cutting plugin skills (always-on)
 
-- `scratch-discipline` — probe/spike code in `.copilot/scratch/<task-id>/`, not committed test files.
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — probe/spike code in .copilot/scratch/<task-id>/, not committed test files.
 - `secret-hygiene` — no secrets in test fixtures or appsettings.Test.json.
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.

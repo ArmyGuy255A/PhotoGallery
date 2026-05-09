@@ -24,6 +24,8 @@ description: |
   Do NOT skip this skill—even if you think the code is simple. Better to validate early than find architectural debt later.
   
   **Before your next implementation**, read: `Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md`
+  
+  This skill delegates to copilot-dev-team plugin meta-skills for architectural reviews: `clean-architecture-review` (layer/dependency-flow audit), `solid-dry-principles` (canonical SOLID + DRY rules), `folder-hygiene` (project layout), `mermaid-diagram-curator` (diagram standards), and the four code-first diagram skills (`class-diagram-from-code`, `er-diagram-from-efcore`, `sequence-diagram-recipe`, `data-flow-diagram-security`). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # PhotoGallery Architect Skill
@@ -54,6 +56,23 @@ This skill works as part of a integrated skills ecosystem:
 9. References coreui-expert-skill for UI patterns
 10. Once features complete, QA Quality Control Agent writes E2E tests
 11. Uses playwright-testing-skill to validate workflows
+
+## Plugin Meta-Skills
+
+The architect skill is the gatekeeper, but the procedural detail lives in the `copilot-dev-team` plugin meta-skills. Use this table to know which meta-skill handles which review dimension. The architect's job is to ensure the right meta-skill is consulted, not to duplicate its content.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Reviewing layer / dependency flow | `clean-architecture-review` | — |
+| Validating SOLID/DRY on a change | `solid-dry-principles` | — |
+| Project / folder layout questions | `folder-hygiene` | — |
+| Class structure diagrams | `mermaid-diagram-curator` | `class-diagram-from-code` |
+| EF Core data-model diagrams | `mermaid-diagram-curator` | `er-diagram-from-efcore` |
+| Auth / data flow diagrams | `mermaid-diagram-curator` | `sequence-diagram-recipe` |
+| Security / accreditation DFDs | `mermaid-diagram-curator` | `data-flow-diagram-security` |
+| Multi-implementation provider design | — | `provider-abstraction-pattern`, `blob-provider-abstraction`, `relational-provider-abstraction`, `queue-provider-abstraction` |
+| Splitting a service into a microservice | — | `microservice-decomposition` |
+| Construction patterns | — | `factory-pattern-recipe`, `builder-pattern-recipe` |
 
 ## Your Role
 
@@ -90,6 +109,8 @@ Before reviewing ANY code change:
 4. **Record Design Decision**
    - If new design approved → Update Documentation/Architecture/DESIGN_DECISIONS.md
    - Get user approval → Document it → Then review code
+
+*→ Consult `clean-architecture-review` for layer/dependency-flow audit if reviewing cross-cutting architectural changes.*
 
 ## How to Use This Skill
 
@@ -178,6 +199,8 @@ public class AuthService
 }
 ```
 
+*→ Consult `provider-abstraction-pattern`, `blob-provider-abstraction`, `relational-provider-abstraction`, and `queue-provider-abstraction` for multi-implementation provider design.*
+
 ### 2. Dependency Injection Pattern
 **Convention:** Constructor injection, registered in Program.cs, scoped/singleton lifetime
 
@@ -253,6 +276,8 @@ public async Task MigrateAsync()
 // Entities without configuration scattered everywhere
 // Migrations not auto-applied on startup
 ```
+
+*→ Consult `mermaid-diagram-curator` + `er-diagram-from-efcore` when diagramming data models and entity relationships.*
 
 ### 4. Factory Pattern for Multiple Implementations
 **When to use:** Creating instances of multiple related implementations
@@ -477,6 +502,8 @@ public class AlbumService
 }
 ```
 
+*→ Consult `solid-dry-principles` for comprehensive SOLID and DRY validation rules.*
+
 ## DRY Principle: Pattern Deduplication
 
 ### Don't Duplicate Token Validation Logic
@@ -693,6 +720,8 @@ public async Task CreateAlbum()
 - [ ] Safe default for production?
 - [ ] Development override in appsettings.Development.json?
 
+*→ Consult `folder-hygiene` for detailed project layout and file organization standards.*
+
 ## Questions to Ask During Review
 
 1. **Is there an existing pattern we could reuse?** If implementing feature X, has something similar been done?
@@ -730,6 +759,15 @@ EFFORT: Simple (30 min)
 - **DRY saves time.** Don't duplicate patterns—reuse them.
 - **Patterns are documented here.** Check against them before coding.
 - **Future extensibility matters.** Design for Facebook/Microsoft auth, different storage, new roles.
+
+## Cross-cutting plugin skills (always-on)
+
+- `scratch-discipline` — architecture probe / decision drafts in `.copilot/scratch/<task-id>/`.
+- `secret-hygiene` — no secrets in design docs, diagrams, or decision records.
+- `commit-conventions` — canonical commit-message format.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable cross-session architecture decisions.
+- `markdown-doc-formatter` — formatting standard for any doc this skill produces.
 
 ---
 

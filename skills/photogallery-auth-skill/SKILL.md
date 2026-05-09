@@ -2,11 +2,33 @@
 name: photogallery-auth
 description: |
   Authentication and Authorization expert for PhotoGallery. This skill covers JWT token management, role-based access control (RBAC), OAuth provider integration (Google, Facebook, Microsoft), claims-based authorization, token refresh strategies, and development testing bypass patterns. Use this whenever designing auth services, implementing OAuth flows, managing JWT tokens, handling user roles and permissions, or creating auth bypass mechanisms for testing. Explains how to abstract auth providers so they're swappable, how to integrate with Entity Framework for user persistence, and how to issue tokens for API authentication.
-  
+
   This skill delegates to copilot-dev-team plugin meta-skills: `identity-and-jwt` (JWT issuance/validation), `app-jwt-claims` (claim shape — Administrator/User roles, refresh policy), `identity-providers-recipe` (Google + EntraID + KeyCloak wiring), `aspnet-identity-custom-provider` (ASP.NET Identity custom store), `keycloak-local-dev` (local KeyCloak), and `secret-hygiene` (every secret-touching step). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
 # PhotoGallery Authentication & Authorization Skill
+
+## Plugin Meta-Skills
+
+Authentication has many moving parts; the `copilot-dev-team` plugin breaks them into focused meta-skills. This skill stays PhotoGallery-specific (which IDPs we use, which roles, where session state lives); it defers to the plugin meta-skills for the underlying mechanics.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| JWT issuance / validation / refresh | `identity-and-jwt` | — |
+| Defining/parsing JWT claim shape | `app-jwt-claims` | — |
+| Wiring Google / EntraID / KeyCloak as IDP | `identity-providers-recipe` | — |
+| Custom ASP.NET Identity user/role store | `aspnet-identity-custom-provider` | — |
+| Local KeyCloak for development | `keycloak-local-dev` | — |
+| Any step writing secrets / connection strings / signing keys | `secret-hygiene` | — |
+
+**Workflow callouts:**
+
+- *→ JWT issuance / validation / lifetime sections — consult `identity-and-jwt`.*
+- *→ Claim mapping / role parsing sections — consult `app-jwt-claims`.*
+- *→ IDP wiring sections (Google, EntraID, KeyCloak) — consult `identity-providers-recipe`.*
+- *→ Local-dev KeyCloak section — consult `keycloak-local-dev`.*
+- *→ Custom Identity store section — consult `aspnet-identity-custom-provider`.*
+- *→ Every secret/key/cert section — consult `secret-hygiene`.*
 
 ## Overview
 
@@ -1000,9 +1022,12 @@ public class AuthServiceTests
 
 **Key Takeaway:** PhotoGallery's auth is extensible (new providers), stateless (JWT), and testable (development bypass). Users authenticate externally (OAuth), we persist them internally, and issue tokens for API access.
 
+
 ## Cross-cutting plugin skills (always-on)
 
-- `scratch-discipline` — auth probes / OIDC test apps in `.copilot/scratch/<task-id>/`.
+These copilot-dev-team meta-skills apply regardless of phase:
+
+- `scratch-discipline` — auth probes / OIDC test apps in .copilot/scratch/<task-id>/.
 - `secret-hygiene` — never commit signing keys, client secrets, or tokens. The `secret-scan` hook pre-checks writes.
 - `commit-conventions` — canonical commit-message format.
 - `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
