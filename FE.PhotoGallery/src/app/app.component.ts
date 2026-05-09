@@ -20,17 +20,46 @@ export class AppComponent implements OnInit {
     this.authService.getCurrentUser().subscribe({
       next: (user) => {
         console.log('App init: User authenticated successfully:', user.email);
-        // Token is now stored in localStorage, navigate to dashboard
-        this.router.navigate(['/dashboard']);
+        if (this.isPublicRoute()) {
+          return;
+        }
+        if (this.isRootRoute()) {
+          this.router.navigate(['/dashboard']);
+        }
       },
-      error: (error) => {
-        console.log('App init: Failed to load user (redirecting to login)');
-        // Navigate to login
+      error: () => {
+        console.log('App init: Failed to load user');
+        if (this.isPublicRoute()) {
+          return;
+        }
         this.router.navigate(['/login']);
       },
       complete: () => {
         console.log('App init: Auth initialization complete');
       }
     });
+  }
+
+  private currentUrl(): string {
+    // Router.url may not yet reflect a navigation in progress at bootstrap;
+    // fall back to window.location.pathname when available.
+    const routerUrl = this.router.url || '';
+    if (routerUrl && routerUrl !== '/') {
+      return routerUrl;
+    }
+    if (typeof window !== 'undefined' && window.location) {
+      return window.location.pathname || routerUrl || '/';
+    }
+    return routerUrl || '/';
+  }
+
+  private isPublicRoute(): boolean {
+    const url = this.currentUrl().split('?')[0].split('#')[0];
+    return url === '/login' || url.startsWith('/code/') || url === '/code';
+  }
+
+  private isRootRoute(): boolean {
+    const url = this.currentUrl().split('?')[0].split('#')[0];
+    return url === '/' || url === '' || url === '/index.html';
   }
 }
