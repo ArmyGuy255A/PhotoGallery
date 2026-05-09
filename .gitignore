@@ -208,5 +208,9 @@ playwright-report/
 !appsettings.*.template.json
 !.env.template
 !.env.*.templatetemp/
+
+# Test environment config — no secrets, must ship to CI so Playwright
+# specs can run against ASPNETCORE_ENVIRONMENT=Test (DISABLE_AUTH=true).
+!PhotoGallery/appsettings.Test.json
 PhotoGallery.code-workspace
 *.lscache
