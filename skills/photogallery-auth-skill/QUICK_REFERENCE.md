@@ -4,56 +4,73 @@ One-page cheat sheet for authentication implementation.
 
 ## The Three Auth Layers
 
-| Layer | What | Where | Example |
-|-------|------|-------|---------|
-| **External** | Validate with OAuth provider | Controllers/Auth | GoogleTokenValidator |
-| **Internal** | Store roles in our DB | User entity, claims | User.Role = Admin |
-| **API** | Issue JWT tokens | JwtTokenService | `Bearer eyJhbGc...` |
+| Layer | What | Where (sub-project) | Example |
+|-------|------|---------------------|---------|
+| **External** | Validate id_token from IDP | `Authentication/Classes/` | GoogleTokenValidator |
+| **Internal** | Persist + role assignment | `PhotoGallery/Services/ExternalAuthService.cs` | `UserManager<User>` upsert |
+| **API** | Issue + validate JWT (AppToken) | `Authentication/Classes/JwtTokenService.cs` | `Bearer eyJhbGc...` |
 
-## Auth Flow Diagram
+> The `Authentication` and `Configuration` sub-projects are **cross-cutting concerns** — see the `clean-architecture-guide` skill's *Cross-Cutting Concerns* rule. `PhotoGallery.csproj` references them; they reference nothing PhotoGallery-specific.
+
+## Auth Flow Diagram (GIS popup)
 
 ```
-User                    Backend               Google
-  │                       │                      │
-  ├─ Click "Login" ───────────────────────────→ │
-  │                       │                      │
-  │                       │ ← Token ────────────┤
-  │                       │                      │
-  │ ← Redirect w/ token ──┤                      │
-  │                       │                      │
-  ├─ API call + JWT ──────┤                      │
-  │  Authorization: Bearer JWT                  │
-  │                       │                      │
-  │ ← Response ───────────┤                      │
+Browser                                Backend                       Google
+  │                                       │                             │
+  ├─ click rendered Google button ───────►│                             │
+  │   (google.accounts.id popup opens)    │                             │
+  │                                       │                             │
+  │◄────────── id_token (Google JWT) ───────────────────────────────────┤
+  │                                       │                             │
+  ├─ POST /api/auth/external-login ──────►│                             │
+  │   { provider: "google", idToken }     │ TokenValidatorFactory       │
+  │                                       │   → GoogleTokenValidator    │
+  │                                       │   → ExternalAuthService     │
+  │                                       │       (UserManager upsert)  │
+  │                                       │   → JwtTokenService         │
+  │◄───────── { idpToken, appToken } ─────┤                             │
+  │                                       │                             │
+  │ localStorage: idp_token + app_token   │                             │
+  │                                       │                             │
+  ├─ /api/* + Authorization: Bearer <appToken> ►                        │
 ```
+
+**Refresh:** AppToken expired → AuthService re-POSTs stored `idp_token` to `/api/auth/external-login` → fresh AppToken. No refresh-token table needed. When `idp_token` itself expires → user re-runs the GIS popup.
+
+## Two-Token Model
+
+| Token        | Issued By | Stored As                | Purpose                                                                    |
+| ------------ | --------- | ------------------------ | -------------------------------------------------------------------------- |
+| **IdpToken** | Google    | `localStorage.idp_token` | Refresh credential — replayed to `/api/auth/external-login` for new AppToken |
+| **AppToken** | Our API   | `localStorage.app_token` | `Authorization: Bearer <appToken>` on every `/api/*` request               |
+
+When AppToken expires: re-POST stored IdpToken → new AppToken. When IdpToken expires: user re-runs the GIS popup.
 
 ## Quick Code Patterns
 
-### 1. External Auth (OAuth Callback)
+### 1. External Login (POST /api/auth/external-login)
 
 ```csharp
-[HttpGet("auth/google/callback")]
-public async Task<IActionResult> GoogleCallback(string code)
+// PhotoGallery/Controllers/AuthController.cs
+[HttpPost("external-login")]
+[AllowAnonymous]
+public async Task<IActionResult> ExternalLogin([FromBody] ExternalLoginRequest req)
 {
-    // Validate Google token
-    var googleToken = await ExchangeCodeAsync(code);
-    var validator = new GoogleTokenValidator(config);
-    var claims = await validator.ValidateAsync(googleToken);
-    
-    // Create/update user in DB
-    var user = await _userRepo.GetByEmailAsync(claims["email"]);
-    if (user == null)
-    {
-        user = new User(claims["email"], claims["sub"], "google");
-        user.SetRole(DetermineRole(claims["email"]));
-        await _userRepo.AddAsync(user);
-    }
-    
-    // Issue JWT
-    var jwt = _tokenService.GenerateToken(user);
-    
-    // Return to client
-    return Redirect($"/?token={jwt}");
+    var validator = _validatorFactory.CreateValidator(req.Provider);   // Authentication sub-project
+    var idpInfo   = await validator.ValidateAsync(req.IdToken);        // IdpTokenInfo
+    var user      = await _externalAuthService.GetOrCreateUserAsync(idpInfo);
+    var appToken  = _jwtTokenService.GenerateTokenForUser(user);
+    return Ok(new ExternalLoginResponse { IdpToken = req.IdToken, AppToken = appToken });
+}
+```
+
+```typescript
+// services/auth/auth.service.ts — frontend side
+async exchange(provider: string, idToken: string) {
+  const res = await firstValueFrom(this.http.post<ExternalLoginResponse>(
+    '/api/auth/external-login', { provider, idToken }));
+  localStorage.setItem('idp_token', res.idpToken);
+  localStorage.setItem('app_token', res.appToken);
 }
 ```
 
@@ -119,75 +136,100 @@ public async Task<IActionResult> GetAlbumByCode(string code)
 }
 ```
 
-### 5. Development Bypass
+### 5. DISABLE_AUTH (Test environment only — Playwright)
 
-```json
-// appsettings.Development.json
-{ "DISABLE_AUTH": true }
+```jsonc
+// appsettings.Test.json — Development still uses real Google login
+{ "DisableAuth": true }
 ```
+
+`AddAuthenticationServices(settings)` (in `Authentication/DependencyInjection.cs`) reads `settings.DisableAuth` and registers `DevelopmentAuthHandler` instead of JwtBearer. The handler logs in `testadmin@localhost` automatically.
+
+### 6. Add a New IDP (4-step recipe)
+
+The sub-project + provider-Map design means **zero changes** to existing code. Only 4 additions.
+
+**Backend** (inside `Authentication/`):
 
 ```csharp
-// Program.cs
-if (config.GetValue<bool>("DISABLE_AUTH"))
+// 1. New validator: Authentication/Classes/MicrosoftTokenValidator.cs
+public class MicrosoftTokenValidator : IExternalTokenValidator
 {
-    builder.Services
-        .AddScheme<AuthenticationSchemeOptions, DevelopmentAuthHandler>(
-            "Development", null);
+    public async Task<IdpTokenInfo> ValidateAsync(string token) { /* validate id_token */ }
 }
+
+// 2. One switch case in Authentication/Classes/TokenValidatorFactory.cs
+return provider switch
+{
+    ExternalAuthProvider.Google    => _sp.GetRequiredService<GoogleTokenValidator>(),
+    ExternalAuthProvider.Microsoft => _sp.GetRequiredService<MicrosoftTokenValidator>(),  // NEW
+    _ => throw new NotSupportedException()
+};
+// Also register the new validator in AddAuthenticationServices.
 ```
 
-Custom handler logs in testadmin@localhost automatically (no Google login).
+**Frontend** (inside `services/auth/`):
 
-### 6. Add New OAuth Provider
+```typescript
+// 3. New provider: services/auth/providers/microsoft-auth.service.ts
+@Injectable({ providedIn: 'root' })
+export class MicrosoftAuthService implements IdentityProvider { /* MSAL popup wrapper */ }
 
-```csharp
-// 1. Create validator
-public class FacebookTokenValidator : IExternalTokenValidator
-{
-    public async Task<Dictionary<string, string>> ValidateAsync(string token)
-    {
-        // Verify with Facebook API
-        // Return claims
-    }
-}
-
-// 2. Register in Program.cs
-builder.Services.AddScoped<FacebookTokenValidator>();
-
-// 3. Update factory
-public IExternalTokenValidator CreateValidator(string provider)
-{
-    return provider.ToLower() switch
-    {
-        "google" => google,
-        "facebook" => facebook,  // NEW
-        _ => throw new InvalidOperationException()
-    };
-}
-
-// 4. Done! No changes to existing code
+// 4. One Map entry in services/auth/auth.service.ts
+private readonly providers = new Map<IdentityProviderType, IdentityProvider>([
+  [IdentityProviderType.Google,    inject(GoogleAuthService)],
+  [IdentityProviderType.Microsoft, inject(MicrosoftAuthService)],   // NEW
+]);
 ```
+
+> If a step touches `AuthController`, `ExternalAuthService`, `JwtTokenService`, `Program.cs`, or `LoginComponent` — you've broken the abstraction. Stop and reconsider.
 
 ## Configuration Checklist
 
-```json
+Bind a typed POCO from the **Configuration** sub-project — never read `IConfiguration["..."]` directly in code.
+
+```csharp
+// Configuration/ConfigurationSettings.cs (typed, no magic strings at call sites)
+public sealed class ConfigurationSettings
 {
-  "Auth": {
-    "AdminEmail": "mrdieppa@gmail.com"  // Seeded with Admin role
-  },
-  "Google": {
-    "ClientId": "xxx.apps.googleusercontent.com",
-    "ClientSecret": "xxx",
-    "RedirectUri": "https://localhost:8443/auth/google/callback"
-  },
+    public bool             DisableAuth { get; set; }
+    public AuthSettings     Auth        { get; set; } = new();
+    public GoogleSettings   Google      { get; set; } = new();
+    public JwtSettings      Jwt         { get; set; } = new();
+}
+public sealed class AuthSettings   { public string AdminEmail { get; set; } = ""; }
+public sealed class GoogleSettings { public string ClientId   { get; set; } = ""; }
+public sealed class JwtSettings
+{
+    public string Secret   { get; set; } = "";
+    public string Issuer   { get; set; } = "";
+    public string Audience { get; set; } = "";
+    public int    ExpirationMinutes { get; set; } = 1440;
+}
+```
+
+```csharp
+// Program.cs — pure composition, no inline AddJwtBearer chain
+var settings = builder.Services.AddConfigurationServices(builder.Configuration);
+builder.Services.AddAuthenticationServices(settings);
+```
+
+```jsonc
+// appsettings.json
+{
+  "DisableAuth": false,
+  "Auth":   { "AdminEmail": "mrdieppa@gmail.com" },
+  "Google": { "ClientId":   "xxx.apps.googleusercontent.com" },
   "Jwt": {
-    "Secret": "at-least-32-chars-long",
-    "Issuer": "PhotoGallery",
-    "Audience": "PhotoGalleryClients",
-    "ExpirationMinutes": 1440  // 24 hours
+    "Secret":            "at-least-32-chars-via-user-secrets-or-keyvault",
+    "Issuer":            "PhotoGallery",
+    "Audience":          "PhotoGalleryClients",
+    "ExpirationMinutes": 1440
   }
 }
 ```
+
+> No `Google:ClientSecret` and no `Google:RedirectUri` — the GIS popup flow is **client-initiated**. The backend only needs the public `ClientId` (used as the validator's `Audience`).
 
 ## User Entity
 
@@ -246,7 +288,10 @@ Assert.AreEqual(UserRole.User, user.Role);
 | Allow unlimited role changes | Only admin can change roles (or not at all) |
 | Log sensitive tokens | Don't log JWTs or OAuth tokens |
 | Forget to validate audience | Check audience in token validation |
-| Store JWT in localStorage | Use secure httpOnly cookies if possible |
+| Store JWT in localStorage | Acceptable here (XSS mitigated by CSP); use httpOnly cookies if your threat model requires it |
+| Inline `AddAuthentication().AddJwtBearer(...)` in Program.cs | Use `AddAuthenticationServices(settings)` from the Authentication sub-project |
+| Read `IConfiguration["Jwt:Secret"]` at call sites | Inject typed `ConfigurationSettings` / `JwtSettings` from the Configuration sub-project |
+| Hand-roll a "Sign in with Google" button | Render Google's branded button via `authService.renderProviderButton(...)` |
 | Same secret for all environments | Use unique secret per environment |
 
 ## Claims in JWT
@@ -271,13 +316,13 @@ var hasPermission = User.HasClaim("CanUploadPhotos", "true");
 ## API Request with JWT
 
 ```typescript
-// Angular example
-const token = localStorage.getItem('access_token');
-const headers = new HttpHeaders({
-  'Authorization': `Bearer ${token}`
-});
+// Angular HTTP interceptor (services/auth/...)
+const token = localStorage.getItem('app_token');
+req = req.clone({ setHeaders: { Authorization: `Bearer ${token}` } });
 
-this.http.get('/api/albums', { headers });
+// Login is NEVER `window.location.href = '/auth/google'`. That's the old server-driven
+// flow. Instead, render Google's branded button:
+this.authService.renderProviderButton(IdentityProviderType.Google, 'google-signin-container');
 ```
 
 ```csharp
@@ -291,15 +336,15 @@ public async Task<IActionResult> CreateAlbum()
 }
 ```
 
-## Refresh Token Flow
+## Refresh Flow (no refresh-token table)
 
 ```
-1. Access token expires
-2. Client sends refresh token to /auth/refresh
-3. Server validates refresh token
-4. Server issues new access token
-5. Client uses new token for subsequent requests
-6. (Optional) Rotate refresh token
+1. AppToken expires
+2. AuthService re-POSTs stored idp_token to /api/auth/external-login
+3. Backend re-validates idp_token via TokenValidatorFactory
+4. Backend issues fresh AppToken
+5. localStorage.app_token updated
+6. (When idp_token itself expires) → user re-runs GIS popup
 ```
 
 ## Access Code Validation Flow
