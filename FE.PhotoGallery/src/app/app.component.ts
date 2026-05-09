@@ -22,31 +22,11 @@ export class AppComponent implements OnInit {
       // Already signed in; landing on root forwards to dashboard.
       // Deep links (e.g. /code/:code, /albums/:id) flow through the
       // router and are *not* clobbered by this no-op.
+      return;
     }
-    // Initialize auth state from backend on app startup
-    // This populates the token and user in localStorage so routes work correctly
-    console.log('App init: Attempting to load current user from backend');
-    this.authService.getCurrentUser().subscribe({
-      next: (user) => {
-        console.log('App init: User authenticated successfully:', user.email);
-        if (this.isPublicRoute()) {
-          return;
-        }
-        if (this.isRootRoute()) {
-          this.router.navigate(['/dashboard']);
-        }
-      },
-      error: () => {
-        console.log('App init: Failed to load user');
-        if (this.isPublicRoute()) {
-          return;
-        }
-        this.router.navigate(['/login']);
-      },
-      complete: () => {
-        console.log('App init: Auth initialization complete');
-      }
-    });
+    if (!this.isPublicRoute()) {
+      this.router.navigate(['/login']);
+    }
   }
 
   private currentUrl(): string {

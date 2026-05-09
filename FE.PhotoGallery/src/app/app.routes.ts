@@ -40,14 +40,6 @@ export const routes: Routes = [
     canActivate: [authGuard]
   },
   {
-    // Stub redirect — Slice B will replace with a real component at integration time.
-    path: 'account',
-    redirectTo: '/dashboard'
-  },
-  {
-    // Stub redirect — Slice B will replace with a real component at integration time.
-    path: 'shared-albums',
-    redirectTo: '/dashboard'
     path: 'shared-albums',
     component: SharedAlbumsComponent,
     canActivate: [authGuard]
