@@ -189,6 +189,33 @@ var testUser = new User
 }
 ```
 
+## Google Cloud Console Setup
+
+The OAuth 2.0 Client used by both frontend (GIS popup) and backend (token exchange) **must** have correct **Authorized JavaScript origins** and **Authorized redirect URIs** registered in the Google Cloud Console — otherwise sign-in fails with one of:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Error 400: invalid_request` — *Missing required parameter: client_id* | `Google:ClientId` not set in backend config (FE fetches it from `/api/config/public` at runtime) | Set `Google__ClientId` env var or `Google:ClientId` in `appsettings.Development.json`, restart backend |
+| `Error 401: invalid_client` — *no registered origin* | The browser's origin (e.g. `http://localhost:4200`) is not in the OAuth client's *Authorized JavaScript origins* | Add the origin in Google Cloud Console (steps below); wait ~30s for propagation |
+| `Error 400: redirect_uri_mismatch` | Backend exchanged a code with a `redirect_uri` not in the OAuth client's *Authorized redirect URIs* | Add the exact redirect URI; values must match scheme + host + port + path |
+
+### Configuring the OAuth client
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com/) → **APIs & Services** → **Credentials**
+2. Click your OAuth 2.0 Client ID (the value in `Google:ClientId`)
+3. Under **Authorized JavaScript origins**, add the origins your SPA will load from. For a typical local dev setup:
+   - `http://localhost:4200` (Angular `ng serve`)
+   - `http://localhost:5105` (backend, if it ever serves the SPA itself)
+   - Plus any production / staging origins (`https://yourdomain.com`)
+4. Under **Authorized redirect URIs**, add the backend callback URL(s):
+   - `http://localhost:5105/api/auth/google-callback` (local dev)
+   - Plus production redirect URI
+5. **Save**. Google takes up to ~30 seconds to propagate the new origins; if sign-in still fails, wait and retry before assuming a code bug.
+
+### Why the FE needs JavaScript origins, not just redirect URIs
+
+PhotoGallery uses the **Google Identity Services (GIS) popup flow** in the browser (see `FE.PhotoGallery/src/app/services/auth/providers/google-auth.service.ts`). GIS validates the calling origin against the OAuth client's *Authorized JavaScript origins* list before opening the consent popup. Redirect URIs only apply to server-side authorization-code flows (the legacy `LoginController.GoogleCallback` path).
+
 ## Frontend Integration
 
 ### Login

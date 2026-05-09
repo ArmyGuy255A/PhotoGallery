@@ -43,7 +43,11 @@ export class GoogleAuthService implements IdentityProvider {
     if (this.gisInitialized) return;
     const clientId = this.runtimeConfig.googleClientId;
     if (!clientId) {
-      console.error('GoogleAuthService: googleClientId is empty — check backend Google:ClientId config');
+      console.error(
+        'GoogleAuthService: googleClientId is empty. ' +
+        'Set Google:ClientId in the backend (appsettings or Google__ClientId env var) and restart it. ' +
+        'See Documentation/Architecture/AUTHENTICATION.md → Google Cloud Console Setup.'
+      );
       return;
     }
     google.accounts.id.initialize({
