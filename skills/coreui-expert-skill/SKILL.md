@@ -1,7 +1,7 @@
 ---
 name: coreui-angular
 description: |
-  CoreUI Angular Pro expert for PhotoGallery UI. This skill covers CoreUI Angular Pro components (buttons, cards, modals, forms, tables, alerts, spinners), layout patterns (containers, rows, columns), styling and theming, dashboard design patterns, form validation, and accessibility. Use this whenever building PhotoGallery UI components, creating pages, styling layouts, designing dashboards, building forms, implementing tables or modals, selecting icons from coreui-icons-pro, or ensuring UI consistency. Consult this skill to match CoreUI admin dashboard patterns and maintain consistent styling across the application. Explains how to use CoreUI utilities, responsive design, and component composition.
+  CoreUI Angular Pro expert for PhotoGallery UI. This skill covers CoreUI Angular Pro components (buttons, cards, modals, forms, tables, alerts, spinners), layout patterns (containers, rows, columns), styling and theming, dashboard design patterns, form validation, and accessibility. Use this whenever building PhotoGallery UI components, creating pages, styling layouts, designing dashboards, building forms, implementing tables or modals, selecting icons from coreui-icons-pro, or ensuring UI consistency. Consult this skill to match CoreUI admin dashboard patterns and maintain consistent styling across the application. Explains how to use CoreUI utilities, responsive design, and component composition. This skill delegates to copilot-dev-team plugin meta-skills: `coreui-component-recipe` (canonical CoreUI Pro 5.4 component catalog, theming, Pro-only widgets, forms patterns) and `angular-service-recipe` / `angular-tdd-jasmine` for the surrounding Angular plumbing. Auto-trigger these when their conditions match. The plugin's `coreui-component-recipe` is the canonical reference — prefer it when there's a conflict.
 ---
 
 # CoreUI Angular Pro Expert Guide for PhotoGallery
@@ -19,6 +19,18 @@ CoreUI is a professional UI kit for Angular with pre-built, customizable compone
 - 🌙 **Dark Mode** - Built-in theme support
 
 **PhotoGallery's UI Goal:** Build admin dashboard for album/photo management, inspired by https://coreui.io/demos/angular/5.5/modern/#/dashboard
+
+## Plugin Meta-Skills
+
+`copilot-dev-team`'s `coreui-component-recipe` ships an authoritative reference catalog for CoreUI Pro 5.4 (catalog, forms, theming, Pro-only widgets) and is auto-triggered by description match. Defer to it for component selection and patterns.
+
+| Phase / situation | MUST consult | Consider |
+| --- | --- | --- |
+| Picking a CoreUI Pro component for a feature | `coreui-component-recipe` | — |
+| Theming / SCSS variable customization | `coreui-component-recipe` (theming reference) | — |
+| Building forms with CoreUI inputs/validation | `coreui-component-recipe` (forms reference) | — |
+| Wrapping CoreUI in an Angular service | — | `angular-service-recipe` |
+| Writing specs for a CoreUI-using component | — | `angular-tdd-jasmine` |
 
 ## Installation & Setup
 
