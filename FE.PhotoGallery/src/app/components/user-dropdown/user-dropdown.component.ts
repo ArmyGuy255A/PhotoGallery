@@ -250,10 +250,8 @@ export class UserDropdownComponent implements OnInit, OnDestroy {
 
   signOut(): void {
     this.close();
-    this.authService.logout().subscribe({
-      next: () => { window.location.href = '/login'; },
-      error: () => { window.location.href = '/login'; }
-    });
+    this.authService.logout();
+    window.location.href = '/login';
   }
 
   onAvatarError(): void {
