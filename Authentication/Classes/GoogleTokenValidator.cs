@@ -1,7 +1,8 @@
-﻿using Google.Apis.Auth;
-using PhotoGallery.Interfaces;
+﻿using Authentication.Enums;
+using Authentication.Interfaces;
+using Google.Apis.Auth;
 
-namespace PhotoGallery.Classes;
+namespace Authentication.Classes;
 
 public class GoogleTokenValidator : IExternalTokenValidator
 {
@@ -9,9 +10,9 @@ public class GoogleTokenValidator : IExternalTokenValidator
     {
         ExternalUserInfo userInfo = new ExternalUserInfo
         {
-            Provider = Enums.ExternalAuthProvider.Google
+            Provider = ExternalAuthProvider.Google
         };
-        
+
         GoogleJsonWebSignature.Payload payload;
         try
         {
@@ -22,23 +23,23 @@ public class GoogleTokenValidator : IExternalTokenValidator
             userInfo.Error = ex.Message;
             return userInfo;
         }
-        
+
         if (payload == null)
         {
             userInfo.Error = "Invalid token";
             return userInfo;
         }
-        
+
         if (string.IsNullOrEmpty(payload.Email))
         {
             userInfo.Error = "Invalid email";
         }
-        
+
         if (string.IsNullOrEmpty(payload.Name))
         {
             userInfo.Error = "Invalid name";
         }
-        
+
         userInfo.Email = payload.Email;
         userInfo.Name = payload.Name;
         userInfo.Picture = payload.Picture;

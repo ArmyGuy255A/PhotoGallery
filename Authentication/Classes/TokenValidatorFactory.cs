@@ -1,6 +1,7 @@
-﻿using PhotoGallery.Interfaces;
+﻿using Authentication.Enums;
+using Authentication.Interfaces;
 
-namespace PhotoGallery.Classes;
+namespace Authentication.Classes;
 
 public class TokenValidatorFactory
 {
@@ -10,20 +11,20 @@ public class TokenValidatorFactory
         {
             throw new ArgumentNullException(nameof(provider), "Provider cannot be null or empty");
         }
-        if (!Enum.TryParse(provider, out Enums.ExternalAuthProvider authProvider))
+        if (!Enum.TryParse(provider, ignoreCase: true, out ExternalAuthProvider authProvider))
         {
             throw new ArgumentException($"Invalid provider: {provider}", nameof(provider));
         }
-        if (!Enum.IsDefined(typeof(Enums.ExternalAuthProvider), authProvider))
+        if (!Enum.IsDefined(typeof(ExternalAuthProvider), authProvider))
         {
             throw new ArgumentOutOfRangeException(nameof(provider), $"Provider {provider} is not supported");
         }
-        
+
         return authProvider switch
         {
-            Enums.ExternalAuthProvider.Google => new GoogleTokenValidator(),
-            // Enums.ExternalAuthProvider.Facebook => new FacebookTokenValidator(),
-            // Enums.ExternalAuthProvider.Microsoft => new MicrosoftTokenValidator(),
+            ExternalAuthProvider.Google => new GoogleTokenValidator(),
+            // ExternalAuthProvider.Facebook => new FacebookTokenValidator(),
+            // ExternalAuthProvider.Microsoft => new MicrosoftTokenValidator(),
             _ => throw new NotImplementedException($"No validator implemented for {provider}")
         };
     }

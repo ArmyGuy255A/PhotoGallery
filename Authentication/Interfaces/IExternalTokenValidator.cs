@@ -1,6 +1,6 @@
-﻿using PhotoGallery.Classes;
+﻿using Authentication.Classes;
 
-namespace PhotoGallery.Interfaces;
+namespace Authentication.Interfaces;
 
 public interface IExternalTokenValidator
 {
