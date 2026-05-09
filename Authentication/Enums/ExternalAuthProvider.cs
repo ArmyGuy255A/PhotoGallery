@@ -1,4 +1,4 @@
-﻿namespace PhotoGallery.Enums;
+﻿namespace Authentication.Enums;
 
 public enum ExternalAuthProvider
 {

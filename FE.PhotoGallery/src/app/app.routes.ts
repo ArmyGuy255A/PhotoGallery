@@ -45,6 +45,11 @@ export const routes: Routes = [
     canActivate: [authGuard]
   },
   {
+    // Stub redirect — future EPIC will add a real Account Settings page.
+    path: 'account',
+    redirectTo: '/dashboard'
+  },
+  {
     path: '',
     component: DashboardComponent,
     canActivate: [authGuard]

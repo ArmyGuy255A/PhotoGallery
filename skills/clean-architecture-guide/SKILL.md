@@ -2,7 +2,7 @@
 name: clean-architecture-guide
 description: |
   Clean Architecture principles and patterns guide for PhotoGallery. This skill explains the layered architecture approach—Domain (core business logic), Infrastructure (data access, external services), and Presentation (API endpoints). Use this whenever designing PhotoGallery's overall structure, organizing code into layers, defining domain entities, creating repositories/specifications, or making architectural decisions about where business logic belongs. Covers dependency flows, domain-driven design patterns, and vertical slicing for feature organization. Referenced by yogo-architect skill for architectural compliance checks.
-  
+
   This skill delegates to copilot-dev-team plugin meta-skills: `clean-architecture-review` (canonical Clean Architecture review checklist, layer rules, dependency direction), `folder-hygiene` (project layout), and `solid-dry-principles` (SOLID + DRY). Auto-trigger these when their conditions match. Plugin meta-skills are canonical — prefer them on conflict.
 ---
 
@@ -19,6 +19,12 @@ This skill is the PhotoGallery-flavored layering guide; the canonical Clean Arch
 | SOLID / DRY application within a layer | `solid-dry-principles` | — |
 | Multi-implementation provider design | — | `provider-abstraction-pattern` |
 | Splitting bounded contexts | — | `microservice-decomposition` |
+
+**Workflow callouts:**
+
+- *→ Layer / dependency-flow sections — consult `clean-architecture-review`.*
+- *→ Folder structure / project layout sections — consult `folder-hygiene`.*
+- *→ SOLID enforcement sections — consult `solid-dry-principles`.*
 
 ## What is Clean Architecture?
 
@@ -246,6 +252,133 @@ Domain → Infrastructure → Database
 Presentation → Infrastructure → Domain
 Infrastructure implements Domain interfaces
 ```
+
+## Cross-Cutting Concerns Live in Sub-Projects
+
+*→ consult `folder-hygiene` for project-layout enforcement; consult `clean-architecture-review` for dependency-direction validation across project boundaries*
+
+### The Rule
+
+**Cross-cutting infrastructure concerns live in their own `.csproj` sub-project, not inline in the main web app project.**
+
+A *cross-cutting concern* is reusable infrastructure that doesn't belong to any single feature or domain — it's used by many features and has no opinion about what those features do. Compare to *domain concerns* (Photos, Albums, AccessCodes, Users), which belong to PhotoGallery itself.
+
+This mirrors the pattern adopted by VerdantIQ and was rolled into PhotoGallery alongside the `Authentication` and `Configuration` sub-projects.
+
+### What Counts as Cross-Cutting
+
+| Concern | Status | Project |
+| --- | --- | --- |
+| Authentication (token validators, JWT issuance) | ✅ Extracted | `Authentication.csproj` |
+| Configuration (typed settings POCO + `IOptions` binding) | ✅ Extracted | `Configuration.csproj` |
+| Storage (`IStorageProvider`, MinIO + Azure impls) | 🔄 Future candidate | currently inline in `PhotoGallery/Infrastructure/Storage/` |
+| Email (`IEmailService`, Mock + Azure Communication Services impls) | 🔄 Future candidate | currently inline |
+| Logging (Serilog wiring) | 🔄 Future candidate | currently inline |
+
+**Domain concerns are NOT cross-cutting.** Photos, Albums, AccessCodes, and Users belong to the PhotoGallery web app. Eventually we may extract them into a `Domain.csproj`, but that is a *separate* decision and out of scope for this rule.
+
+### The Five Rules
+
+1. **Bare project names.** Project named after the concern, with no `PhotoGallery.` prefix. Examples: `Authentication`, `Configuration`, future `Storage`, `Email`. Matches VerdantIQ. Set `<RootNamespace>` and `<AssemblyName>` in the csproj to the bare name.
+
+2. **Fixed substructure.** Each cross-cutting project uses these directories where applicable:
+   - `Classes/` — concrete types (validators, factories, DTOs)
+   - `Enums/` — enum types
+   - `Helpers/` — pure static utilities
+   - `Interfaces/` — public-facing contracts
+   - `Services/` — DI-registered services
+   - `DependencyInjection.cs` (file at project root) — exposes ONE `AddXyzServices()` extension method
+
+3. **Single registration entry point.** The web app's `Program.cs` calls only `services.AddXyzServices()`. Never wire individual services from a cross-cutting project inline in `Program.cs`.
+
+4. **No back-references.** Cross-cutting projects MAY depend on each other (e.g., `Authentication` references `Configuration`) but **MUST NOT** depend on the web app project. The arrow is one-way and compile-enforced.
+
+5. **Typed configuration.** Inside services, prefer `IOptions<ConfigurationSettings>` (from the `Configuration` project) over `IConfiguration["..."]` magic strings. The web app may still use `IConfiguration` directly during startup — it's available on `WebApplicationBuilder` — but service classes should take typed options.
+
+### Fixed Substructure (Example: `Authentication/`)
+
+```
+Authentication/                          # bare project name, no prefix
+├── Authentication.csproj                # <RootNamespace>Authentication</RootNamespace>
+├── DependencyInjection.cs               # public static AddAuthenticationServices(this IServiceCollection)
+├── Classes/
+│   ├── JwtTokenValidator.cs
+│   └── GoogleTokenValidator.cs
+├── Enums/
+│   └── TokenSource.cs
+├── Helpers/
+│   └── ClaimsPrincipalExtensions.cs
+├── Interfaces/
+│   ├── ITokenIssuer.cs
+│   └── ITokenValidator.cs
+└── Services/
+    ├── JwtTokenIssuer.cs
+    └── GoogleAuthService.cs
+```
+
+`DependencyInjection.cs` is the **only** public entry point the web app touches:
+
+```csharp
+// Authentication/DependencyInjection.cs
+namespace Authentication;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddAuthenticationServices(this IServiceCollection services)
+    {
+        services.AddScoped<ITokenValidator, JwtTokenValidator>();
+        services.AddScoped<ITokenIssuer, JwtTokenIssuer>();
+        services.AddScoped<GoogleAuthService>();
+        return services;
+    }
+}
+```
+
+```csharp
+// PhotoGallery/Program.cs
+builder.Services
+    .AddConfigurationServices(builder.Configuration)
+    .AddAuthenticationServices();
+// ↑ that's it. No individual auth services wired inline.
+```
+
+### Dependency Graph
+
+```
+Configuration                ← depends on nothing (root of the graph)
+     ↑
+Authentication               ← may depend on Configuration
+     ↑
+PhotoGallery (web app)       ← references both
+     ↑
+PhotoGallery.Tests           ← references PhotoGallery (and the cross-cutting projects transitively)
+```
+
+The arrow points **toward** the dependency. Cross-cutting projects never point at PhotoGallery — that's the whole point. If you find yourself wanting `Authentication` to call into a PhotoGallery type, the type belongs in a cross-cutting project (or a future `Domain.csproj`), not in the web app.
+
+### How to Add a New Cross-Cutting Concern (8-Step Recipe)
+
+1. `dotnet new classlib -n <Name> -o <Name> --framework net9.0`
+2. Set `<RootNamespace>` and `<AssemblyName>` in the csproj to the **bare** name (no `PhotoGallery.` prefix).
+3. Add internal substructure: `Classes/`, `Enums/`, `Helpers/`, `Interfaces/`, `Services/` (omit any directory you don't yet need).
+4. Add `DependencyInjection.cs` at the project root with a `public static IServiceCollection AddXyzServices(this IServiceCollection)` extension method.
+5. `dotnet sln PhotoGallery.sln add <Name>/<Name>.csproj`
+6. Add a `<ProjectReference>` to `PhotoGallery.csproj` (and `PhotoGallery.Tests.csproj` if tests need it).
+7. Update `Dockerfile.backend` with the new `COPY <Name>/<Name>.csproj <Name>/` line so layer caching works during `dotnet restore`.
+8. In `Program.cs`, call `services.AddXyzServices()` once. Done.
+
+### Anti-Patterns to Avoid
+
+| ❌ Anti-pattern | ✅ Do this instead |
+| --- | --- |
+| Putting JWT validation in `PhotoGallery/Services/AuthService.cs` | Put it in `Authentication/Services/` — compile-enforces no leakage |
+| `PhotoGallery.Authentication` as the project name | Bare `Authentication` (matches VerdantIQ) |
+| `Program.cs` calls `services.AddScoped<ITokenIssuer, JwtTokenIssuer>()` | `Program.cs` calls `services.AddAuthenticationServices()` only |
+| `Authentication` references `PhotoGallery` "just to grab a User type" | The User type belongs in a cross-cutting or domain project, not the web app |
+| Service reads `_config["Jwt:Issuer"]` via `IConfiguration` | Service takes `IOptions<ConfigurationSettings>` from `Configuration.csproj` |
+| Mixing `Configuration/` (cross-cutting project) with `appsettings.json` (web-app file) in conversation | They are different things: the project owns *types*; `appsettings.json` owns *values* |
+
+> **Why "bare names" matter.** When you read `using Authentication;` in a service, it reads as a concept ("this service uses authentication"). When you read `using PhotoGallery.Authentication;`, the namespace is asserting auth is *part of* PhotoGallery — which is exactly the coupling we're trying to break. Bare names make the cross-cutting nature explicit.
 
 ## How to Organize Code
 
@@ -691,3 +824,11 @@ album.AddPhoto(photo);  // Domain event raised internally
 ---
 
 **Key Takeaway:** Clean Architecture is about creating code that's independent of frameworks, testable, and focused on the domain. Dependencies point inward. The domain is the innermost circle that knows nothing about infrastructure or frameworks.
+
+## Cross-cutting plugin skills (always-on)
+
+- `scratch-discipline` — layering experiments / probes in `.copilot/scratch/<task-id>/`.
+- `secret-hygiene` — no secrets in any layer.
+- `commit-conventions` — canonical commit-message format.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `copilot-memory-update` — record durable layering decisions.

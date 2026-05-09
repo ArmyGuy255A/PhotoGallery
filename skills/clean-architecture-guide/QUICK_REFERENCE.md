@@ -34,6 +34,46 @@ PhotoGallery/
     └── Filters/
 ```
 
+## Cross-Cutting Sub-Project Pattern
+
+**Rule:** Cross-cutting infrastructure concerns live in their own `.csproj` sub-project (bare name, no `PhotoGallery.` prefix), not inline in the web app.
+
+**Currently extracted:** `Authentication`, `Configuration`. **Future candidates:** `Storage`, `Email`, `Logging`. **Not cross-cutting:** Photos, Albums, AccessCodes, Users (those belong to PhotoGallery).
+
+### Fixed Substructure
+
+```
+<Name>/                         # bare project name (e.g. Authentication)
+├── <Name>.csproj               # <RootNamespace>=<Name>
+├── DependencyInjection.cs      # public static AddXyzServices() ext method
+├── Classes/                    # concrete types (validators, factories, DTOs)
+├── Enums/                      # enum types
+├── Helpers/                    # pure static utilities
+├── Interfaces/                 # public-facing contracts
+└── Services/                   # DI-registered services
+```
+
+### Adding a Cross-Cutting Concern (8 Steps)
+
+```
+1. dotnet new classlib -n <Name> -o <Name> --framework net9.0
+2. Set <RootNamespace> and <AssemblyName> in csproj to bare name
+3. Add internal substructure: Classes/, Enums/, Helpers/, Interfaces/, Services/
+4. Add DependencyInjection.cs with public static AddXyzServices() ext method
+5. dotnet sln PhotoGallery.sln add <Name>/<Name>.csproj
+6. Add <ProjectReference> in PhotoGallery.csproj (and optionally PhotoGallery.Tests.csproj)
+7. Update Dockerfile.backend with the new COPY for restore caching
+8. Program.cs calls services.AddXyzServices() once — done
+```
+
+### Dependency Arrow
+
+```
+Configuration ← Authentication ← PhotoGallery ← PhotoGallery.Tests
+```
+
+Cross-cutting projects never reference back into PhotoGallery (compile-enforced).
+
 ## Code Patterns
 
 ### Repository Pattern
@@ -262,6 +302,10 @@ public class AlbumRepositoryTests
 - [ ] Each entity has meaningful behavior (not just properties)?
 - [ ] Dependency injection configured in Program.cs?
 - [ ] Tests can run without database for domain logic?
+- [ ] Cross-cutting concerns live in their own sub-project (not inline in PhotoGallery/)?
+- [ ] Sub-projects expose only via `AddXyzServices()` extension method?
+- [ ] Typed `IOptions<ConfigurationSettings>` instead of `IConfiguration["..."]` reads in services?
+- [ ] Cross-cutting projects don't reference back into PhotoGallery (compile-enforced)?
 
 ## Key Principles
 

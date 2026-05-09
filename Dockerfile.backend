@@ -2,12 +2,17 @@
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
-# Copy project file from the PhotoGallery subdirectory and restore.
-# The build context is the repo root (see docker-compose.yml).
+# Copy ALL project files first so `dotnet restore` can resolve the project graph.
+# Cross-cutting concerns (Authentication, Configuration) live in their own
+# class library projects per clean-architecture-guide skill.
+COPY Configuration/Configuration.csproj Configuration/
+COPY Authentication/Authentication.csproj Authentication/
 COPY PhotoGallery/PhotoGallery.csproj PhotoGallery/
 RUN dotnet restore PhotoGallery/PhotoGallery.csproj
 
-# Copy the rest of the source tree
+# Copy source for all projects in the dependency graph
+COPY Configuration/ Configuration/
+COPY Authentication/ Authentication/
 COPY PhotoGallery/ PhotoGallery/
 
 WORKDIR /src/PhotoGallery

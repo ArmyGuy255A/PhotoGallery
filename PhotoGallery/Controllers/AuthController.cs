@@ -1,14 +1,12 @@
 ﻿using System.Security.Claims;
-using Google.Apis.Auth;
+using Authentication.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using PhotoGallery.Classes;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
-using PhotoGallery.Services;
 
 namespace PhotoGallery.Controllers;
 
@@ -19,21 +17,18 @@ public class AuthController : ControllerBase
     private readonly UserManager<User> _userManager;
     private readonly SignInManager<User> _signInManager;
     private readonly JwtTokenService _tokenService;
-    private readonly IConfiguration _configuration;
     private readonly IExternalAuthService _externalAuthService;
     private readonly ILogger<AuthController> _logger;
 
     public AuthController(
         UserManager<User> userManager,
         JwtTokenService tokenService,
-        IConfiguration configuration,
         IExternalAuthService externalAuthService,
         SignInManager<User> signInManager,
         ILogger<AuthController> logger)
     {
         _userManager = userManager;
         _tokenService = tokenService;
-        _configuration = configuration;
         _externalAuthService = externalAuthService;
         _signInManager = signInManager;
         _logger = logger;
@@ -161,9 +156,10 @@ public class AuthController : ControllerBase
         }
 
         var roles = await _userManager.GetRolesAsync(user);
-        
-        // Generate a JWT token for this request
-        var token = await _tokenService.GenerateTokenAsync(user);
+
+        // Generate a JWT token for this request — JwtTokenService lives in the
+        // Authentication sub-project and only takes primitives, not the User entity.
+        var token = _tokenService.GenerateTokenForUser(user.Id, user.Email ?? string.Empty, roles);
 
         return Ok(new
         {
@@ -198,7 +194,8 @@ public class AuthController : ControllerBase
             return NotFound();
         }
 
-        var token = await _tokenService.GenerateTokenAsync(user);
+        var roles = await _userManager.GetRolesAsync(user);
+        var token = _tokenService.GenerateTokenForUser(user.Id, user.Email ?? string.Empty, roles);
         return Ok(new { token });
     }
 }

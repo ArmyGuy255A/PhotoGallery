@@ -23,6 +23,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<PhotoVersionUrl> PhotoVersionUrls { get; set; }
     public DbSet<Download> Downloads { get; set; }
     public DbSet<SavedAccessCode> SavedAccessCodes { get; set; }
+    public DbSet<AuditLogEntry> AuditLogEntries { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {

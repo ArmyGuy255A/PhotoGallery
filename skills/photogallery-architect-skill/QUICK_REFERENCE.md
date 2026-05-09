@@ -130,6 +130,8 @@ var issuer = config["Auth:Jwt:Issuer"];
 - [ ] Registered in Program.cs?
 - [ ] Single responsibility?
 - [ ] Dependencies injected?
+- [ ] If this is a cross-cutting concern (auth/config/storage/email/logging), is it in its own sub-project?
+- [ ] Does it use IOptions<ConfigurationSettings> instead of IConfiguration["..."] magic strings?
 
 ### Controllers
 - [ ] Extends BaseApiController?
@@ -149,6 +151,8 @@ var issuer = config["Auth:Jwt:Issuer"];
 - [ ] Properly namespaced?
 - [ ] Safe production default?
 - [ ] Dev override in appsettings.Development.json?
+- [ ] Settings consumed via typed IOptions<ConfigurationSettings>?
+- [ ] If startup-only access, IConfiguration is OK (e.g., choosing storage provider in Program.cs)
 
 ## Review Template
 
@@ -206,6 +210,25 @@ Estimated Effort: [trivial/simple/moderate/significant]
 4. Create migration: `dotnet ef migrations add [Name]`
 5. Seed in initializer if needed
 6. Done! Migration auto-runs
+
+### Adding a Cross-Cutting Concern (Auth, Storage, Email, Logging, Config)
+
+When the new concern is **infrastructure shared across features**, NOT a domain entity:
+
+1. `dotnet new classlib -n <Name> -o <Name> --framework net9.0`
+2. Set `<RootNamespace>` and `<AssemblyName>` to bare name (no PhotoGallery. prefix)
+3. Internal substructure: `Classes/`, `Enums/`, `Helpers/`, `Interfaces/`, `Services/`
+4. Add `DependencyInjection.cs` at project root with `public static AddXyzServices()` ext method
+5. `dotnet sln PhotoGallery.sln add <Name>/<Name>.csproj`
+6. Add `<ProjectReference>` in `PhotoGallery.csproj`
+7. Update `Dockerfile.backend` with COPY for the new project (restore caching)
+8. `Program.cs` calls `services.AddXyzServices()` once — done
+
+**Examples already extracted:** `Authentication`, `Configuration`
+**Future candidates:** `Storage`, `Email`, `Logging`
+**NOT cross-cutting:** Photos, Albums, AccessCodes, Users (these are domain — stay in PhotoGallery)
+
+Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
 
 ## Remember
 
