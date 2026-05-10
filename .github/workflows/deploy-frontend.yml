@@ -1,0 +1,57 @@
+name: Deploy Frontend (Azure Static Web Apps)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'FE.PhotoGallery/**'
+      - '.github/workflows/deploy-frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build_and_deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          lfs: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: FE.PhotoGallery/package-lock.json
+
+      - name: Install dependencies
+        working-directory: FE.PhotoGallery
+        run: npm ci
+
+      - name: Build (production)
+        working-directory: FE.PhotoGallery
+        run: npm run build -- --configuration=production
+
+      # Azure SWA action runs from repo root. It will skip its own build
+      # because we point app_artifact_location at the already-built browser
+      # bundle. app_build_command is left empty for the same reason.
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: 'FE.PhotoGallery'
+          # Angular 19 application builder emits to <outputPath>/browser.
+          # outputPath in angular.json is 'dist/fe.photo-gallery', so the
+          # final folder containing index.html is dist/fe.photo-gallery/browser.
+          output_location: 'dist/fe.photo-gallery/browser'
+          app_build_command: ''
+          skip_app_build: true

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/staticwebapp.config.json",
+  "//": "MVP approach: direct cross-origin calls from SWA -> ACA backend.",
+  "//1": "Backend CORS allows this SWA host. We do NOT use SWA's reverse-proxy",
+  "//2": "for /api/* because auth is JWT-bearer (no cookies) and the simpler",
+  "//3": "path is fewer moving parts. Revisit if we add cookie-based auth.",
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/assets/*",
+      "/*.{css,js,ico,png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,map,json,txt}"
+    ]
+  },
+  "routes": [
+    {
+      "route": "/index.html",
+      "headers": {
+        "cache-control": "no-cache, no-store, must-revalidate"
+      }
+    }
+  ],
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  },
+  "mimeTypes": {
+    ".json": "application/json",
+    ".webp": "image/webp"
+  },
+  "responseOverrides": {
+    "404": {
+      "rewrite": "/index.html",
+      "statusCode": 200
+    }
+  }
+}
