@@ -968,6 +968,113 @@ Backend logs one `Download` analytics row per item the manifest returned (URL is
 
 ---
 
+## D011: Azure Dev Footprint — AAD-Only Auth, User-Delegation SAS, Key Vault Config
+
+**Status**: Approved · **Date**: 2026-05-10 · **Owner**: pg-platform-engineer
+
+### Context
+
+Before deploying PhotoGallery to Azure App Service / AKS, the team wants to
+exercise the storage / database / secrets abstractions against the real Azure
+data plane while still running the app from a developer laptop. The dev
+footprint must be cheap (~$15-20/mo), reproducible via Terraform, and use
+**no static secrets on disk**.
+
+### Decision
+
+Provision a minimal dev footprint via `terraform/dev/`:
+
+| Resource | SKU | Why |
+|----------|-----|-----|
+| Storage Account | Standard_LRS, Hot, StorageV2 | Cheap; no GRS for dev. Account keys **disabled** (`shared_access_key_enabled = false`). |
+| Blob container `photogallery` | private | All access via user-delegation SAS. |
+| Azure SQL Server + DB | S0 (10 DTU, 250 GB cap, 10 GB allocated) | Basic was rejected (2 GB, awkward AAD ergonomics). |
+| Key Vault | Standard, **RBAC mode** | Modern; managed identities + AAD groups instead of legacy access policies. |
+| Log Analytics + App Insights | PerGB2018, workspace-based | Free at dev volume. Future-proofs Serilog → AI sink. |
+
+Auth model — **everything goes through `DefaultAzureCredential`**:
+
+1. **Storage**: dev principal gets `Storage Blob Data Contributor` +
+   `Storage Blob Delegator`. The app issues **user-delegation SAS** for
+   client-readable photo URLs. **Account-key SAS is rejected**: it requires
+   us to read the account key (we've disabled that), it can't be revoked
+   per-token, and it doesn't work with managed identity in prod — so the dev
+   path would diverge from the prod path. User-delegation SAS works
+   identically locally (via `az login`) and in App Service (via Workload
+   Identity).
+2. **SQL**: AAD-only authentication (`azuread_authentication_only = true`).
+   SQL admin login is disabled. Connection string uses
+   `Authentication=Active Directory Default`, which `DefaultAzureCredential`
+   resolves from `az login`. Firewall = Azure-services rule + single dev IP.
+3. **Key Vault**: dev principal gets `Key Vault Secrets User` +
+   `Key Vault Secrets Officer`. App pulls all secrets at startup via
+   `AddAzureKeyVault(uri, new DefaultAzureCredential())`.
+
+Secret-naming convention in Key Vault uses `--` as the path separator
+(ASP.NET Core's KV config provider maps `--` → `:`):
+
+```
+Sql--ConnectionString          → Sql:ConnectionString
+Storage--AccountName           → Storage:AccountName
+Storage--BlobEndpoint          → Storage:BlobEndpoint
+Storage--ContainerName         → Storage:ContainerName
+Auth--Google--ClientId         → Auth:Google:ClientId
+Auth--Google--ClientSecret     → Auth:Google:ClientSecret
+Auth--Jwt--SigningKey          → Auth:Jwt:SigningKey
+Acs--ConnectionString          → Acs:ConnectionString
+```
+
+State backend: a separate, manually-bootstrapped `rg-photogallery-tfstate`
+resource group with a versioned, soft-delete-enabled Storage Account holding
+the `tfstate` container. Bootstrap is a PowerShell script
+(`terraform/bootstrap/bootstrap-state.ps1`), not Terraform — chicken-and-egg.
+Backend uses `use_azuread_auth = true`, so even Terraform itself doesn't read
+storage keys.
+
+### Consequences
+
+**Positive**
+
+- Local dev path matches future prod path (managed identity → AAD → resources).
+  No "works on my machine because I have the account key" surprises.
+- Zero connection strings, account keys, or shared secrets in source control,
+  appsettings, or env vars.
+- Modules in `terraform/modules/{storage,sql,keyvault,observability}` are
+  reusable for `terraform/prod/` later — only SKUs and network posture differ.
+
+**Negative / follow-ups**
+
+- The current `PhotoGallery/Services/Storage/AzureStorageProvider.cs` reads a
+  connection string and uses `BlobClient.GenerateSasUri(...)`, which produces
+  an **account-key SAS**. This is incompatible with our
+  `shared_access_key_enabled = false` decision. **Backend follow-up**:
+  refactor to construct `BlobServiceClient(new Uri(blobEndpoint), new DefaultAzureCredential())`
+  and replace `GenerateSasUri` with a user-delegation SAS issued via
+  `BlobServiceClient.GetUserDelegationKeyAsync(...)` + a `BlobSasBuilder`.
+- First Azure SQL S0 cold start on a fresh DB takes 30-60s for
+  `Database.Migrate()`. Acceptable for dev; document in runbook.
+- Soft-delete + 7-day retention costs cents but means we can't immediately
+  reuse a deleted blob name. Fine for dev.
+
+### Cost guard
+
+| Resource | Monthly |
+|----------|---------|
+| Storage (a few GB, Hot, LRS) | <$1 |
+| Azure SQL DB S0 | ~$15 |
+| Key Vault standard | <$1 |
+| Log Analytics + App Insights (under free tier) | $0 |
+| **Total** | **~$17** |
+
+### References
+
+- `terraform/` — modules + dev composition
+- `Documentation/Runbooks/local-azure-dev.md` — developer workflow
+- Microsoft docs: [User Delegation SAS](https://learn.microsoft.com/azure/storage/common/storage-sas-overview#user-delegation-sas) (preferred over account-key SAS)
+- Microsoft docs: [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:
@@ -994,6 +1101,6 @@ When a new feature is proposed:
 ---
 
 **Last Updated**: 2026-05-10  
-**Total Decisions**: 9 (D001-D008, D010; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
+**Total Decisions**: 10 (D001-D008, D010, D011; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
 **In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)
