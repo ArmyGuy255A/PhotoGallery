@@ -11,6 +11,17 @@ public class ApplicationDbContext : IdentityDbContext<User>
         : base(options)
     {
     }
+
+    /// <summary>
+    /// Non-generic ctor for derived contexts (e.g. <see cref="ApplicationDbContextSqlServer"/>)
+    /// that carry their own typed <see cref="DbContextOptions{TContext}"/>. EF Core's
+    /// constructor-resolution accepts the non-generic <see cref="DbContextOptions"/>
+    /// fine as long as the subclass forwards its own typed options here.
+    /// </summary>
+    protected ApplicationDbContext(DbContextOptions options)
+        : base(options)
+    {
+    }
     
     public DbSet<Album> Albums { get; set; }
     public DbSet<Photo> Photos { get; set; }

@@ -20,6 +20,8 @@
     <ItemGroup>
         <PackageReference Include="AWSSDK.S3" Version="4.0.22.1" />
         <PackageReference Include="Azure.Communication.Email" Version="1.0.1" />
+        <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.3.2" />
+        <PackageReference Include="Azure.Identity" Version="1.13.1" />
         <PackageReference Include="Azure.Storage.Blobs" Version="12.27.0" />
         <PackageReference Include="Google.Apis.Auth" Version="1.69.0" />
         <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="9.0.4" />
@@ -29,6 +31,7 @@
         <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.1" />
         <PackageReference Include="Microsoft.AspNetCore.Identity.UI" Version="9.0.1" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.1" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.1" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.1" />
         <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.8.0" />
         <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
@@ -43,6 +46,13 @@
       <Content Include="..\.dockerignore">
         <Link>.dockerignore</Link>
       </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+      <!-- Expose internal test seams (e.g. CachingUserDelegationKeyProvider's
+           UserDelegationKeyFetcher ctor) to the xUnit project so we don't have
+           to mock sealed-ish Azure SDK clients. -->
+      <InternalsVisibleTo Include="PhotoGallery.Tests" />
     </ItemGroup>
 
 </Project>

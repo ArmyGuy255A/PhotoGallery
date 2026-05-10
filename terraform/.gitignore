@@ -1,0 +1,16 @@
+# Local state, *.tfvars, and concrete backend configs never get committed.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# Concrete user values
+terraform.tfvars
+*.auto.tfvars
+backend.dev.hcl
+backend.prod.hcl
+
+# Plan artifacts
+*.tfplan

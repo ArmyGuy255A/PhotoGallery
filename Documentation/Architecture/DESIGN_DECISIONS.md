@@ -968,6 +968,453 @@ Backend logs one `Download` analytics row per item the manifest returned (URL is
 
 ---
 
+## D011: Azure Dev Footprint — AAD-Only Auth, User-Delegation SAS, Key Vault Config
+
+**Status**: Approved · **Date**: 2026-05-10 · **Owner**: pg-platform-engineer
+
+### Context
+
+Before deploying PhotoGallery to Azure App Service / AKS, the team wants to
+exercise the storage / database / secrets abstractions against the real Azure
+data plane while still running the app from a developer laptop. The dev
+footprint must be cheap (~$15-20/mo), reproducible via Terraform, and use
+**no static secrets on disk**.
+
+### Decision
+
+Provision a minimal dev footprint via `terraform/dev/`:
+
+| Resource | SKU | Why |
+|----------|-----|-----|
+| Storage Account | Standard_LRS, Hot, StorageV2 | Cheap; no GRS for dev. Account keys **disabled** (`shared_access_key_enabled = false`). |
+| Blob container `photogallery` | private | All access via user-delegation SAS. |
+| Azure SQL Server + DB | S0 (10 DTU, 250 GB cap, 10 GB allocated) | Basic was rejected (2 GB, awkward AAD ergonomics). |
+| Key Vault | Standard, **RBAC mode** | Modern; managed identities + AAD groups instead of legacy access policies. |
+| Log Analytics + App Insights | PerGB2018, workspace-based | Free at dev volume. Future-proofs Serilog → AI sink. |
+
+Auth model — **everything goes through `DefaultAzureCredential`**:
+
+1. **Storage**: dev principal gets `Storage Blob Data Contributor` +
+   `Storage Blob Delegator`. The app issues **user-delegation SAS** for
+   client-readable photo URLs. **Account-key SAS is rejected**: it requires
+   us to read the account key (we've disabled that), it can't be revoked
+   per-token, and it doesn't work with managed identity in prod — so the dev
+   path would diverge from the prod path. User-delegation SAS works
+   identically locally (via `az login`) and in App Service (via Workload
+   Identity).
+2. **SQL**: AAD-only authentication (`azuread_authentication_only = true`).
+   SQL admin login is disabled. Connection string uses
+   `Authentication=Active Directory Default`, which `DefaultAzureCredential`
+   resolves from `az login`. Firewall = Azure-services rule + single dev IP.
+3. **Key Vault**: dev principal gets `Key Vault Secrets User` +
+   `Key Vault Secrets Officer`. App pulls all secrets at startup via
+   `AddAzureKeyVault(uri, new DefaultAzureCredential())`.
+
+Secret-naming convention in Key Vault uses `--` as the path separator
+(ASP.NET Core's KV config provider maps `--` → `:`):
+
+```
+Sql--ConnectionString          → Sql:ConnectionString
+Storage--AccountName           → Storage:AccountName
+Storage--BlobEndpoint          → Storage:BlobEndpoint
+Storage--ContainerName         → Storage:ContainerName
+Auth--Google--ClientId         → Auth:Google:ClientId
+Auth--Google--ClientSecret     → Auth:Google:ClientSecret
+Auth--Jwt--SigningKey          → Auth:Jwt:SigningKey
+Acs--ConnectionString          → Acs:ConnectionString
+```
+
+State backend: a separate, manually-bootstrapped `rg-photogallery-tfstate`
+resource group with a versioned, soft-delete-enabled Storage Account holding
+the `tfstate` container. Bootstrap is a PowerShell script
+(`terraform/bootstrap/bootstrap-state.ps1`), not Terraform — chicken-and-egg.
+Backend uses `use_azuread_auth = true`, so even Terraform itself doesn't read
+storage keys.
+
+### Consequences
+
+**Positive**
+
+- Local dev path matches future prod path (managed identity → AAD → resources).
+  No "works on my machine because I have the account key" surprises.
+- Zero connection strings, account keys, or shared secrets in source control,
+  appsettings, or env vars.
+- Modules in `terraform/modules/{storage,sql,keyvault,observability}` are
+  reusable for `terraform/prod/` later — only SKUs and network posture differ.
+
+**Negative / follow-ups**
+
+- The current `PhotoGallery/Services/Storage/AzureStorageProvider.cs` reads a
+  connection string and uses `BlobClient.GenerateSasUri(...)`, which produces
+  an **account-key SAS**. This is incompatible with our
+  `shared_access_key_enabled = false` decision. **Backend follow-up**:
+  refactor to construct `BlobServiceClient(new Uri(blobEndpoint), new DefaultAzureCredential())`
+  and replace `GenerateSasUri` with a user-delegation SAS issued via
+  `BlobServiceClient.GetUserDelegationKeyAsync(...)` + a `BlobSasBuilder`.
+- First Azure SQL S0 cold start on a fresh DB takes 30-60s for
+  `Database.Migrate()`. Acceptable for dev; document in runbook.
+- Soft-delete + 7-day retention costs cents but means we can't immediately
+  reuse a deleted blob name. Fine for dev.
+
+### Cost guard
+
+| Resource | Monthly |
+|----------|---------|
+| Storage (a few GB, Hot, LRS) | <$1 |
+| Azure SQL DB S0 | ~$15 |
+| Key Vault standard | <$1 |
+| Log Analytics + App Insights (under free tier) | $0 |
+| **Total** | **~$17** |
+
+### References
+
+- `terraform/` — modules + dev composition
+- `Documentation/Runbooks/local-azure-dev.md` — developer workflow
+- Microsoft docs: [User Delegation SAS](https://learn.microsoft.com/azure/storage/common/storage-sas-overview#user-delegation-sas) (preferred over account-key SAS)
+- Microsoft docs: [Key Vault RBAC](https://learn.microsoft.com/azure/key-vault/general/rbac-guide)
+
+---
+
+## D012: Single `PhotoGallery`-Prefixed Resource Group for Dev Footprint (incl. tfstate)
+
+**Status**: Approved · **Date**: 2026-05-11 · **Owner**: pg-platform-engineer
+
+### Context
+
+D011 originally provisioned two RGs: `rg-photogallery-tfstate` (state backend,
+bootstrapped manually) and `rg-photogallery-dev` (workload, managed by
+Terraform). The product owner has since stated two non-negotiable constraints
+for the dev subscription `4fc243fa-5de2-48cb-9c98-793701d13152`:
+
+1. **Every** resource group name must start with `PhotoGallery`.
+2. The dev footprint must live in a **single** resource group.
+
+The naming convention is straightforward (cosmetic rename). The "single RG"
+constraint conflicts with the chicken-and-egg of Terraform's own state
+backend: Terraform cannot create the storage account that holds its state.
+
+### Decision
+
+**One resource group: `PhotoGallery-dev`.** It holds both the Terraform state
+storage account and every workload resource (Storage, SQL, Key Vault,
+observability).
+
+Ownership split:
+
+| Resource | Created by | Managed by Terraform? |
+|----------|------------|------------------------|
+| `PhotoGallery-dev` RG | `terraform/bootstrap/bootstrap-state.ps1` | **No** — adopted via `data "azurerm_resource_group"` |
+| `stpgtfstate<hash>` state SA | bootstrap script | **No** — managed out of band |
+| `tfstate` container | bootstrap script | **No** |
+| Workload Storage Account, SQL, Key Vault, observability | `terraform/dev/main.tf` | **Yes** |
+
+Bootstrap flow:
+
+1. `bootstrap-state.ps1` runs `az group create --name PhotoGallery-dev` and
+   creates the state SA + container inside it. Idempotent.
+2. `terraform/dev/main.tf` declares `data "azurerm_resource_group" "this" { name = var.resource_group_name }`
+   (default `PhotoGallery-dev`) and points every module at
+   `data.azurerm_resource_group.this.name`. Terraform never tries to create
+   or destroy the RG.
+3. `terraform destroy` cleans only the workload resources Terraform created.
+   The RG and state SA survive — exactly the lifecycle we want.
+
+The `subscription_id` variable defaults to the pinned dev sub
+(`4fc243fa-5de2-48cb-9c98-793701d13152`) and is set on the `azurerm` provider
+block. `var.resource_group_name` has a validation rule rejecting any value
+that doesn't start with `PhotoGallery`.
+
+### Alternatives considered
+
+- **Two RGs, both `PhotoGallery`-prefixed** (`PhotoGallery-tfstate` +
+  `PhotoGallery-dev`). Satisfies the naming rule but violates "single RG."
+  Rejected.
+- **One RG, Terraform manages it** (no data source; `terraform import` after
+  bootstrap). Adds a fragile one-time import step that's easy to forget on
+  fresh machines. Also means `terraform destroy` would try to delete the RG
+  containing its own state SA — Terraform will refuse, leaving a confusing
+  half-destroyed state. Rejected.
+- **Single RG, Terraform manages it, state in a different sub.** Would
+  satisfy both constraints inside the dev sub but introduces cross-sub state
+  ownership that's overkill for a ~$17/mo dev footprint. Rejected.
+
+### Consequences
+
+**Positive**
+
+- Literal compliance with the owner's "single RG, `PhotoGallery`-prefixed"
+  rule.
+- `terraform destroy` is safe: it never targets the RG or the state SA, so
+  state survives a full workload teardown.
+- One mental model for resource location: "everything PhotoGallery dev lives
+  in `PhotoGallery-dev`."
+
+**Negative / follow-ups**
+
+- The RG itself is not codified in Terraform. Tags / locks / policies on the
+  RG are managed by the bootstrap script, not by `terraform apply`. If RG-level
+  configuration grows, revisit (likely answer: add an `azurerm_management_lock`
+  to the bootstrap script rather than Terraform).
+- Two artifacts (bootstrap script + Terraform) both write into the same RG;
+  reviewers must keep them aligned. Mitigated by validation: `var.resource_group_name`
+  must start with `PhotoGallery`, and the bootstrap script enforces the same
+  prefix check.
+- A fully clean reset requires `az group delete --name PhotoGallery-dev` after
+  `terraform destroy`. Documented in the runbook.
+
+### References
+
+- `terraform/bootstrap/bootstrap-state.ps1` — creates RG + state SA
+- `terraform/dev/main.tf` — adopts RG via `data` source
+- `terraform/dev/variables.tf` — `subscription_id` and `resource_group_name` defaults + validation
+- `Documentation/Runbooks/local-azure-dev.md` — updated bootstrap + teardown flow
+
+---
+
+## D013: Cheapest Dev SKUs — SQL Basic + Container Apps Consumption (scale-to-zero) + ghcr.io
+
+**Status**: Approved · **Date**: 2026-05-12 · **Owner**: pg-platform-engineer
+
+### Context
+
+D011 stood up the Azure dev footprint with Standard S0 SQL (~$15/mo) and no
+compute resource — the API ran locally against the cloud data plane. The
+product owner subsequently asked for two things:
+
+1. The **cheapest viable** Azure SQL SKU that still supports EF Core
+   migrations and AAD-only auth.
+2. A **cheapest viable** Azure compute target for the eventual API
+   container, provisionable now (placeholder image OK) so MI / KV / SQL
+   wiring is in place when pg-devops-cicd publishes the real image.
+
+Constraints carried forward from D012: single `PhotoGallery-dev` resource
+group, pinned subscription `4fc243fa-5de2-48cb-9c98-793701d13152`, all
+resources `PhotoGallery*`-prefixed where naming permits.
+
+### Decision
+
+**SQL: Basic (5 DTU, 2 GB) — flat ~$5/mo.**
+
+| Option | Cost | Verdict |
+|--------|------|---------|
+| **Basic (5 DTU, 2 GB)** | **~$5/mo flat** | **Chosen.** Simplest pricing. Supports AAD-only auth (since 2022) and EF Core migrations. 2 GB cap is plenty for MVP metadata (album/photo rows, users, carts measured in MB, not GB). |
+| Standard S0 (10 DTU, 250 GB) | ~$15/mo flat | Previous default. Rejected: the only thing it bought us over Basic was headroom we don't need yet, at 3× the cost. Trivial bump to S0 later via `sql_sku_name`. |
+| GP_S_Gen5_1 Serverless w/ auto-pause (60 min) | ~$1.50/mo idle (storage only) + ~$0.52/vCore-hr active | Rejected as default. Wins *only* if the DB is truly idle for weeks. For routine dev (a few hours/week of activity), it lands above Basic on cost AND adds 30-60 s cold-start pain on every wake. Documented as a "switch to this if you stop dev'ing for months at a time" alternative. |
+
+**Compute: Azure Container Apps, Consumption plan, scale-to-zero
+(`min_replicas = 0`, `max_replicas = 1`, 0.5 vCPU / 1 GiB).**
+
+| Option | Cost (idle) | Verdict |
+|--------|-------------|---------|
+| **ACA Consumption, scale-to-zero** | **~$0/mo idle** (per-request execution charges only, sub-cent at MVP) | **Chosen.** Idle cost effectively zero. Cold-start ~1-3 s. Supports KV secret references via managed identity, external HTTPS ingress, full revision/rollback. |
+| App Service B1 | ~$13/mo flat (always-on) | Rejected. 2× the entire current cost guard for "always warm" we don't need. |
+| ACA Dedicated workload profile | ~$70/mo+ flat | Rejected. Production-only consideration. |
+| AKS | ~$70/mo+ for the cluster alone | Rejected. Massively over-spec for a single API container. |
+
+**Registry: ghcr.io (free for public images), defer ACR.**
+
+PhotoGallery (`ArmyGuy255A/PhotoGallery`) is public on GitHub. **GitHub
+Container Registry** publishes the backend image as a public package at
+zero cost, with anonymous pull. Container Apps pulls anonymously — no
+registry credential block, no extra Terraform resource. **ACR Basic
+($5/mo)** is deferred until private images become a requirement (e.g., we
+add a closed-source paid tier or want signed-only images). Documented in
+the runbook.
+
+**Identity: user-assigned MI (UAMI), not system-assigned.**
+
+The container app's KV secret references resolve at revision-deploy time.
+With a system-assigned MI, the `principal_id` is only known *after* the
+container app exists, which creates a chicken-and-egg with the
+`Key Vault Secrets User` role assignment. UAMI breaks the cycle:
+
+1. Create UAMI (principal_id known immediately).
+2. Assign KV / Storage roles to UAMI's principal.
+3. `time_sleep` 60 s for AAD propagation.
+4. Create container app, attach UAMI, declare KV secrets with
+   `identity = <uami id>` — secrets resolve cleanly on first revision.
+
+The UAMI is also the SQL principal: a manual one-time T-SQL step
+(`CREATE USER [<uami-name>] FROM EXTERNAL PROVIDER` + `db_datareader` /
+`db_datawriter` / `db_ddladmin`) registers the UAMI in the DB. Terraform
+deliberately does not run T-SQL — keeping that out of the IaC plane avoids
+brittle null-resource wrappers. The runbook walks the developer through it.
+
+**Frontend hosting: out of scope for this pass.** Cheapest viable path
+will be **Azure Static Web Apps Free tier** (0 $/mo, generous bandwidth,
+built-in SSL). Tracked as a follow-up.
+
+### Cost summary (idle)
+
+| Resource | SKU | $/mo |
+|----------|-----|------|
+| Storage Account | Standard_LRS, Hot | <$1 |
+| Azure SQL Database | **Basic** | **~$5** |
+| Key Vault | Standard | <$1 |
+| Container Apps Env + App | **Consumption, scale-to-zero** | **~$0** idle |
+| Log Analytics + App Insights | first 5 GB free | $0 |
+| Container registry | ghcr.io public package | $0 |
+| **Total dev footprint, idle** | | **~$6–7/mo** |
+
+Down from ~$17/mo under D011 — a ~60% reduction with no loss of
+functionality for the MVP scope.
+
+### Alternatives considered (and rejected)
+
+- **SQL Serverless (GP_S) as the default.** Rejected — see table above.
+  Documented as a fallback for very-idle developers.
+- **System-assigned MI on the container app.** Rejected — chicken-and-egg
+  with KV role assignment forces apply-twice or a fragile
+  `null_resource` workaround. UAMI is the standard pattern.
+- **Embed image-pull credentials for ACR Basic.** Rejected — needless
+  complexity and $5/mo for a public OSS project. ghcr.io public package is
+  free.
+- **App Service B1 with always-on health probe.** Rejected — flat $13/mo
+  beats by ACA's near-zero idle cost handily for an MVP that's mostly idle.
+- **Provision frontend hosting in this pass.** Deferred — keeps this PR
+  scoped; SWA Free tier needs a custom-domain decision separately.
+
+### Consequences
+
+**Positive**
+
+- Idle cost ~$6–7/mo — enables long-lived dev environments without budget
+  pressure.
+- ACA's scale-to-zero pairs naturally with SQL Basic: both go quiet when
+  the developer isn't poking at them.
+- Terraform-managed UAMI + RBAC means re-creating the API resource is one
+  `terraform apply` away. The only manual step is the SQL `CREATE USER`.
+
+**Negative / follow-ups**
+
+- 2 GB SQL cap is a real limit. The runbook calls out the exact override
+  (`sql_sku_name = "S0"`) for when seed/migration data starts crowding it.
+- Cold-start on ACA (~1-3 s) and SQL Basic (~30-60 s after long idle)
+  combine to a worst-case ~minute on the *very first* request after a
+  long quiet period. Acceptable for dev; documented in troubleshooting.
+- First `terraform apply` may race AAD role propagation for the UAMI's
+  KV secret resolution. Mitigated with `time_sleep 60s` + a runbook note
+  ("re-run apply if the first one fails with 403"). The retry succeeds
+  cleanly because the role is already in place.
+- The SQL `CREATE USER ... FROM EXTERNAL PROVIDER` step is genuinely
+  out-of-band. If a developer destroys + re-creates the DB, they must
+  redo it. Tracked in the runbook (step 3a).
+- ghcr.io public package leaks the image bytes (image is open source
+  anyway). When PhotoGallery adds private functionality, revisit and add
+  an ACR Basic module (~$5/mo).
+
+### References
+
+- `terraform/modules/sql/` — SKU default flipped to `Basic`, `max_size_gb = 2`
+- `terraform/modules/compute/` — new module: ACA env + container app + UAMI + role assignments + `time_sleep`
+- `terraform/dev/main.tf` — wires `module.compute` after `module.observability`
+- `terraform/dev/variables.tf` — `container_app_image` (defaults to MCR placeholder), `container_app_target_port` (8080)
+- `Documentation/Runbooks/local-azure-dev.md` — step 3a (SQL UAMI registration), updated cost table, ACA troubleshooting
+
+### Addendum (2026-05-13) — Key Vault secret naming contract
+
+The KV secret names follow the .NET `:`-config-path convention with `--`
+substituted for `:` (the ASP.NET Core Key Vault config provider's translation
+rule). ACA bridges each secret to a container env var that uses `__` (double
+underscore) for the same separator. All three forms — `--` in KV, `-` in ACA
+secret alias, `__` in container env var — collapse to a single canonical .NET
+config path at runtime.
+
+The locked table (canonical names + .NET paths) lives in
+`Documentation/Runbooks/local-azure-dev.md` ("Key Vault secret contract"),
+and `PhotoGallery/ConfigurationCanonicalAliases.cs` is the .NET-side source
+of truth. Terraform's `azurerm_key_vault_secret` resources and ACA env-var
+mappings in `terraform/modules/keyvault/main.tf` and `terraform/dev/main.tf`
+must match that table exactly.
+
+---
+
+## D014: Pivot from ghcr.io to Azure Container Registry (Basic SKU) for Dev
+
+### Status
+
+Approved — implemented 2026-05-10 on `u/copilot/feat/azure-dev-integration`.
+
+### Context
+
+D013 (above) shipped the dev compute tier with the API image hosted on
+**ghcr.io as a public package** (free), pulled anonymously by Azure Container
+Apps. That kept the registry line item at $0 and had a simple "open source
+anyway" story.
+
+Two pressures changed the calculus:
+
+1. **Single billing/access boundary.** Every other dev-tier resource lives in
+   the `PhotoGallery-dev` resource group on subscription
+   `4fc243fa-…-d13152` (per D012). Splitting the image tier out to GitHub
+   means a separate IAM model (GitHub PATs / OIDC), separate audit trail,
+   and a separate place to revoke access on offboarding.
+2. **AAD-only credential story.** The rest of the footprint authenticates
+   over AAD (UAMI for the app; developer principal via `az login`). The
+   ghcr.io path forced us to either accept anonymous public pulls *or*
+   provision a long-lived PAT secret in ACA's registry block. Neither
+   matches the "no shared keys" posture from D011.
+
+### Decision
+
+Add an **Azure Container Registry, SKU `Basic`** to the dev footprint:
+
+- Name: `acrpgdeva4pi` (lowercase alnum, ACR's globally-unique constraint).
+- `admin_enabled = false` — no shared username/password ever issued.
+- ACA pulls authenticate via the existing **UAMI** (`AcrPull` role on the
+  registry). Wired in the composition root, not the compute module, to
+  avoid a circular dep between `modules/compute` and `modules/acr`.
+- Developer pushes use **AAD** (`az acr login` against the AAD-backed flow,
+  then `docker push`). The developer principal holds **`AcrPush`** on the
+  registry — assigned in `dev/main.tf` against `var.dev_principal_object_id`.
+- ACA's `registry { server, identity }` block is added behind a new optional
+  input `container_registry_server` on the compute module. Empty string =
+  no registry block (preserves the D013 anonymous-MCR-placeholder path for
+  any future env that wants it).
+
+### Consequences
+
+**Pros**
+
+- Single RG/sub for billing, RBAC, audit, and offboarding.
+- No long-lived registry credentials anywhere — pulls and pushes are both
+  AAD, end-to-end. Matches D011's posture.
+- Image tier survives if the GitHub org / package is deleted or the PAT is
+  rotated; coupled to Azure tenant lifecycle instead.
+- ACR Tasks available later (build-on-push, vuln scanning hookup) without
+  another migration.
+
+**Cons / Trade-offs**
+
+- **+$5/mo** flat. Dev footprint goes from ~$6-7/mo idle to ~$11-12/mo idle.
+  Acceptable for MVP; documented in `terraform/README.md` cost table.
+- **Lose ghcr.io's free public-image story.** Anyone wanting to pull the
+  image now needs an AAD identity with `AcrPull` on `acrpgdeva4pi`. For an
+  open-source project this is friction; mitigated by the fact that the
+  source is on GitHub and a cold rebuild is `docker build`.
+- **Basic SKU has no private endpoint** (Premium-only). Network access stays
+  public; AAD does the auth. Acceptable for dev.
+- No geo-replication on Basic. Acceptable — single-region dev only.
+
+### Notes
+
+- The compute module's `image` attribute remains in `lifecycle.ignore_changes`
+  (per D013), so CI/CD can flip the running image (`acrpgdeva4pi.azurecr.io/
+  photogallery-backend:<tag>`) without fighting Terraform.
+- When prod ships, revisit SKU. Premium ($1.67/day ≈ $50/mo) buys
+  geo-replication, private link, and content trust — likely worth it for
+  prod, overkill for dev.
+
+### References
+
+- `terraform/modules/acr/` — new module (azurerm_container_registry, Basic, admin off)
+- `terraform/dev/main.tf` — wires `module.acr`, adds `azurerm_role_assignment.aca_acr_pull` and `dev_acr_push`, plumbs `container_registry_server` into compute
+- `terraform/modules/compute/` — new optional `container_registry_server` variable, dynamic `registry` block on the container app authenticated via the UAMI
+- `terraform/dev/outputs.tf` — `container_registry_name`, `container_registry_login_server`
+- `Documentation/Runbooks/local-azure-dev.md` — "Container Registry" section (push/pull workflow)
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:
@@ -994,6 +1441,6 @@ When a new feature is proposed:
 ---
 
 **Last Updated**: 2026-05-10  
-**Total Decisions**: 9 (D001-D008, D010; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
+**Total Decisions**: 11 (D001-D008, D010, D011, D014; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
 **In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)
