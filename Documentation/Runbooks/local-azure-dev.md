@@ -364,3 +364,68 @@ Notes:
 If you stop dev'ing for a few weeks, run `terraform destroy` and recreate
 later — the apply is ~8-10 min. (Idle ACA costs nothing, so keeping it up
 between sessions is also fine.)
+
+## Frontend hosting — Azure Static Web Apps (Free tier)
+
+The Angular SPA is hosted on **Azure Static Web Apps Free**. The resource is
+provisioned by `terraform/modules/staticwebapp` and lives in the same
+`PhotoGallery-dev` RG as the rest of the footprint (per D012). $0/mo — free
+SSL, global CDN, custom domains, GitHub Actions deploy.
+
+### Live URL pattern
+
+`https://<random-words>-<hash>.<n>.azurestaticapps.net`
+
+After apply, read it from Terraform outputs:
+
+```powershell
+cd terraform/dev
+terraform output static_web_app_url
+# e.g. https://agreeable-tree-043fa290f.7.azurestaticapps.net
+```
+
+### Backend CORS wiring
+
+`terraform/dev/main.tf` injects the SWA hostname into the API's ACA env vars:
+
+- `Frontend__Url` — used by the existing `AllowFrontendDev` CORS policy
+  (single-origin path). This is what unblocks the deployed image today.
+- `Cors__AllowedOrigins__0` — first slot of the new `List<string>`
+  `Cors:AllowedOrigins` binding. The new Program.cs unions this with
+  `Frontend.Url` to build the CORS allowlist. Additional dev origins
+  (e.g. `http://localhost:4200` when running the Angular dev server
+  against the cloud backend) go through `var.frontend_origin_extra` in
+  `terraform.tfvars`:
+
+```hcl
+frontend_origin_extra = ["http://localhost:4200"]
+```
+
+Each entry shows up as `Cors__AllowedOrigins__<N>` (N starts at 1).
+
+> ⚠️ Updating the CORS list requires `terraform apply` — the env vars are
+> baked into the ACA revision. Bouncing the revision is cheap (a few
+> seconds). For a more dynamic story, move to the KV-backed option
+> sketched in the design doc.
+
+### Deploy API key
+
+The SWA deploy API key (used by the FE GitHub Actions workflow) is a
+sensitive Terraform output:
+
+```powershell
+terraform output -raw static_web_app_api_key
+```
+
+Store it as a repo secret (e.g. `AZURE_STATIC_WEB_APPS_API_TOKEN_DEV`) for
+the deploy workflow. **Never commit it.** Rotate via the Azure portal or
+`az staticwebapp secrets reset-api-key` if leaked.
+
+### Verifying CORS end-to-end
+
+```powershell
+$swa = (terraform output -raw static_web_app_url)
+$api = (terraform output -raw container_app_url)
+curl -I -H "Origin: $swa" "$api/"
+# Look for: access-control-allow-origin: https://<swa-host>
+```

@@ -62,6 +62,18 @@ variable "cors_allowed_origins" {
   default     = ["http://localhost:4200", "https://localhost:4200"]
 }
 
+variable "frontend_origin_extra" {
+  description = <<-EOT
+    Additional origins to add to the API's CORS allowlist beyond the SWA
+    default hostname. Useful when running the Angular dev server locally
+    against the cloud backend, e.g. ["http://localhost:4200"]. Each entry
+    gets injected as Cors__AllowedOrigins__N (N starting at 1; slot 0 is
+    reserved for the SWA hostname).
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "sql_sku_name" {
   description = "Azure SQL DB SKU. Default Basic (5 DTU, 2 GB) ~$5/mo. Bump to S0 (~$15/mo) when dev data outgrows 2 GB."
   type        = string

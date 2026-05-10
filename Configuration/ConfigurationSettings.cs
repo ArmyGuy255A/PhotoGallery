@@ -20,6 +20,7 @@ public class ConfigurationSettings
     public Email Email { get; set; } = new();
     public PhotoProcessing PhotoProcessing { get; set; } = new();
     public Frontend Frontend { get; set; } = new();
+    public Cors Cors { get; set; } = new();
     public List<string> AdminUsers { get; set; } = new();
     public bool DISABLE_AUTH { get; set; }
     public string AllowedHosts { get; set; } = "*";
@@ -116,4 +117,24 @@ public class Frontend
     /// Override per-environment (e.g. https://photogallery.example.com).
     /// </summary>
     public string Url { get; set; } = "http://localhost:4300";
+}
+
+/// <summary>
+/// CORS allowlist configuration. The named "AllowFrontendDev" policy in
+/// Program.cs unions <see cref="AllowedOrigins"/> with
+/// <see cref="Frontend.Url"/>, deduplicates, drops empties, and feeds the
+/// result into <c>WithOrigins(...)</c>.
+///
+/// Binds from <c>Cors:AllowedOrigins</c> in appsettings, or via
+/// <c>Cors__AllowedOrigins__0</c>, <c>Cors__AllowedOrigins__1</c>, ... env
+/// vars (the ACA env injection pattern used by the dev Terraform).
+/// </summary>
+public class Cors
+{
+    /// <summary>
+    /// Additional origins to allow beyond <see cref="Frontend.Url"/>. Each
+    /// must be a scheme+host (+optional port) with NO trailing slash, e.g.
+    /// <c>https://wonderful-tree.azurestaticapps.net</c>.
+    /// </summary>
+    public List<string> AllowedOrigins { get; set; } = new();
 }

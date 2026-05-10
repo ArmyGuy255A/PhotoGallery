@@ -70,3 +70,28 @@ output "container_registry_login_server" {
   description = "Full ACR login server (e.g. acrpgdeva4pi.azurecr.io). Use in `az acr login` and as the docker push target."
   value       = module.acr.login_server
 }
+
+###############################################################################
+# Static Web App (Angular frontend hosting)
+###############################################################################
+
+output "static_web_app_name" {
+  description = "Static Web App resource name."
+  value       = module.staticwebapp.name
+}
+
+output "static_web_app_default_host_name" {
+  description = "Default *.azurestaticapps.net hostname for the SWA (no scheme)."
+  value       = module.staticwebapp.default_host_name
+}
+
+output "static_web_app_url" {
+  description = "Full https:// URL where the deployed SPA is served."
+  value       = module.staticwebapp.default_host_url
+}
+
+output "static_web_app_api_key" {
+  description = "Deploy API key for the SWA — used by the FE GitHub Actions workflow."
+  value       = module.staticwebapp.api_key
+  sensitive   = true
+}

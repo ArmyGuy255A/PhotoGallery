@@ -1444,3 +1444,102 @@ When a new feature is proposed:
 **Total Decisions**: 11 (D001-D008, D010, D011, D014; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
 **In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)
+
+## D015: Angular Frontend Hosted on Azure Static Web Apps (Free Tier)
+
+**Status:** ✅ Accepted (2026-05-10)
+**Decision owner:** pg-platform-engineer
+**Related:** D011 (Azure dev footprint), D012 (single RG), D014 (ACR pivot)
+
+### Context
+
+The PhotoGallery dev footprint already provisions the API (Container Apps),
+data plane (Azure SQL + Storage + Key Vault), and observability tier in the
+single `PhotoGallery-dev` resource group. The Angular SPA has been running
+only locally (`ng serve` against the cloud API). To validate the
+production-shaped network path (cross-origin SPA → API on a different
+hostname, SSL termination, etc.) and to give reviewers a clickable preview
+URL, we need a cloud host for the FE that costs ~$0 and slots into the
+existing single-RG model.
+
+### Decision
+
+Add **Azure Static Web Apps, Free tier** as a new Terraform module
+(`terraform/modules/staticwebapp`) wired from `terraform/dev/main.tf`. The
+SWA lives in `PhotoGallery-dev` (preserves D012). The Angular build/deploy
+flow is owned by the FE dev's GitHub Actions workflow, which reads the
+SWA `api_key` Terraform output as a repo secret.
+
+The API's CORS allowlist is extended via injected ACA env vars so the
+deployed SPA's origin is accepted:
+
+- `Frontend__Url` ← `module.staticwebapp.default_host_url` (existing
+  single-origin CORS path)
+- `Cors__AllowedOrigins__0` ← same (new `List<string>` binding path)
+- `Cors__AllowedOrigins__N` ← `var.frontend_origin_extra[N-1]` (e.g.
+  `http://localhost:4200` for dev-server-against-cloud-API)
+
+A small backend change in `Configuration/ConfigurationSettings.cs` and
+`PhotoGallery/Program.cs` unions `Frontend.Url` with `Cors.AllowedOrigins`,
+deduplicates, and feeds `WithOrigins(...)` so multi-origin support is real
+(not just first-slot).
+
+### Rationale
+
+- **$0/mo.** SWA Free includes 100 GB/mo bandwidth, free SSL on the
+  `*.azurestaticapps.net` hostname AND on user-provided custom domains,
+  staging slots, and a built-in GitHub Actions deploy story. Total dev
+  footprint stays ~$11-12/mo.
+- **Same RG (single billing/access boundary).** Preserves D012.
+- **First-class GH Actions deploy.** `Azure/static-web-apps-deploy@v1` is
+  the canonical pattern; the FE dev's workflow is one job, one secret.
+- **Custom domain story works today.** When PhotoGallery gets a real
+  domain, SWA wires it up with a CNAME + free managed cert. No HTTPS
+  scramble at prod cutover.
+
+### Alternatives considered
+
+- **Azure Storage Account static website** — cheaper still (~$0.10/mo),
+  but no free SSL on a custom domain (you have to front it with Front Door
+  or Cloudflare, which adds cost and ops surface). Free SWA wins.
+- **App Service (Free F1 or Basic B1)** — overkill for a static SPA;
+  Free F1 has 60 CPU min/day caps and no SSL on custom domains; B1
+  doubles the dev cost. Rejected.
+- **Cloudflare Pages** — excellent product, but lives outside the Azure
+  subscription. Violates the single-RG / single-bill model from D012 and
+  fragments auth (separate Cloudflare API token vs. AAD). Rejected for
+  dev; could revisit for prod CDN.
+
+### Trade-offs
+
+- **CORS allowlist update requires `terraform apply`** (option A in the
+  task brief). Acceptable: bouncing the ACA revision is seconds, and
+  origin churn is rare. If/when it gets painful, move to a KV-backed
+  semicolon-separated list and read it dynamically.
+- **No private endpoint on Free tier.** Acceptable for dev; the public
+  surface is just the static assets. For prod, Standard tier ($9/mo)
+  adds private endpoints + managed identities + larger size caps —
+  reconsider when prod ships.
+
+### Notes
+
+- SWA Free is region-restricted (eastus2, centralus, westus2, westeurope,
+  eastasia). Module enforces this via a `validation` on `var.location`.
+  Default `eastus2` co-locates with the rest of the dev footprint.
+- The SWA → compute `BACKEND_API_URL` app setting was intentionally left
+  unwired by Terraform to avoid a SWA ↔ compute dependency cycle (compute
+  already references SWA via the CORS allowlist). The FE deploy GH Action
+  populates it out of band with `az staticwebapp appsettings set`.
+
+### References
+
+- `terraform/modules/staticwebapp/` — new module
+- `terraform/dev/main.tf` — adds `module.staticwebapp`, injects
+  `Cors__AllowedOrigins__N` and `Frontend__Url` into compute env
+- `terraform/dev/variables.tf` — `frontend_origin_extra` (default `[]`)
+- `terraform/dev/outputs.tf` — `static_web_app_default_host_name`,
+  `static_web_app_url`, `static_web_app_api_key` (sensitive)
+- `Configuration/ConfigurationSettings.cs` — new `Cors` class with
+  `List<string> AllowedOrigins`
+- `PhotoGallery/Program.cs` — multi-origin union for `AllowFrontendDev`
+- `Documentation/Runbooks/local-azure-dev.md` — "Frontend hosting" section
