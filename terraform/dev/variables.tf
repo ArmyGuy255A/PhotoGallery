@@ -97,6 +97,22 @@ variable "container_app_image" {
   default     = "mcr.microsoft.com/k8se/quickstart:latest"
 }
 
+variable "github_repository" {
+  description = <<-EOT
+    GitHub repository in `owner/repo` form. Used as the OIDC subject scope
+    for the GitHub Actions federated credential (see DESIGN_DECISIONS.md
+    D015). Pushes from refs/heads/main on this repo are trusted to assume
+    the SP that holds AcrPush on the ACR.
+  EOT
+  type        = string
+  default     = "ArmyGuy255A/PhotoGallery"
+
+  validation {
+    condition     = can(regex("^[^/]+/[^/]+$", var.github_repository))
+    error_message = "github_repository must be in 'owner/repo' form."
+  }
+}
+
 variable "container_app_target_port" {
   description = "Port the API listens on inside the container. Default 8080 — passed to ASPNETCORE_URLS."
   type        = number
