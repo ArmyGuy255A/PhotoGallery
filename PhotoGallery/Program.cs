@@ -1,8 +1,10 @@
 using Authentication;
 using Authentication.Services;
 using Configuration;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Data;
@@ -143,6 +145,25 @@ builder.Services.AddHostedService<StorageConsistencyWorker>();
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>();
+
+// Restore JwtBearer as the default authentication scheme. AddDefaultIdentity
+// (above) calls AddIdentityCookies() which silently overrides the
+// DefaultAuthenticateScheme + DefaultChallengeScheme set by
+// AddAuthenticationServices to its own cookie scheme. Without this, [Authorize]
+// on API controllers would resolve against the (empty) Identity cookie
+// principal — producing 403 on protected endpoints even when a valid Bearer
+// JWT carrying the right roles is in the Authorization header.
+//
+// Symptom of the regression: GET /api/albums/{id}/access-codes returns 403
+// despite OnTokenValidated logging roles=[Admin]. The JwtBearer scheme
+// authenticated the token but [Authorize(Roles="Admin")] used the
+// IdentityApplicationScheme (now empty) for its principal lookup.
+builder.Services.Configure<AuthenticationOptions>(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+});
+
 builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
