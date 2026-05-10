@@ -348,7 +348,10 @@ public class AccessCodeController : ControllerBase
     private async Task<List<string>> GetAvailableQualities(string photoId)
     {
         var qualities = new List<string>();
-        foreach (var qualityName in new[] { "high", "medium", "low", "raw" })
+        // Note: "original" is surfaced when the original.jpg object exists in storage,
+        // so cart-eligible callers can offer Original as a download choice (PR-B / bug #7).
+        // "thumbnail" is intentionally omitted — it is preview-only and rejected by DownloadCart.
+        foreach (var qualityName in new[] { "high", "medium", "low", "raw", "original" })
         {
             var version = await _imageProcessor.GetPhotoVersionAsync(photoId, qualityName);
             if (version != null)

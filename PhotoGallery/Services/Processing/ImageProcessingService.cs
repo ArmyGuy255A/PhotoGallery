@@ -462,6 +462,7 @@ public class ImageProcessingService : IImageProcessor
                 "low" => QualityType.Low,
                 "medium" => QualityType.Medium,
                 "high" => QualityType.High,
+                "original" => QualityType.Original,
                 _ => QualityType.Medium
             };
 
