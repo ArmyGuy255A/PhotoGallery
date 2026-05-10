@@ -17,7 +17,7 @@ namespace PhotoGallery.Tests;
 
 /// <summary>
 /// API-level tests for <c>POST /api/code/{code}/cart/manifest</c>.
-/// Replaces <c>ZipDownloadServiceTests</c> in the manifest-based world.
+/// Replaces the legacy server-side ZIP service tests.
 ///
 /// Coverage:
 /// - Happy path returns manifest with album title, prefix, items
@@ -42,7 +42,6 @@ public class CartManifestApiTests
     private readonly Mock<IPhotoVersionUrlRepository> _urlRepo = new();
     private readonly Mock<IRepository<Download>> _downloads = new();
     private readonly PhotoVersionUrlService _urlService;
-    private readonly ZipDownloadService _zipService; // legacy — controller still requires it
     private readonly Mock<ILogger<AccessCodeController>> _logger = new();
 
     public CartManifestApiTests()
@@ -64,12 +63,6 @@ public class CartManifestApiTests
             _photos.Object,
             configuration,
             new NullLogger<PhotoVersionUrlService>());
-
-        _zipService = new ZipDownloadService(
-            _storage.Object,
-            _downloads.Object,
-            _photos.Object,
-            new NullLogger<ZipDownloadService>());
     }
 
     private AccessCodeController NewController(string remoteIp = "203.0.113.5")
@@ -82,7 +75,6 @@ public class CartManifestApiTests
             _storage.Object,
             _imageProcessor.Object,
             _urlService,
-            _zipService,
             _downloads.Object,
             _logger.Object);
 
@@ -362,7 +354,7 @@ public class CartManifestApiTests
     public async Task CartManifest_HandlesDuplicateFileNames_WithCollisionSuffix()
     {
         // Two distinct photos with identical filenames at the same quality should land
-        // on distinct ZIP entry names (mirrors ZipDownloadService.BuildEntryName).
+        // on distinct ZIP entry names (mirrors BuildManifestEntryName).
         var (code, album) = SeedValidCode();
         var p1 = SeedPhoto(album.Id, "vacation.jpg");
         var p2 = SeedPhoto(album.Id, "vacation.jpg");

@@ -27,7 +27,6 @@ public class AccessCodeController : ControllerBase
     private readonly IStorageProvider _storageProvider;
     private readonly IImageProcessor _imageProcessor;
     private readonly PhotoVersionUrlService _urlService;
-    private readonly ZipDownloadService _zipService;
     private readonly IRepository<Download> _downloadRepository;
     private readonly ILogger<AccessCodeController> _logger;
 
@@ -45,7 +44,6 @@ public class AccessCodeController : ControllerBase
         IStorageProvider storageProvider,
         IImageProcessor imageProcessor,
         PhotoVersionUrlService urlService,
-        ZipDownloadService zipService,
         IRepository<Download> downloadRepository,
         ILogger<AccessCodeController> logger)
     {
@@ -56,7 +54,6 @@ public class AccessCodeController : ControllerBase
         _storageProvider = storageProvider;
         _imageProcessor = imageProcessor;
         _urlService = urlService;
-        _zipService = zipService;
         _downloadRepository = downloadRepository;
         _logger = logger;
     }
@@ -203,92 +200,6 @@ public class AccessCodeController : ControllerBase
     }
 
     /// <summary>
-    /// Bulk download (cart checkout): stream a ZIP archive containing the requested photo
-    /// versions. Photos validated against the album referenced by the access code.
-    ///
-    /// Each successfully-added photo is logged to the Download table for analytics.
-    /// </summary>
-    /// <param name="code">Access code</param>
-    /// <param name="request">Cart contents (max 100 items, deduped server-side)</param>
-    [HttpPost("{code}/cart/download")]
-    public async Task<IActionResult> DownloadCart(string code, [FromBody] CartDownloadRequest request)
-    {
-        if (request?.Items == null || request.Items.Count == 0)
-            return BadRequest("Cart is empty.");
-
-        var accessCode = await _accessCodeRepository.GetByCodeAsync(code);
-        if (accessCode == null)
-            return NotFound("Access code not found");
-
-        if (accessCode.ExpirationDate.HasValue && accessCode.ExpirationDate < DateTime.UtcNow)
-            return StatusCode(403, "Access code has expired");
-
-        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId);
-        if (album == null)
-            return NotFound("Album not found");
-
-        // Server-side dedupe + validation. Reject Thumbnail (preview only) and any unknown enum.
-        var seen = new HashSet<(Guid, QualityType)>();
-        var validated = new List<CartItem>();
-        foreach (var item in request.Items)
-        {
-            if (!Guid.TryParse(item.PhotoId, out var photoGuid))
-                continue;
-            if (!Enum.TryParse<QualityType>(item.Quality, ignoreCase: true, out var quality))
-                continue;
-            if (quality == QualityType.Thumbnail)
-                continue; // Thumbnail is preview-only, not for download
-            var key = (photoGuid, quality);
-            if (!seen.Add(key))
-                continue;
-            validated.Add(new CartItem { PhotoId = photoGuid, Quality = quality });
-        }
-
-        if (validated.Count == 0)
-            return BadRequest("No valid items in cart (Thumbnail is not downloadable).");
-
-        if (validated.Count > ZipDownloadService.MaxItemsPerCart)
-            return BadRequest($"Cart exceeds maximum of {ZipDownloadService.MaxItemsPerCart} items.");
-
-        // Build a sanitized download filename. The album title may contain spaces / unicode.
-        var safeTitle = string.IsNullOrWhiteSpace(album.Title) ? "album" : album.Title;
-        foreach (var c in Path.GetInvalidFileNameChars())
-        {
-            safeTitle = safeTitle.Replace(c, '_');
-        }
-        var fileName = $"{safeTitle}-{DateTime.UtcNow:yyyyMMddHHmmss}.zip";
-
-        Response.ContentType = "application/zip";
-        Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{fileName}\"");
-
-        // ZipArchive.Dispose performs synchronous writes to finalize the central
-        // directory, which Kestrel rejects by default with InvalidOperationException
-        // ""Synchronous operations are disallowed"". Enabling AllowSynchronousIO
-        // for *this* request only is the documented escape hatch — it scopes to the
-        // current HttpContext and does not affect global Kestrel settings. The
-        // alternative (buffering the entire ZIP to a MemoryStream) would consume
-        // up to MaxItemsPerCart * full-resolution-photo-bytes of memory per
-        // concurrent request, which is unbounded for prod.
-        var bodyControl = HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>();
-        if (bodyControl != null) bodyControl.AllowSynchronousIO = true;
-
-        var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString();
-
-        var added = await _zipService.StreamCartZipAsync(
-            albumId: album.Id,
-            accessCodeId: accessCode.Id,
-            items: validated,
-            output: Response.Body,
-            remoteIp: remoteIp);
-
-        _logger.LogInformation(
-            "Cart download complete: {Added}/{Requested} items, code={Code}, album={AlbumId}",
-            added, validated.Count, code, album.Id);
-
-        return new EmptyResult();
-    }
-
-    /// <summary>
     /// Build a download manifest for a cart. The browser uses the returned pre-signed URLs
     /// to stream blobs directly from storage and assemble a ZIP locally (client-zip).
     ///
@@ -296,7 +207,7 @@ public class AccessCodeController : ControllerBase
     /// access-code lookup + expiration, album-scope (photo must belong to the code's album),
     /// dedupe on (photoId, quality), Thumbnail rejection, 100-cap, and sanitized filenames
     /// with collision suffixes (mirrors the <c>usedNames</c> pattern from
-    /// <see cref="ZipDownloadService.BuildEntryName"/>).
+    /// <see cref="BuildManifestEntryName"/>).
     ///
     /// Pre-signed URLs are short-lived (15 min) and never watermarked — cart is the
     /// paid-checkout path. <see cref="PhotoVersionUrlService"/> additionally refuses to serve
@@ -442,9 +353,9 @@ public class AccessCodeController : ControllerBase
     }
 
     /// <summary>
-    /// Sanitize and disambiguate a manifest entry filename. Mirrors the
-    /// <c>ZipDownloadService.BuildEntryName</c> shape (Quality/Name.ext, suffix on collision)
-    /// so the ZIP layout the browser produces matches the previous server-built ZIP layout.
+    /// Sanitize and disambiguate a manifest entry filename. Mirrors the legacy
+    /// server-side ZIP layout (Quality/Name.ext, suffix on collision) so the ZIP the
+    /// browser produces matches the file structure consumers were getting before.
     /// </summary>
     internal static string BuildManifestEntryName(string originalFileName, QualityType quality, HashSet<string> used)
     {
@@ -622,27 +533,8 @@ public class PaginatedPublicPhotosResponse
 }
 
 /// <summary>
-/// Cart bulk-download request body.
-/// </summary>
-public class CartDownloadRequest
-{
-    public List<CartDownloadItem> Items { get; set; } = new();
-}
-
-/// <summary>
-/// Single item in a cart download request.
-/// </summary>
-public class CartDownloadItem
-{
-    public string PhotoId { get; set; } = string.Empty;
-
-    /// <summary>Quality enum name (case-insensitive): Low, Medium, or High. Thumbnail rejected.</summary>
-    public string Quality { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// Cart manifest request body. Same shape as the legacy bulk-download request:
-/// the FE just POSTs the cart contents.
+/// Cart manifest request body. The FE POSTs the cart contents and receives a list
+/// of pre-signed URLs the browser uses to fetch each blob directly from storage.
 /// </summary>
 public class CartManifestRequest
 {

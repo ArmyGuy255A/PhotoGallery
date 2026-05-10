@@ -108,7 +108,6 @@ builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
 // Register services
 builder.Services.AddScoped<PhotoVersionUrlService>();
-builder.Services.AddScoped<ZipDownloadService>();
 builder.Services.AddSingleton<WatermarkService>();
 builder.Services.AddScoped<GdprService>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
