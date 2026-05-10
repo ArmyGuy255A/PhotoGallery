@@ -262,15 +262,17 @@ public class ImageProcessingService : IImageProcessor
     }
 
     /// <summary>
-    /// Render and store a watermarked version of the just-resized Medium image.
+    /// Render and store a watermarked version of the just-resized image.
+    /// Used for Thumbnail and Medium qualities — the variants public/guest viewers see.
     /// Failures are logged but do not fail the parent queue item — the unwatermarked
-    /// Medium is still useful, and the consistency checker will retry watermark generation.
+    /// variant is still useful, and the consistency checker will retry watermark generation.
     /// </summary>
     private async Task GenerateWatermarkedVariantAsync(
         Photo photo,
         ProcessingQueueItem item,
         Image image,
         int jpegQuality,
+        string qualityName,
         CancellationToken cancellationToken)
     {
         try
@@ -278,7 +280,7 @@ public class ImageProcessingService : IImageProcessor
             using var scope = _serviceProvider.CreateScope();
             var watermarkService = scope.ServiceProvider.GetRequiredService<WatermarkService>();
 
-            // Encode the (already-resized) Medium image into a fresh stream so the watermark
+            // Encode the (already-resized) image into a fresh stream so the watermark
             // service can re-decode + apply watermark without mutating the original `image`.
             using var sourceStream = new MemoryStream();
             await image.SaveAsJpegAsync(sourceStream, new JpegEncoder { Quality = jpegQuality }, cancellationToken);
@@ -292,16 +294,16 @@ public class ImageProcessingService : IImageProcessor
                 sourceStream, watermarkedStream, watermarkText, jpegQuality, cancellationToken);
             watermarkedStream.Position = 0;
 
-            var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/medium-watermarked.jpg";
+            var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{qualityName}-watermarked.jpg";
             await _storageProvider.UploadAsync(outputPath, watermarkedStream, "image/jpeg");
 
-            _logger.LogInformation("Saved watermarked Medium variant to {Path}", outputPath);
+            _logger.LogInformation("Saved watermarked {Quality} variant to {Path}", item.Quality, outputPath);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Failed to generate watermarked Medium for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked Medium.",
-                item.PhotoId);
+                "Failed to generate watermarked {Quality} for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked variant.",
+                item.Quality, item.PhotoId);
         }
     }
 
