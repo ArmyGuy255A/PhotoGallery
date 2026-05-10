@@ -12,12 +12,13 @@ import {Subject} from 'rxjs';
 import {takeUntil} from 'rxjs/operators';
 import {ThemeComponent} from '../theme/theme.component';
 import {UserDropdownComponent} from '../user-dropdown/user-dropdown.component';
+import {CartButtonComponent} from '../cart/cart-button.component';
 
 @Component({
   selector: 'app-navbar',
   imports: [
     CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatFormFieldModule, MatInput,
-    ThemeComponent, UserDropdownComponent,
+    ThemeComponent, UserDropdownComponent, CartButtonComponent,
   ],
   templateUrl: './navbar.component.html',
   styleUrl: './navbar.component.scss'

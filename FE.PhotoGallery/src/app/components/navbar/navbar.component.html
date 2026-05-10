@@ -43,6 +43,7 @@
 
     <div class="navbar-right">
       <app-theme></app-theme>
+      <app-cart-button *ngIf="isAuthenticated"></app-cart-button>
       <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
       <button
         *ngIf="!isAuthenticated"
