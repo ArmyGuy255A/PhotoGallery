@@ -2,6 +2,7 @@ using Authentication;
 using Authentication.Services;
 using Azure.Identity;
 using Configuration;
+using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -19,6 +20,7 @@ using PhotoGallery.Services.Email;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
 using Serilog;
+using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,9 +76,45 @@ ConfigurationCanonicalAliases.BridgeKeyVaultCanonicalNames(
 // Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
 builder.Services.AddConfigurationServices(builder.Configuration, out var settings);
 
-// Configure Serilog
-builder.Host.UseSerilog((context, configuration) =>
-    configuration.ReadFrom.Configuration(context.Configuration));
+// Configure Serilog.
+//
+// Built programmatically (not from appsettings.json) so the sink set is
+// guaranteed: a misconfigured JSON `Using`/`WriteTo` block silently disables
+// all sinks, which is what blinded us when the ACA-deployed image stopped
+// emitting logs. Console always wins (ACA's log collector tails stdout) and
+// Application Insights is added when its connection string env var is set
+// (DevelopmentAzure / production via ACA).
+//
+// Serilog.Sinks.File was intentionally dropped: the previous JSON config
+// pointed at a relative `PhotoGallery/Logs/photogallery-.log` that doesn't
+// exist in the container and isn't useful when running in Azure anyway.
+builder.Host.UseSerilog((context, services, configuration) =>
+{
+    configuration
+        .MinimumLevel.Information()
+        .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+        .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
+        .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+        .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+        .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Migrations", LogEventLevel.Information)
+        .MinimumLevel.Override("Azure.Identity", LogEventLevel.Warning)
+        .Enrich.FromLogContext()
+        .WriteTo.Console(outputTemplate:
+            "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] ({SourceContext}) {Message:lj}{NewLine}{Exception}");
+
+    var aiConnectionString = context.Configuration["ApplicationInsights:ConnectionString"]
+        ?? Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
+    if (!string.IsNullOrWhiteSpace(aiConnectionString))
+    {
+        var telemetryConfig = new TelemetryConfiguration { ConnectionString = aiConnectionString };
+        configuration.WriteTo.ApplicationInsights(telemetryConfig, TelemetryConverter.Traces);
+    }
+});
+
+// Application Insights for request/dependency/exception telemetry. Reads
+// APPLICATIONINSIGHTS_CONNECTION_STRING automatically; no-ops if unset so
+// local dev / xUnit are unaffected.
+builder.Services.AddApplicationInsightsTelemetry();
 
 // Configure listening URLs (defaults to 5105, or use ASPNETCORE_URLS env var if set)
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";

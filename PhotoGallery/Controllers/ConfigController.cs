@@ -34,9 +34,17 @@ public class ConfigController : ControllerBase
     public IActionResult GetPublic()
     {
         var s = _settings.CurrentValue;
+
+        // Application Insights connection string is not in ConfigurationSettings
+        // (it's a top-level env var consumed by the AI SDK), so read it directly.
+        // Safe to expose to the browser — it's a public ingestion endpoint key.
+        var aiConn = Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING")
+                     ?? string.Empty;
+
         return Ok(new PublicConfigResponse
         {
-            GoogleClientId = s.Google.ClientId
+            GoogleClientId = s.Google.ClientId,
+            ApplicationInsightsConnectionString = aiConn
         });
     }
 }
@@ -44,4 +52,5 @@ public class ConfigController : ControllerBase
 public class PublicConfigResponse
 {
     public string GoogleClientId { get; set; } = string.Empty;
+    public string ApplicationInsightsConnectionString { get; set; } = string.Empty;
 }
