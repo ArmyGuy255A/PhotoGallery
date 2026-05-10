@@ -71,7 +71,14 @@ public class JwtTokenService
 
         foreach (var role in roles)
         {
-            claims.Add(new Claim(ClaimTypes.Role, role));
+            // Emit the short-form "role" claim instead of the long
+            // ClaimTypes.Role URI (http://schemas.microsoft.com/ws/2008/06/identity/claims/role).
+            // ASP.NET's JwtBearer middleware (with default MapInboundClaims=true)
+            // still maps this back to ClaimTypes.Role server-side, so
+            // [Authorize(Roles="...")] keeps working — but the on-the-wire
+            // JWT body is now the compact {"role":"Admin"} form that FE code
+            // and external token consumers expect.
+            claims.Add(new Claim("role", role));
         }
 
         return GenerateToken(claims);
