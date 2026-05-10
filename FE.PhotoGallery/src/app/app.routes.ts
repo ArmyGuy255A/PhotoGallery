@@ -7,6 +7,7 @@ import { AlbumEditComponent } from './components/albums/album-edit.component';
 import { CodeGalleryComponent } from './components/code-gallery/code-gallery.component';
 import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.component';
 import { AccountSettingsComponent } from './components/account/account-settings.component';
+import { AdminSettingsComponent } from './components/admin/admin-settings.component';
 import { BaseLayoutComponent } from './base-layout/base-layout.component';
 import { authGuard, adminGuard } from './services/auth.guard';
 
@@ -37,6 +38,8 @@ export const routes: Routes = [
       { path: 'shared-albums', component: SharedAlbumsComponent },
       // Stub Account Settings — real content lands in issue #67.
       { path: 'account', component: AccountSettingsComponent },
+      // Stub Admin Settings — real content lands in issue #70.
+      { path: 'admin/settings', component: AdminSettingsComponent, canActivate: [adminGuard] },
       { path: '', redirectTo: 'dashboard', pathMatch: 'full' }
     ]
   },
