@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
-import { IdentityProvider, IdentityProviderType } from '../identity-provider';
+import { environment } from '../../../../environments/environment';
 import { RuntimeConfigService } from '../../runtime-config.service';
+import { IdentityProvider, IdentityProviderType } from '../identity-provider';
 
 declare const google: any;
 
@@ -20,6 +21,7 @@ export class GoogleAuthService implements IdentityProvider {
   public status: GoogleAuthStatus = GoogleAuthStatus.Idle;
 
   private readonly runtimeConfig = inject(RuntimeConfigService);
+  private readonly debugEnabled = !environment.production;
 
   token: string;
   private tokenReadyResolver: ((token: string) => void) | null = null;
@@ -28,11 +30,28 @@ export class GoogleAuthService implements IdentityProvider {
   private gisReadyPromise: Promise<void> | null = null;
 
   constructor() {
+    this.debug('constructor');
     this.token = '';
 
     this.tokenReadyPromise = new Promise(resolve => {
       this.tokenReadyResolver = resolve;
     });
+  }
+
+  private debug(message: string, details?: Record<string, unknown>): void {
+    if (!this.debugEnabled) return;
+    if (details) {
+      console.log('[GoogleAuthService]', message, details);
+      return;
+    }
+    console.log('[GoogleAuthService]', message);
+  }
+
+  private tokenMeta(token: string): { tokenPresent: boolean; tokenLength: number } {
+    return {
+      tokenPresent: !!token,
+      tokenLength: token?.length ?? 0,
+    };
   }
 
   /**
@@ -42,14 +61,17 @@ export class GoogleAuthService implements IdentityProvider {
    */
   private waitForGis(): Promise<void> {
     if (this.gisReadyPromise) return this.gisReadyPromise;
+    this.debug('waitForGis:start');
     this.gisReadyPromise = new Promise<void>((resolve, reject) => {
       const start = Date.now();
       const tick = () => {
         if (typeof (window as any).google !== 'undefined' && (window as any).google?.accounts?.id) {
+          this.debug('waitForGis:success', { elapsedMs: Date.now() - start });
           resolve();
           return;
         }
         if (Date.now() - start > 10000) {
+          this.debug('waitForGis:timeout', { elapsedMs: Date.now() - start });
           reject(new Error('Google Identity Services SDK failed to load within 10s'));
           return;
         }
@@ -66,8 +88,13 @@ export class GoogleAuthService implements IdentityProvider {
    * it's loaded before any user-driven sign-in flow can fire.
    */
   private async ensureGisInitialized(): Promise<void> {
+    this.debug('ensureGisInitialized:entry', { gisInitialized: this.gisInitialized });
     if (this.gisInitialized) return;
     const clientId = this.runtimeConfig.googleClientId;
+    this.debug('ensureGisInitialized:clientIdCheck', {
+      hasClientId: !!clientId,
+      clientIdLength: clientId?.length ?? 0,
+    });
     if (!clientId) {
       console.error(
         'GoogleAuthService: googleClientId is empty. ' +
@@ -80,7 +107,12 @@ export class GoogleAuthService implements IdentityProvider {
     google.accounts.id.initialize({
       client_id: clientId,
       callback: (response: any) => {
+        this.debug('gisCallback:received', {
+          credentialPresent: !!response?.credential,
+          credentialLength: response?.credential?.length ?? 0,
+        });
         this.token = response.credential;
+        this.debug('gisCallback:tokenStored', this.tokenMeta(this.token));
         this.tokenReadyResolver?.(this.token);
       },
       ux_mode: 'popup',
@@ -97,26 +129,36 @@ export class GoogleAuthService implements IdentityProvider {
     // See Documentation/Architecture/AUTHENTICATION.md → "Still seeing Error 401".
     console.info(`[GIS init] origin=${window.location.origin} clientId=${clientId}`);
     this.gisInitialized = true;
+    this.debug('ensureGisInitialized:done');
   }
 
   async signIn(): Promise<string> {
+    this.debug('signIn:entry', this.tokenMeta(this.token));
     await this.ensureGisInitialized();
+    this.debug('signIn:afterEnsure', { gisInitialized: this.gisInitialized });
     if (this.token) {
+      this.debug('signIn:returnExistingToken', this.tokenMeta(this.token));
       return this.token;
     }
 
+    this.debug('signIn:waitingForCallback');
     return this.tokenReadyPromise;
   }
 
   private async handleCredentialResponse(response: any): Promise<void> {
 
     const idToken = response.credential;
-    console.log('ID Token:', idToken);
+    this.debug('handleCredentialResponse:received', {
+      credentialPresent: !!idToken,
+      credentialLength: idToken?.length ?? 0,
+    });
     if (idToken) {
       this.token = idToken;
+      this.debug('handleCredentialResponse:tokenStored', this.tokenMeta(this.token));
     } else {
       console.error('No ID token received from Google');
       this.token = '';
+      this.debug('handleCredentialResponse:tokenMissing');
     }
 
 
@@ -125,10 +167,11 @@ export class GoogleAuthService implements IdentityProvider {
   }
 
   printStatus(): void {
-    console.log(`GoogleAuthService status: ${GoogleAuthStatus[this.status]}`);
+    this.debug('printStatus', { status: GoogleAuthStatus[this.status] });
   }
 
   signOut(): Promise<void> {
+    this.debug('signOut:called');
     return Promise.resolve(google.accounts.id.disableAutoSelect());
   }
 
@@ -143,7 +186,10 @@ export class GoogleAuthService implements IdentityProvider {
 
   async renderButton(containerId: string): Promise<void> {
     const button = document.getElementById(containerId);
-    if (!button) return;
+    if (!button) {
+      this.debug('renderButton:missingContainer', { containerId });
+      return;
+    }
 
     await this.ensureGisInitialized();
     if (!this.gisInitialized) return; // ensureGisInitialized logged the reason
@@ -155,5 +201,6 @@ export class GoogleAuthService implements IdentityProvider {
       text: 'signin_with',
       size: 'large',
     });
+    this.debug('renderButton:success', { containerId });
   }
 }
