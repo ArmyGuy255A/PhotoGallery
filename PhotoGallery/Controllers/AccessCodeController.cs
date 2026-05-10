@@ -133,7 +133,7 @@ public class AccessCodeController : ControllerBase
             try
             {
                 thumbnailUrl = await _urlService.GenerateShortLivedUrlAsync(
-                    photo.Id, QualityType.Thumbnail, PublicUrlTtlMinutes);
+                    photo.Id, QualityType.Thumbnail, PublicUrlTtlMinutes, watermarked: true);
                 // Public viewers see the watermarked Medium per D009 (deters AI removal +
                 // keeps the unwatermarked variant gated behind cart-checkout).
                 mediumUrl = await _urlService.GenerateShortLivedUrlAsync(
