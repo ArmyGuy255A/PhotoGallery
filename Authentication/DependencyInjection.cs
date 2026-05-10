@@ -77,6 +77,23 @@ public static class DependencyInjection
                 // signature failure, expired, missing token, etc.).
                 options.Events = new JwtBearerEvents
                 {
+                    // Allow JWTs to be supplied via ``?access_token=...`` query string
+                    // in addition to the Authorization header. Required for browser
+                    // requests that can't carry headers — img src, anchor downloads,
+                    // <video src>. Standard pattern documented for SignalR + protected
+                    // file URLs. Header takes precedence; query string is fallback.
+                    OnMessageReceived = ctx =>
+                    {
+                        if (string.IsNullOrEmpty(ctx.Token))
+                        {
+                            var qs = ctx.Request.Query["access_token"].ToString();
+                            if (!string.IsNullOrEmpty(qs))
+                            {
+                                ctx.Token = qs;
+                            }
+                        }
+                        return Task.CompletedTask;
+                    },
                     OnAuthenticationFailed = ctx =>
                     {
                         var logger = ctx.HttpContext.RequestServices
@@ -106,12 +123,25 @@ public static class DependencyInjection
                         var logger = ctx.HttpContext.RequestServices
                             .GetRequiredService<ILoggerFactory>()
                             .CreateLogger("JwtBearer");
+
+                        // Surface the role claim explicitly because [Authorize(Roles=...)]
+                        // failures show up as 403 with no other backend log line; without
+                        // this, you can't tell whether the issue is "role missing", "wrong
+                        // claim type" (mapped vs. unmapped), or "wrong role string".
+                        var roleClaims = ctx.Principal?.Claims
+                            .Where(c => c.Type == System.Security.Claims.ClaimTypes.Role
+                                     || c.Type == "role"
+                                     || c.Type == "roles")
+                            .Select(c => $"{c.Type}={c.Value}")
+                            .ToArray() ?? Array.Empty<string>();
+
                         logger.LogInformation(
-                            "JwtBearer token VALIDATED for {Method} {Path}: sub={Sub}",
+                            "JwtBearer token VALIDATED for {Method} {Path}: sub={Sub} roles=[{Roles}]",
                             ctx.Request.Method, ctx.Request.Path,
                             ctx.Principal?.FindFirst("sub")?.Value
                                 ?? ctx.Principal?.Identity?.Name
-                                ?? "(unknown)");
+                                ?? "(unknown)",
+                            string.Join("; ", roleClaims));
                         return Task.CompletedTask;
                     }
                 };
