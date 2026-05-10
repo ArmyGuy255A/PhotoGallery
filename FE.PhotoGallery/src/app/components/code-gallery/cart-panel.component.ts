@@ -44,6 +44,7 @@ import { environment } from '../../../environments/environment';
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
+                  <option value="Original">Original</option>
                 </select>
                 <button class="remove-btn" (click)="onRemove(item)" title="Remove">✕</button>
               </div>

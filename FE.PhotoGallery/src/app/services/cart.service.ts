@@ -1,7 +1,18 @@
 import { Injectable } from '@angular/core';
 import { BehaviorSubject, Observable } from 'rxjs';
 
-export type CartQuality = 'Low' | 'Medium' | 'High';
+/**
+ * Quality levels accepted by the cart download flow. Mirrors
+ * <c>PhotoGallery.Enums.QualityType</c> minus <c>Thumbnail</c>, which is
+ * preview-only and rejected server-side. <c>Original</c> resolves to the
+ * untouched upload (<c>original.jpg</c>) and is delivered unwatermarked.
+ */
+export type CartQuality = 'Low' | 'Medium' | 'High' | 'Original';
+
+const VALID_QUALITIES: ReadonlyArray<CartQuality> = ['Low', 'Medium', 'High', 'Original'];
+
+/** Fallback used when migrating legacy carts that contain unknown quality values. */
+export const DEFAULT_CART_QUALITY: CartQuality = 'Medium';
 
 export interface CartItem {
   photoId: string;
@@ -46,7 +57,19 @@ export class CartService {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        this.items$.next(parsed.filter(this.isValidItem));
+        // Migration: legacy carts may contain qualities outside the current set
+        // (e.g. saved before 'Original' was a valid value, or future values that
+        // got rolled back). Drop fully invalid entries; coerce items whose only
+        // problem is an unknown quality string back to 'Medium' so the user
+        // doesn't lose the photo from their cart.
+        const migrated = parsed
+          .map((v: unknown) => this.migrateItem(v))
+          .filter((v): v is CartItem => v !== null);
+        this.items$.next(migrated);
+        // Persist the migrated form so the next load is already clean.
+        if (migrated.length !== parsed.length || this.didMigrate(parsed, migrated)) {
+          this.persist();
+        }
       } else {
         this.items$.next([]);
       }
@@ -163,6 +186,35 @@ export class CartService {
     return value
       && typeof value.photoId === 'string'
       && typeof value.fileName === 'string'
-      && (value.quality === 'Low' || value.quality === 'Medium' || value.quality === 'High');
+      && VALID_QUALITIES.includes(value.quality);
+  }
+
+  /**
+   * Returns a normalised <see cref="CartItem"/> for a value loaded from localStorage,
+   * or <c>null</c> if the value is unsalvageable (missing photoId / fileName).
+   * Items with an unknown quality string are coerced to <see cref="DEFAULT_CART_QUALITY"/>.
+   */
+  private migrateItem(value: any): CartItem | null {
+    if (!value || typeof value.photoId !== 'string' || typeof value.fileName !== 'string') {
+      return null;
+    }
+    const quality: CartQuality = VALID_QUALITIES.includes(value.quality)
+      ? value.quality
+      : DEFAULT_CART_QUALITY;
+    return {
+      photoId: value.photoId,
+      fileName: value.fileName,
+      thumbnailUrl: typeof value.thumbnailUrl === 'string' ? value.thumbnailUrl : undefined,
+      quality,
+    };
+  }
+
+  /** True if the parsed/migrated arrays disagree on any quality value. */
+  private didMigrate(parsed: any[], migrated: CartItem[]): boolean {
+    if (parsed.length !== migrated.length) return true;
+    for (let i = 0; i < parsed.length; i++) {
+      if (parsed[i]?.quality !== migrated[i].quality) return true;
+    }
+    return false;
   }
 }

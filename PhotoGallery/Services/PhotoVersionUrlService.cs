@@ -143,6 +143,11 @@ public class PhotoVersionUrlService
     /// Construct the canonical storage key for a photo version.
     /// Format: <c>photogallery/{albumId}/{photoId}/{quality}.jpg</c> with quality lowercased.
     /// Single source of truth shared by every code path that needs to talk to <see cref="IStorageProvider"/>.
+    ///
+    /// For <see cref="QualityType.Original"/> this resolves to
+    /// <c>photogallery/{albumId}/{photoId}/original.jpg</c>, which is the same object the
+    /// upload pipeline writes (<c>ImageProcessingService.cs</c>) — no separate Original
+    /// rendition exists.
     /// </summary>
     internal static string BuildStorageKey(Guid albumId, Guid photoId, QualityType quality)
     {
@@ -172,6 +177,19 @@ public class PhotoVersionUrlService
         if (ttlMinutes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(ttlMinutes), "TTL must be positive.");
+        }
+
+        // Regression guard (PR-B / bug #7): Original is the paid-checkout / archival
+        // rendition and must NEVER be served watermarked, regardless of what the caller
+        // requested. Watermarks only exist for the Medium guest-preview variant
+        // (see D009). Coercing here means a buggy caller (e.g. a future endpoint that
+        // forwards watermarked=true unconditionally) cannot leak a watermarked Original.
+        if (quality == QualityType.Original && watermarked)
+        {
+            _logger.LogWarning(
+                "Refusing to serve watermarked variant for Original quality on photo {PhotoId}; coercing watermarked=false",
+                photoId);
+            watermarked = false;
         }
 
         try

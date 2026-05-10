@@ -122,10 +122,15 @@ interface CodeValidation {
             <div class="photo-meta">
               <div class="filename" [title]="photo.fileName">{{ photo.fileName }}</div>
               <div class="actions">
+                <!-- TODO (PR-E / F3): replace this per-photo dropdown's default with
+                     the user-level Default Quality selector once that toolbar control
+                     lands. Until then each photo defaults to 'Medium' (see
+                     selectedQuality fallback below). -->
                 <select [(ngModel)]="selectedQuality[photo.photoId]" class="quality-select">
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
+                  <option value="Original">Original</option>
                 </select>
                 <button
                   class="add-btn"

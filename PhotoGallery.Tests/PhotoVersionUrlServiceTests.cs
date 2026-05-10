@@ -250,15 +250,21 @@ public class PhotoVersionUrlServiceTests
         var result = await _service.GeneratePhotoVersionUrlsAsync(photoId);
 
         // Assert
-        Assert.Equal(4, result.Count);  // All 4 qualities
+        Assert.Equal(5, result.Count);  // All 5 qualities (Thumbnail, Low, Medium, High, Original)
         Assert.Contains(QualityType.Thumbnail, result.Keys);
         Assert.Contains(QualityType.Low, result.Keys);
         Assert.Contains(QualityType.Medium, result.Keys);
         Assert.Contains(QualityType.High, result.Keys);
+        Assert.Contains(QualityType.Original, result.Keys);
 
         // Verify storage was called for each quality
-        _mockStorageProvider.Verify(x => x.ExistsAsync(It.IsAny<string>()), Times.Exactly(4));
-        _mockStorageProvider.Verify(x => x.GetUrlAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Exactly(4));
+        _mockStorageProvider.Verify(x => x.ExistsAsync(It.IsAny<string>()), Times.Exactly(5));
+        _mockStorageProvider.Verify(x => x.GetUrlAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Exactly(5));
+
+        // Original key resolves to the upload-pipeline path
+        _mockStorageProvider.Verify(
+            x => x.ExistsAsync($"photogallery/{albumId}/{photoId}/original.jpg"),
+            Times.Once);
 
         // Only Thumbnail and Medium should be cached
         _mockUrlRepository.Verify(x => x.AddAsync(It.IsAny<PhotoVersionUrl>()), Times.Exactly(2));
@@ -320,11 +326,12 @@ public class PhotoVersionUrlServiceTests
         var result = await _service.GeneratePhotoVersionUrlsAsync(photoId);
 
         // Assert
-        Assert.Equal(4, result.Count);
+        Assert.Equal(5, result.Count);
         Assert.NotNull(result[QualityType.Thumbnail]);
         Assert.Null(result[QualityType.Low]);
         Assert.Null(result[QualityType.Medium]);
         Assert.Null(result[QualityType.High]);
+        Assert.Null(result[QualityType.Original]);
     }
 
     [Fact]
@@ -626,5 +633,75 @@ public class PhotoVersionUrlServiceTests
         Assert.Equal(inactiveRow.Id, capturedUpdate!.Id);
         Assert.True(capturedUpdate.IsActive, "Row must be reactivated after overwrite.");
         Assert.Equal("http://minio/fresh-after-reactivation", capturedUpdate.PresignedUrl);
+    }
+
+    /// <summary>
+    /// PR-B / bug #7 regression guard. Even if a buggy caller passes <c>watermarked=true</c>
+    /// for <see cref="QualityType.Original"/>, the service must coerce the flag off and
+    /// serve the unwatermarked <c>original.jpg</c> object — never a watermarked variant.
+    /// </summary>
+    [Fact]
+    public async Task GenerateShortLivedUrlAsync_Original_NeverServesWatermarkedVariant()
+    {
+        // Arrange
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" };
+        var originalKey = $"photogallery/{albumId}/{photoId}/original.jpg";
+        var watermarkedMediumKey = $"photogallery/{albumId}/{photoId}/medium-watermarked.jpg";
+
+        _mockPhotoRepository
+            .Setup(x => x.GetByIdAsync(photoId))
+            .ReturnsAsync(photo);
+
+        _mockStorageProvider
+            .Setup(x => x.ExistsAsync(originalKey))
+            .ReturnsAsync(true);
+
+        _mockStorageProvider
+            .Setup(x => x.GetUrlAsync(originalKey, It.IsAny<int>()))
+            .ReturnsAsync("http://minio/original-url");
+
+        // Act — caller asks for watermarked Original (which must be refused).
+        var result = await _service.GenerateShortLivedUrlAsync(
+            photoId, QualityType.Original, ttlMinutes: 15, watermarked: true);
+
+        // Assert: served the unwatermarked Original.
+        Assert.Equal("http://minio/original-url", result);
+
+        // The watermarked-medium key must never have been touched.
+        _mockStorageProvider.Verify(x => x.ExistsAsync(watermarkedMediumKey), Times.Never);
+        _mockStorageProvider.Verify(x => x.GetUrlAsync(watermarkedMediumKey, It.IsAny<int>()), Times.Never);
+
+        // The Original key was the one fetched.
+        _mockStorageProvider.Verify(x => x.ExistsAsync(originalKey), Times.Once);
+        _mockStorageProvider.Verify(x => x.GetUrlAsync(originalKey, It.IsAny<int>()), Times.Once);
+    }
+
+    /// <summary>
+    /// Pins the canonical storage-key format for Original — must match the path the
+    /// upload pipeline writes (<c>ImageProcessingService.cs</c> :208,
+    /// <c>PhotosController.cs</c> :108). Probes through public surface
+    /// (<see cref="PhotoVersionUrlService.GenerateShortLivedUrlAsync"/>) so the test
+    /// is independent of the internal helper.
+    /// </summary>
+    [Fact]
+    public async Task GenerateShortLivedUrlAsync_Original_UsesUploadPipelineKey()
+    {
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "test.jpg" };
+        var expectedKey = $"photogallery/{albumId}/{photoId}/original.jpg";
+
+        _mockPhotoRepository.Setup(x => x.GetByIdAsync(photoId)).ReturnsAsync(photo);
+        _mockStorageProvider.Setup(x => x.ExistsAsync(expectedKey)).ReturnsAsync(true);
+        _mockStorageProvider
+            .Setup(x => x.GetUrlAsync(expectedKey, It.IsAny<int>()))
+            .ReturnsAsync("http://minio/original-url");
+
+        var result = await _service.GenerateShortLivedUrlAsync(photoId, QualityType.Original);
+
+        Assert.Equal("http://minio/original-url", result);
+        _mockStorageProvider.Verify(x => x.ExistsAsync(expectedKey), Times.Once);
     }
 }
