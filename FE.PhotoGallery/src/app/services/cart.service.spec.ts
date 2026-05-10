@@ -10,9 +10,6 @@ function key(): string {
 }
 
 function makeItem(id: string, quality: CartQuality = 'Medium'): CartItem {
-import { CartService, CartItem } from './cart.service';
-
-function makeItem(id: string, quality: 'Low' | 'Medium' | 'High' = 'Medium'): CartItem {
   return { photoId: id, fileName: `${id}.jpg`, quality };
 }
 
@@ -30,6 +27,10 @@ describe('CartService', () => {
     localStorage.clear();
   });
 
+  it('should be created', () => {
+    expect(service).toBeTruthy();
+  });
+
   describe('CartQuality value set', () => {
     it('accepts Original as a valid quality', () => {
       service = TestBed.inject(CartService);
@@ -44,8 +45,9 @@ describe('CartService', () => {
       service.loadForCode(CODE);
       service.addItem(makeItem('p1', 'High'));
       const ok = service.addItem(makeItem('p1', 'Original'));
-  it('should be created', () => {
-    expect(service).toBeTruthy();
+      expect(ok).toBeTrue();
+      expect(service.count).toBe(2);
+    });
   });
 
   describe('addItem (existing behavior)', () => {
@@ -137,6 +139,9 @@ describe('CartService', () => {
       service = TestBed.inject(CartService);
       service.loadForCode(CODE);
       expect(service.count).toBe(0);
+    });
+  });
+
   describe('addItems (transactional bulk add)', () => {
     it('adds multiple items and returns the count actually added', () => {
       const added = service.addItems([
