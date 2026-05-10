@@ -10,6 +10,11 @@ jobs:
   backend:
     name: Backend build + tests
     runs-on: ubuntu-latest
+    # dorny/test-reporter needs these to write the per-PR check run.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
