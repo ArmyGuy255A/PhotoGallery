@@ -4,7 +4,6 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink, Router, ActivationEnd } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { AuthService, User } from '../../services/auth.service';
-import { UserDropdownComponent } from '../user-dropdown/user-dropdown.component';
 import { environment } from '../../../environments/environment';
 import { Subject } from 'rxjs';
 import { takeUntil, filter } from 'rxjs/operators';
@@ -41,12 +40,11 @@ interface SavedAccessCode {
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, UserDropdownComponent],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="dashboard-container">
       <header class="dashboard-header">
         <h1>Dashboard</h1>
-        <app-user-dropdown></app-user-dropdown>
       </header>
 
       <main class="dashboard-content">

@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, provideRouter } from '@angular/router';
 import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { By } from '@angular/platform-browser';
 import { BehaviorSubject, of } from 'rxjs';
@@ -35,6 +35,7 @@ describe('CodeGalleryComponent', () => {
     await TestBed.configureTestingModule({
       imports: [CodeGalleryComponent, HttpClientTestingModule],
       providers: [
+        provideRouter([]),
         { provide: AuthService, useValue: authStub },
         { provide: CartService, useClass: CartServiceStub },
         { provide: ActivatedRoute, useValue: { params: of({}) } }
@@ -56,5 +57,18 @@ describe('CodeGalleryComponent', () => {
     const fixture = await createComponent(false);
     const dropdown = fixture.debugElement.query(By.css('app-user-dropdown'));
     expect(dropdown).toBeNull();
+  });
+
+  it('shows the Back to Dashboard link when authenticated', async () => {
+    const fixture = await createComponent(true);
+    const link = fixture.debugElement.query(By.css('[data-testid="back-to-dashboard"]'));
+    expect(link).toBeTruthy();
+    expect(link.attributes['ng-reflect-router-link']).toBe('/dashboard');
+  });
+
+  it('hides the Back to Dashboard link when unauthenticated', async () => {
+    const fixture = await createComponent(false);
+    const link = fixture.debugElement.query(By.css('[data-testid="back-to-dashboard"]'));
+    expect(link).toBeNull();
   });
 });
