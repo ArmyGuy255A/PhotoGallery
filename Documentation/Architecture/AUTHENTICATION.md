@@ -55,6 +55,16 @@ sequenceDiagram
 }
 ```
 
+### Role claim shape: short-form `"role"` (not the long URI)
+
+The role claim is emitted as the **short-form `"role"`** key shown above — _not_ the long URI form `http://schemas.microsoft.com/ws/2008/06/identity/claims/role` that .NET's `ClaimTypes.Role` would produce by default.
+
+- **Backend issuance** — `JwtTokenService.GenerateTokenForUser` constructs each role claim with `new Claim("role", role)` (the literal string `"role"`), not `new Claim(ClaimTypes.Role, role)`. This keeps the on-the-wire JWT compact and aligns with what most JWT libraries (and the FE) expect.
+- **Backend authorization still works** — ASP.NET Core's `JwtBearer` middleware has `MapInboundClaims = true` by default, which transparently maps the short-form `"role"` back to the long URI `ClaimTypes.Role` on the inbound `ClaimsPrincipal`. So `[Authorize(Roles = "Admin")]` continues to match without any controller-side changes.
+- **Frontend decode is defensive** — `AuthService.decodeAppTokenUser` (`FE.PhotoGallery/src/app/services/auth/auth.service.ts`) recognises **both** the short-form `"role"` and the long-URI form. New tokens issued after this change carry the short form; users who logged in before the change carry stale tokens with the long URI in localStorage. Accepting both keeps them logged in until natural expiry — no forced re-login required.
+
+> **Reference**: [PR #46](https://github.com/ArmyGuy255A/PhotoGallery/pull/46) (PR-A — backend role-claim short-form + FE long-URI fallback decoder).
+
 ## Token Validation Flow
 
 ```mermaid
