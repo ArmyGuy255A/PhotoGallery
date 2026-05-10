@@ -25,6 +25,7 @@ public class PhotoVersionUrlService
     private readonly IConfiguration _configuration;
     private readonly ILogger<PhotoVersionUrlService> _logger;
     private readonly WatermarkService? _watermarkService;
+    private readonly IWatermarkTextResolver? _watermarkTextResolver;
 
     private readonly int _ttlDays;
     private readonly int _refreshWindowDays;
@@ -37,7 +38,8 @@ public class PhotoVersionUrlService
         IPhotoRepository photoRepository,
         IConfiguration configuration,
         ILogger<PhotoVersionUrlService> logger,
-        WatermarkService? watermarkService = null)
+        WatermarkService? watermarkService = null,
+        IWatermarkTextResolver? watermarkTextResolver = null)
     {
         _storageProvider = storageProvider;
         _urlRepository = urlRepository;
@@ -45,6 +47,7 @@ public class PhotoVersionUrlService
         _configuration = configuration;
         _logger = logger;
         _watermarkService = watermarkService;
+        _watermarkTextResolver = watermarkTextResolver;
 
         // Load configuration
         _ttlDays = _configuration.GetValue("BlobStorage:PreSignedUrlTTLDays", 7);
@@ -325,7 +328,24 @@ public class PhotoVersionUrlService
             }
 
             using var watermarkedStream = new MemoryStream();
-            var watermarkText = $"© {photo.UploadedBy ?? "Photo Gallery"}";
+            // Resolve uploader's display name from the Users table (FirstName+LastName,
+            // else email-local-part, else "Photo Gallery"). Pre-fix code rendered the raw
+            // Photo.UploadedBy GUID into every watermark — see TODO once at
+            // ImageProcessingService.cs:290 + PRs #47 / #48.
+            var watermarkText = "© Photo Gallery";
+            if (_watermarkTextResolver != null)
+            {
+                try
+                {
+                    watermarkText = await _watermarkTextResolver.ResolveAsync(photo.UploadedBy);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Watermark display-name resolution failed for photo {PhotoId}; using fallback.",
+                        photoId);
+                }
+            }
             // Match Medium's encode quality (85) used by the upload-time pipeline.
             await _watermarkService.ApplyWatermarkAsync(
                 sourceStream, watermarkedStream, watermarkText);

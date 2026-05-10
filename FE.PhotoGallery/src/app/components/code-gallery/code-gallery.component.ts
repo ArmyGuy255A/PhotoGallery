@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
@@ -42,12 +42,19 @@ interface CodeValidation {
 @Component({
   selector: 'app-code-gallery',
   standalone: true,
-  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent, UserDropdownComponent],
+  imports: [CommonModule, FormsModule, RouterLink, CartPanelComponent, PhotoModalComponent, UserDropdownComponent],
   template: `
     <div class="code-gallery">
       <header class="gallery-header">
         <h1>{{ album?.albumTitle || 'Photo Gallery' }}</h1>
         <div class="header-actions">
+          <a
+            *ngIf="isAuthenticated"
+            class="back-to-dashboard"
+            routerLink="/dashboard"
+            data-testid="back-to-dashboard">
+            ← Back to Dashboard
+          </a>
           <button
             *ngIf="isAuthenticated"
             class="save-button"
@@ -194,6 +201,20 @@ interface CodeValidation {
       display: flex;
       gap: 12px;
       align-items: center;
+    }
+
+    .back-to-dashboard {
+      color: #0066cc;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+
+    .back-to-dashboard:hover {
+      background: #e3f2fd;
+      text-decoration: underline;
     }
 
     .save-button {

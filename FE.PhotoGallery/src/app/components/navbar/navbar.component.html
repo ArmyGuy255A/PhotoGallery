@@ -42,11 +42,14 @@
     <!-- Right Zone -->
 
     <div class="navbar-right">
-<!--      <button mat-icon-button class="favorite-icon" aria-label="Favorite">-->
-<!--        <mat-icon>favorite</mat-icon>-->
-<!--      </button>-->
       <app-theme></app-theme>
-      <button mat-icon-button class="login-icon" aria-label="Login">
+      <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
+      <button
+        *ngIf="!isAuthenticated"
+        mat-icon-button
+        class="login-icon"
+        aria-label="Login"
+        (click)="goToLogin()">
         <mat-icon>login</mat-icon>
       </button>
     </div>

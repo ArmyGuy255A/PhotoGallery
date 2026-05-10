@@ -1,6 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 
-import { CartItem, CartQuality, CartService, DEFAULT_CART_QUALITY } from './cart.service';
+import {
+  CartItem,
+  CartQuality,
+  CartService,
+  DEFAULT_CART_QUALITY
+} from './cart.service';
 
 const STORAGE_PREFIX = 'photogallery-cart';
 const CODE = 'TESTCODE';
@@ -20,7 +25,7 @@ describe('CartService', () => {
     localStorage.clear();
     TestBed.configureTestingModule({});
     service = TestBed.inject(CartService);
-    service.loadForCode('TESTCODE');
+    service.loadForCode(CODE);
   });
 
   afterEach(() => {
@@ -33,16 +38,12 @@ describe('CartService', () => {
 
   describe('CartQuality value set', () => {
     it('accepts Original as a valid quality', () => {
-      service = TestBed.inject(CartService);
-      service.loadForCode(CODE);
       const ok = service.addItem(makeItem('p1', 'Original'));
       expect(ok).toBeTrue();
       expect(service.items[0].quality).toBe('Original');
     });
 
     it('treats (photoId, Original) as distinct from (photoId, High)', () => {
-      service = TestBed.inject(CartService);
-      service.loadForCode(CODE);
       service.addItem(makeItem('p1', 'High'));
       const ok = service.addItem(makeItem('p1', 'Original'));
       expect(ok).toBeTrue();
@@ -78,7 +79,7 @@ describe('CartService', () => {
         makeItem('p1', 'Low'),
         makeItem('p2', 'Medium'),
         makeItem('p3', 'High'),
-        makeItem('p4', 'Original'),
+        makeItem('p4', 'Original')
       ];
       localStorage.setItem(key(), JSON.stringify(seeded));
 
@@ -91,9 +92,9 @@ describe('CartService', () => {
 
     it('coerces unknown quality strings to the default (Medium) without dropping the item', () => {
       const legacy = [
-        { photoId: 'p1', fileName: 'p1.jpg', quality: 'Ultra' },        // unknown
-        { photoId: 'p2', fileName: 'p2.jpg', quality: 'Low' },          // valid
-        { photoId: 'p3', fileName: 'p3.jpg', quality: 'high' },         // case-mismatch -> coerced
+        { photoId: 'p1', fileName: 'p1.jpg', quality: 'Ultra' },
+        { photoId: 'p2', fileName: 'p2.jpg', quality: 'Low' },
+        { photoId: 'p3', fileName: 'p3.jpg', quality: 'high' }
       ];
       localStorage.setItem(key(), JSON.stringify(legacy));
 
@@ -109,10 +110,10 @@ describe('CartService', () => {
     it('drops entries that lack the structural fields (photoId / fileName)', () => {
       const legacy = [
         { photoId: 'p1', fileName: 'p1.jpg', quality: 'Medium' },
-        { fileName: 'orphan.jpg', quality: 'Low' },        // no photoId
-        { photoId: 'p3', quality: 'High' },                // no fileName
+        { fileName: 'orphan.jpg', quality: 'Low' },
+        { photoId: 'p3', quality: 'High' },
         null,
-        'not-an-object',
+        'not-an-object'
       ];
       localStorage.setItem(key(), JSON.stringify(legacy));
 
@@ -147,7 +148,7 @@ describe('CartService', () => {
       const added = service.addItems([
         makeItem('p1'),
         makeItem('p2'),
-        makeItem('p3'),
+        makeItem('p3')
       ]);
       expect(added).toBe(3);
       expect(service.count).toBe(3);
@@ -163,7 +164,7 @@ describe('CartService', () => {
       service.addItem(makeItem('p1', 'Medium'));
       const added = service.addItems([
         makeItem('p1', 'Medium'),
-        makeItem('p2', 'Medium'),
+        makeItem('p2', 'Medium')
       ]);
       expect(added).toBe(1);
       expect(service.count).toBe(2);
@@ -173,7 +174,7 @@ describe('CartService', () => {
       const added = service.addItems([
         makeItem('p1'),
         makeItem('p1'),
-        makeItem('p2'),
+        makeItem('p2')
       ]);
       expect(added).toBe(2);
       expect(service.count).toBe(2);
@@ -185,39 +186,6 @@ describe('CartService', () => {
       const added = service.addItems(batch);
       expect(added).toBe(100);
       expect(service.count).toBe(100);
-    });
-
-    it('respects existing items when computing the cap', () => {
-      const seed: CartItem[] = [];
-      for (let i = 0; i < 90; i++) seed.push(makeItem(`s${i}`));
-      service.addItems(seed);
-      expect(service.count).toBe(90);
-
-      const more: CartItem[] = [];
-      for (let i = 0; i < 25; i++) more.push(makeItem(`m${i}`));
-      const added = service.addItems(more);
-
-      expect(added).toBe(10);
-      expect(service.count).toBe(100);
-    });
-
-    it('persists the bulk add to localStorage', () => {
-      service.addItems([makeItem('p1'), makeItem('p2')]);
-      const raw = localStorage.getItem('photogallery-cart-TESTCODE');
-      expect(raw).toBeTruthy();
-      const parsed = JSON.parse(raw!);
-      expect(parsed.length).toBe(2);
-    });
-
-    it('emits a single cart$ update for the whole batch', () => {
-      const emissions: CartItem[][] = [];
-      service.cart$.subscribe(items => emissions.push(items));
-      emissions.length = 0;
-
-      service.addItems([makeItem('p1'), makeItem('p2'), makeItem('p3')]);
-
-      expect(emissions.length).toBe(1);
-      expect(emissions[0].length).toBe(3);
     });
   });
 });

@@ -1,3 +1,4 @@
+using PhotoGallery.Models;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -131,6 +132,42 @@ public class WatermarkService
                 ctx.DrawText(stampOptions, text, textColor);
             }
         }
+    }
+
+    /// <summary>
+    /// Resolve the watermark display string for a photo's uploader. The fallback chain is:
+    /// <list type="number">
+    ///   <item>"© {FirstName LastName}" — if either name is set after trimming.</item>
+    ///   <item>"© {email-local-part}" — when the user has an email but no name.</item>
+    ///   <item>"© Photo Gallery" — when no user is found at all (legacy uploads, deleted users).</item>
+    /// </list>
+    /// This is the FE-visible text rendered onto every watermarked variant. Reference:
+    /// the bug at <c>ImageProcessingService.GenerateWatermarkedVariantAsync</c> where the raw
+    /// <c>Photo.UploadedBy</c> GUID was being painted onto images. PRs #47 / #48.
+    /// </summary>
+    public static string FormatDisplayName(User? user)
+    {
+        if (user == null)
+        {
+            return "© Photo Gallery";
+        }
+
+        var fullName = $"{user.FirstName} {user.LastName}".Trim();
+        if (!string.IsNullOrWhiteSpace(fullName))
+        {
+            return $"© {fullName}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(user.Email))
+        {
+            var local = user.Email.Split('@')[0];
+            if (!string.IsNullOrWhiteSpace(local))
+            {
+                return $"© {local}";
+            }
+        }
+
+        return "© Photo Gallery";
     }
 
     private static string SanitizeWatermarkText(string text)
