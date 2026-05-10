@@ -143,6 +143,11 @@ public class PhotoVersionUrlService
     /// Construct the canonical storage key for a photo version.
     /// Format: <c>photogallery/{albumId}/{photoId}/{quality}.jpg</c> with quality lowercased.
     /// Single source of truth shared by every code path that needs to talk to <see cref="IStorageProvider"/>.
+    ///
+    /// For <see cref="QualityType.Original"/> this resolves to
+    /// <c>photogallery/{albumId}/{photoId}/original.jpg</c>, which is the same object the
+    /// upload pipeline writes (<c>ImageProcessingService.cs</c>) — no separate Original
+    /// rendition exists.
     /// </summary>
     internal static string BuildStorageKey(Guid albumId, Guid photoId, QualityType quality)
     {
