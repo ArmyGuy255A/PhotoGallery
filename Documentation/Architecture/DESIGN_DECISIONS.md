@@ -1075,6 +1075,102 @@ storage keys.
 
 ---
 
+## D012: Single `PhotoGallery`-Prefixed Resource Group for Dev Footprint (incl. tfstate)
+
+**Status**: Approved · **Date**: 2026-05-11 · **Owner**: pg-platform-engineer
+
+### Context
+
+D011 originally provisioned two RGs: `rg-photogallery-tfstate` (state backend,
+bootstrapped manually) and `rg-photogallery-dev` (workload, managed by
+Terraform). The product owner has since stated two non-negotiable constraints
+for the dev subscription `4fc243fa-5de2-48cb-9c98-793701d13152`:
+
+1. **Every** resource group name must start with `PhotoGallery`.
+2. The dev footprint must live in a **single** resource group.
+
+The naming convention is straightforward (cosmetic rename). The "single RG"
+constraint conflicts with the chicken-and-egg of Terraform's own state
+backend: Terraform cannot create the storage account that holds its state.
+
+### Decision
+
+**One resource group: `PhotoGallery-dev`.** It holds both the Terraform state
+storage account and every workload resource (Storage, SQL, Key Vault,
+observability).
+
+Ownership split:
+
+| Resource | Created by | Managed by Terraform? |
+|----------|------------|------------------------|
+| `PhotoGallery-dev` RG | `terraform/bootstrap/bootstrap-state.ps1` | **No** — adopted via `data "azurerm_resource_group"` |
+| `stpgtfstate<hash>` state SA | bootstrap script | **No** — managed out of band |
+| `tfstate` container | bootstrap script | **No** |
+| Workload Storage Account, SQL, Key Vault, observability | `terraform/dev/main.tf` | **Yes** |
+
+Bootstrap flow:
+
+1. `bootstrap-state.ps1` runs `az group create --name PhotoGallery-dev` and
+   creates the state SA + container inside it. Idempotent.
+2. `terraform/dev/main.tf` declares `data "azurerm_resource_group" "this" { name = var.resource_group_name }`
+   (default `PhotoGallery-dev`) and points every module at
+   `data.azurerm_resource_group.this.name`. Terraform never tries to create
+   or destroy the RG.
+3. `terraform destroy` cleans only the workload resources Terraform created.
+   The RG and state SA survive — exactly the lifecycle we want.
+
+The `subscription_id` variable defaults to the pinned dev sub
+(`4fc243fa-5de2-48cb-9c98-793701d13152`) and is set on the `azurerm` provider
+block. `var.resource_group_name` has a validation rule rejecting any value
+that doesn't start with `PhotoGallery`.
+
+### Alternatives considered
+
+- **Two RGs, both `PhotoGallery`-prefixed** (`PhotoGallery-tfstate` +
+  `PhotoGallery-dev`). Satisfies the naming rule but violates "single RG."
+  Rejected.
+- **One RG, Terraform manages it** (no data source; `terraform import` after
+  bootstrap). Adds a fragile one-time import step that's easy to forget on
+  fresh machines. Also means `terraform destroy` would try to delete the RG
+  containing its own state SA — Terraform will refuse, leaving a confusing
+  half-destroyed state. Rejected.
+- **Single RG, Terraform manages it, state in a different sub.** Would
+  satisfy both constraints inside the dev sub but introduces cross-sub state
+  ownership that's overkill for a ~$17/mo dev footprint. Rejected.
+
+### Consequences
+
+**Positive**
+
+- Literal compliance with the owner's "single RG, `PhotoGallery`-prefixed"
+  rule.
+- `terraform destroy` is safe: it never targets the RG or the state SA, so
+  state survives a full workload teardown.
+- One mental model for resource location: "everything PhotoGallery dev lives
+  in `PhotoGallery-dev`."
+
+**Negative / follow-ups**
+
+- The RG itself is not codified in Terraform. Tags / locks / policies on the
+  RG are managed by the bootstrap script, not by `terraform apply`. If RG-level
+  configuration grows, revisit (likely answer: add an `azurerm_management_lock`
+  to the bootstrap script rather than Terraform).
+- Two artifacts (bootstrap script + Terraform) both write into the same RG;
+  reviewers must keep them aligned. Mitigated by validation: `var.resource_group_name`
+  must start with `PhotoGallery`, and the bootstrap script enforces the same
+  prefix check.
+- A fully clean reset requires `az group delete --name PhotoGallery-dev` after
+  `terraform destroy`. Documented in the runbook.
+
+### References
+
+- `terraform/bootstrap/bootstrap-state.ps1` — creates RG + state SA
+- `terraform/dev/main.tf` — adopts RG via `data` source
+- `terraform/dev/variables.tf` — `subscription_id` and `resource_group_name` defaults + validation
+- `Documentation/Runbooks/local-azure-dev.md` — updated bootstrap + teardown flow
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:

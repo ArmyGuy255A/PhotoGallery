@@ -4,7 +4,7 @@ variable "storage_account_name" {
 }
 
 variable "resource_group_name" { type = string }
-variable "location"            { type = string }
+variable "location" { type = string }
 
 variable "container_name" {
   description = "Blob container holding PhotoGallery photos/derivatives."

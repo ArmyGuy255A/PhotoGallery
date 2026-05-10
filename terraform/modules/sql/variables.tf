@@ -1,7 +1,7 @@
-variable "server_name"        { type = string }
-variable "database_name"      { type = string }
+variable "server_name" { type = string }
+variable "database_name" { type = string }
 variable "resource_group_name" { type = string }
-variable "location"           { type = string }
+variable "location" { type = string }
 
 variable "sku_name" {
   description = "Azure SQL DB SKU. S0 is 10 DTU / 250 GB, ~$15/mo. Bump to S1 if you outgrow."

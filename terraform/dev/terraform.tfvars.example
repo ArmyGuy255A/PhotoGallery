@@ -1,6 +1,12 @@
 # Copy this to terraform.tfvars (gitignored) and fill in.
 
-subscription_id         = "00000000-0000-0000-0000-000000000000"
+# Pinned PhotoGallery dev subscription. Override only for forks/CI.
+subscription_id         = "4fc243fa-5de2-48cb-9c98-793701d13152"
+
+# Single RG that holds both tfstate + workload. Must start with "PhotoGallery".
+# Created by terraform/bootstrap/bootstrap-state.ps1.
+resource_group_name     = "PhotoGallery-dev"
+
 location                = "eastus2"
 owner_tag               = "you@example.com"
 

@@ -25,20 +25,25 @@ the cheapest way to do that (~$17/mo, see cost section).
 You do **not** need SqlPackage. EF Core's `Database.Migrate()` runs migrations
 against the Azure SQL DB on app startup just like it does locally.
 
-## 1. Bootstrap the Terraform state backend (one-time, per subscription)
+## 1. Bootstrap the dev resource group + Terraform state backend (one-time, per subscription)
 
 ```powershell
 az login
-az account set --subscription <SUB_ID>
+az account set --subscription 4fc243fa-5de2-48cb-9c98-793701d13152
 
 cd terraform/bootstrap
-./bootstrap-state.ps1 -SubscriptionId <SUB_ID>
+./bootstrap-state.ps1
 ```
+
+The script defaults to the pinned PhotoGallery dev subscription
+(`4fc243fa-5de2-48cb-9c98-793701d13152`); pass `-SubscriptionId <other>` only
+if you're working in a fork.
 
 This creates:
 
-- `rg-photogallery-tfstate` resource group
-- `stpgtfstate<6-char-hash>` Storage Account (versioning + soft-delete on)
+- `PhotoGallery-dev` resource group (single RG holding **both** tfstate and
+  the workload — see DESIGN_DECISIONS.md D012)
+- `stpgtfstate<6-char-hash>` state Storage Account (versioning + soft-delete on)
 - `tfstate` container
 - Role assignment: your user → **Storage Blob Data Contributor** on the state SA
 - Writes `terraform/dev/backend.dev.hcl` with the resolved values
@@ -62,7 +67,11 @@ Copy-Item terraform.tfvars.example terraform.tfvars
 Then edit `terraform.tfvars`:
 
 ```hcl
-subscription_id         = "<SUB_ID>"
+# subscription_id and resource_group_name have sensible defaults — override
+# only if you're working in a fork or want a non-default RG name. The RG must
+# start with "PhotoGallery".
+subscription_id         = "4fc243fa-5de2-48cb-9c98-793701d13152"
+resource_group_name     = "PhotoGallery-dev"
 dev_principal_object_id = "<DEV_OBJECT_ID>"
 aad_admin_login         = "<DEV_UPN>"
 dev_public_ip           = "<DEV_IP>"
@@ -190,8 +199,14 @@ cd terraform/dev
 terraform destroy
 ```
 
-The state-backend RG (`rg-photogallery-tfstate`) is intentionally **not**
-destroyed; leave it for the next provisioning cycle.
+`terraform destroy` only removes the workload resources it manages (storage,
+SQL, Key Vault, observability). The `PhotoGallery-dev` resource group itself
+and the state Storage Account inside it survive — they were created out of
+band by the bootstrap script and are intentionally **not** under Terraform
+management (see DESIGN_DECISIONS.md D012). Leave them for the next
+provisioning cycle. If you really want a clean slate, run
+`az group delete --name PhotoGallery-dev --yes` afterward — but you'll have
+to rerun the bootstrap to re-provision.
 
 ## Troubleshooting
 

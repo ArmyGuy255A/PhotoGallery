@@ -1,6 +1,24 @@
 variable "subscription_id" {
-  description = "Target Azure subscription ID."
+  description = "Target Azure subscription ID. Default is the PhotoGallery dev subscription."
   type        = string
+  default     = "4fc243fa-5de2-48cb-9c98-793701d13152"
+}
+
+variable "resource_group_name" {
+  description = <<-EOT
+    Name of the single resource group that holds the entire PhotoGallery dev
+    footprint AND the Terraform state storage account. Must start with
+    "PhotoGallery" (project convention — see DESIGN_DECISIONS.md D012).
+    The RG is created up-front by terraform/bootstrap/bootstrap-state.ps1 and
+    adopted here via a data source.
+  EOT
+  type        = string
+  default     = "PhotoGallery-dev"
+
+  validation {
+    condition     = startswith(var.resource_group_name, "PhotoGallery")
+    error_message = "resource_group_name must start with 'PhotoGallery' (project convention)."
+  }
 }
 
 variable "location" {
@@ -34,8 +52,8 @@ variable "dev_public_ip" {
     Find with: curl -s https://api.ipify.org
     Set to "" to skip (e.g. if you're on a static/VPN IP added separately).
   EOT
-  type    = string
-  default = ""
+  type        = string
+  default     = ""
 }
 
 variable "cors_allowed_origins" {

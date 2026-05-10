@@ -1,11 +1,16 @@
 <#
 .SYNOPSIS
-  Bootstraps the Terraform remote-state backend in Azure.
+  Bootstraps the PhotoGallery dev resource group + Terraform remote-state backend.
 
 .DESCRIPTION
-  Creates a dedicated resource group + storage account + container that holds
-  Terraform state for the PhotoGallery dev (and later prod) environments.
+  PhotoGallery uses a SINGLE resource group for the entire dev footprint —
+  including the Terraform state Storage Account itself (see
+  Documentation/Architecture/DESIGN_DECISIONS.md D012). This script creates
+  that RG and the state SA inside it.
+
   This is a one-time, manual, idempotent operation. Run once per subscription.
+  Subsequent `terraform apply` runs in terraform/dev adopt the RG via a
+  `data "azurerm_resource_group"` lookup and never try to manage it.
 
   Output: writes ../dev/backend.dev.hcl with the resolved storage account
   name so subsequent `terraform init -backend-config=backend.dev.hcl` works.
@@ -15,28 +20,35 @@
   * Logged-in principal has Contributor on the target subscription.
 
 .PARAMETER SubscriptionId
-  Target Azure subscription.
+  Target Azure subscription. Defaults to the pinned PhotoGallery dev sub.
 
 .PARAMETER Location
   Azure region (default: eastus2).
 
+.PARAMETER ResourceGroupName
+  Single RG for the entire dev footprint. Must start with "PhotoGallery"
+  per project convention.
+
 .EXAMPLE
-  ./bootstrap-state.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000
+  ./bootstrap-state.ps1
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$SubscriptionId,
+    [string]$SubscriptionId = "4fc243fa-5de2-48cb-9c98-793701d13152",
 
     [string]$Location = "eastus2",
 
-    [string]$ResourceGroupName = "rg-photogallery-tfstate",
+    [string]$ResourceGroupName = "PhotoGallery-dev",
 
     [string]$ContainerName = "tfstate"
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $ResourceGroupName.StartsWith("PhotoGallery")) {
+    throw "ResourceGroupName must start with 'PhotoGallery' (project convention). Got: '$ResourceGroupName'."
+}
 
 Write-Host "Setting subscription..." -ForegroundColor Cyan
 az account set --subscription $SubscriptionId | Out-Null
@@ -50,15 +62,17 @@ $hash = ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join 
 $suffix = $hash.Substring(0, 6)
 $storageAccountName = "stpgtfstate$suffix"
 
-Write-Host "Resource group : $ResourceGroupName" -ForegroundColor Yellow
-Write-Host "Storage account: $storageAccountName" -ForegroundColor Yellow
-Write-Host "Container      : $ContainerName"      -ForegroundColor Yellow
-Write-Host "Location       : $Location"           -ForegroundColor Yellow
+Write-Host "Subscription   : $SubscriptionId"      -ForegroundColor Yellow
+Write-Host "Resource group : $ResourceGroupName"   -ForegroundColor Yellow
+Write-Host "Storage account: $storageAccountName"  -ForegroundColor Yellow
+Write-Host "Container      : $ContainerName"       -ForegroundColor Yellow
+Write-Host "Location       : $Location"            -ForegroundColor Yellow
 
-Write-Host "`nCreating resource group..." -ForegroundColor Cyan
-az group create --name $ResourceGroupName --location $Location --tags project=PhotoGallery purpose=tfstate | Out-Null
+Write-Host "`nCreating resource group (idempotent)..." -ForegroundColor Cyan
+az group create --name $ResourceGroupName --location $Location `
+    --tags project=PhotoGallery environment=dev managed_by=bootstrap | Out-Null
 
-Write-Host "Creating storage account (idempotent)..." -ForegroundColor Cyan
+Write-Host "Creating state storage account (idempotent)..." -ForegroundColor Cyan
 az storage account create `
     --name $storageAccountName `
     --resource-group $ResourceGroupName `

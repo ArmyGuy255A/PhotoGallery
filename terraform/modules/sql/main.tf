@@ -33,11 +33,11 @@ resource "azurerm_mssql_server" "this" {
 }
 
 resource "azurerm_mssql_database" "this" {
-  name        = var.database_name
-  server_id   = azurerm_mssql_server.this.id
-  sku_name    = var.sku_name # default S0
-  max_size_gb = var.max_size_gb
-  collation   = "SQL_Latin1_General_CP1_CI_AS"
+  name           = var.database_name
+  server_id      = azurerm_mssql_server.this.id
+  sku_name       = var.sku_name # default S0
+  max_size_gb    = var.max_size_gb
+  collation      = "SQL_Latin1_General_CP1_CI_AS"
   zone_redundant = false
 
   # Dev-friendly: short backup retention to control cost

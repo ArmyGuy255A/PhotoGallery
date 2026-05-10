@@ -71,18 +71,17 @@ resource "random_string" "suffix" {
 }
 
 locals {
-  prefix         = "photogallery"
-  short_prefix   = "pg"
-  env            = "dev"
-  suffix         = random_string.suffix.result
+  prefix       = "photogallery"
+  short_prefix = "pg"
+  env          = "dev"
+  suffix       = random_string.suffix.result
 
-  rg_name        = "rg-${local.prefix}-${local.env}"
-  sa_name        = "st${local.short_prefix}${local.env}${local.suffix}"      # 3-24 lowercase alnum
-  sql_server     = "sql-${local.prefix}-${local.env}-${local.suffix}"
-  sql_database   = "${local.prefix}"
-  kv_name        = "kv-${local.short_prefix}-${local.env}-${local.suffix}"   # <= 24 chars
-  log_name       = "log-${local.prefix}-${local.env}"
-  ai_name        = "appi-${local.prefix}-${local.env}"
+  sa_name      = "st${local.short_prefix}${local.env}${local.suffix}" # 3-24 lowercase alnum
+  sql_server   = "sql-${local.prefix}-${local.env}-${local.suffix}"
+  sql_database = local.prefix
+  kv_name      = "kv-${local.short_prefix}-${local.env}-${local.suffix}" # <= 24 chars
+  log_name     = "log-${local.prefix}-${local.env}"
+  ai_name      = "appi-${local.prefix}-${local.env}"
 
   common_tags = {
     project     = "PhotoGallery"
@@ -94,12 +93,16 @@ locals {
 
 ###############################################################################
 # Resource group
+#
+# Per DESIGN_DECISIONS.md D012, PhotoGallery uses a SINGLE resource group named
+# "PhotoGallery-dev" that holds both the Terraform state storage account AND
+# the workload resources. The RG is created up-front by
+# terraform/bootstrap/bootstrap-state.ps1 (chicken-and-egg with the state SA),
+# so Terraform adopts it via a data source instead of managing it.
 ###############################################################################
 
-resource "azurerm_resource_group" "this" {
-  name     = local.rg_name
-  location = var.location
-  tags     = local.common_tags
+data "azurerm_resource_group" "this" {
+  name = var.resource_group_name
 }
 
 ###############################################################################
@@ -110,8 +113,8 @@ module "storage" {
   source = "../modules/storage"
 
   storage_account_name    = local.sa_name
-  resource_group_name     = azurerm_resource_group.this.name
-  location                = azurerm_resource_group.this.location
+  resource_group_name     = data.azurerm_resource_group.this.name
+  location                = data.azurerm_resource_group.this.location
   container_name          = "photogallery"
   cors_allowed_origins    = var.cors_allowed_origins
   dev_principal_object_id = var.dev_principal_object_id
@@ -123,8 +126,8 @@ module "sql" {
 
   server_name         = local.sql_server
   database_name       = local.sql_database
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   sku_name            = var.sql_sku_name
   max_size_gb         = var.sql_max_size_gb
   aad_admin_login     = var.aad_admin_login
@@ -137,8 +140,8 @@ module "keyvault" {
   source = "../modules/keyvault"
 
   key_vault_name          = local.kv_name
-  resource_group_name     = azurerm_resource_group.this.name
-  location                = azurerm_resource_group.this.location
+  resource_group_name     = data.azurerm_resource_group.this.name
+  location                = data.azurerm_resource_group.this.location
   tenant_id               = data.azurerm_client_config.current.tenant_id
   dev_principal_object_id = var.dev_principal_object_id
 
@@ -155,7 +158,8 @@ module "observability" {
 
   log_analytics_name  = local.log_name
   app_insights_name   = local.ai_name
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
   tags                = local.common_tags
 }
+
