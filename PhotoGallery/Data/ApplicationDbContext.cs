@@ -24,6 +24,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<Download> Downloads { get; set; }
     public DbSet<SavedAccessCode> SavedAccessCodes { get; set; }
     public DbSet<AuditLogEntry> AuditLogEntries { get; set; }
+    public DbSet<UserCartItem> UserCartItems { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {

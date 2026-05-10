@@ -184,4 +184,120 @@ public class WatermarkBackfillTests
         _storage.Verify(s => s.DownloadAsync(It.IsAny<string>()), Times.Never);
         _storage.Verify(s => s.UploadAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()), Times.Never);
     }
+
+    // ----------------------------------------------------------------------------------
+    // WatermarkBackfillService — admin-triggered sweep. Audit-logged with `reason`.
+    // Reference: TODO at ImageProcessingService.cs:290, PRs #47 / #48, EPIC May 2026.
+    //
+    // Shape: deletes existing *-watermarked.jpg blobs so the on-demand backfill that PR
+    // #48 already shipped regenerates them with the corrected display name on next view.
+    // ----------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task BackfillService_AlbumScope_DeletesWatermarkedKeysAndAuditLogsReason()
+    {
+        var albumId = Guid.NewGuid();
+        var photoA = new Photo { Id = Guid.NewGuid(), AlbumId = albumId };
+        var photoB = new Photo { Id = Guid.NewGuid(), AlbumId = albumId };
+
+        var photoRepo = new Mock<IPhotoRepository>();
+        photoRepo.Setup(r => r.GetAlbumPhotosAsync(albumId))
+            .ReturnsAsync(new List<Photo> { photoA, photoB });
+
+        var storage = new Mock<IStorageProvider>();
+        storage.Setup(s => s.DeleteAsync(It.IsAny<string>())).ReturnsAsync(true);
+
+        var auditLog = new Mock<IAuditLogRepository>();
+        AuditLogEntry? captured = null;
+        auditLog.Setup(a => a.AddEntryAsync(It.IsAny<AuditLogEntry>()))
+            .Callback<AuditLogEntry>(e => captured = e)
+            .Returns(Task.CompletedTask);
+
+        var logger = new Mock<ILogger<WatermarkBackfillService>>();
+        var svc = new WatermarkBackfillService(photoRepo.Object, storage.Object, auditLog.Object, logger.Object);
+
+        var reason = "Display-name regression fix - sweep prod after PR merge";
+        var result = await svc.RegenerateAsync(
+            new WatermarkBackfillRequest(albumId, reason),
+            actorUserId: "admin-user-id",
+            actorEmail: "admin@example.com");
+
+        // 2 photos × 2 watermarked qualities (Thumbnail + Medium) = 4 deletions
+        Assert.Equal(2, result.PhotosScanned);
+        Assert.Equal(4, result.BlobsDeleted);
+        Assert.Equal(0, result.BlobsMissing);
+        Assert.Equal(0, result.Errors);
+
+        storage.Verify(s => s.DeleteAsync(
+            It.Is<string>(k => k.EndsWith("thumbnail-watermarked.jpg"))),
+            Times.Exactly(2));
+        storage.Verify(s => s.DeleteAsync(
+            It.Is<string>(k => k.EndsWith("medium-watermarked.jpg"))),
+            Times.Exactly(2));
+
+        // Reason and counts are persisted in the audit-log Details payload.
+        Assert.NotNull(captured);
+        Assert.Equal("watermark.regenerate", captured!.Action);
+        Assert.Equal("Album", captured.TargetType);
+        Assert.Equal(albumId.ToString(), captured.TargetId);
+        Assert.Equal("admin@example.com", captured.ActorEmail);
+        Assert.Equal("admin-user-id", captured.ActorUserId);
+        Assert.NotNull(captured.Details);
+        Assert.Contains(reason, captured.Details);
+        Assert.Contains("\"photosScanned\":2", captured.Details);
+        Assert.Contains("\"blobsDeleted\":4", captured.Details);
+    }
+
+    [Fact]
+    public async Task BackfillService_AllScope_IteratesEveryPhoto()
+    {
+        var photos = Enumerable.Range(0, 3)
+            .Select(_ => new Photo { Id = Guid.NewGuid(), AlbumId = Guid.NewGuid() })
+            .ToList();
+
+        var photoRepo = new Mock<IPhotoRepository>();
+        photoRepo.Setup(r => r.GetAllAsync()).ReturnsAsync(photos);
+
+        var storage = new Mock<IStorageProvider>();
+        // Half exist, half missing — exercises the bookkeeping
+        var counter = 0;
+        storage.Setup(s => s.DeleteAsync(It.IsAny<string>()))
+            .ReturnsAsync(() => (counter++ % 2) == 0);
+
+        var auditLog = new Mock<IAuditLogRepository>();
+        var logger = new Mock<ILogger<WatermarkBackfillService>>();
+        var svc = new WatermarkBackfillService(photoRepo.Object, storage.Object, auditLog.Object, logger.Object);
+
+        var result = await svc.RegenerateAsync(
+            new WatermarkBackfillRequest(AlbumId: null, Reason: "post-merge sweep"),
+            "admin-id", "admin@example.com");
+
+        photoRepo.Verify(r => r.GetAllAsync(), Times.Once);
+        photoRepo.Verify(r => r.GetAlbumPhotosAsync(It.IsAny<Guid>()), Times.Never);
+        Assert.Equal(3, result.PhotosScanned);
+        Assert.Equal(6, result.BlobsDeleted + result.BlobsMissing);
+        auditLog.Verify(a => a.AddEntryAsync(It.Is<AuditLogEntry>(
+            e => e.Action == "watermark.regenerate" && e.TargetType == "All" && e.TargetId == null)),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task BackfillService_MissingReason_Throws()
+    {
+        var svc = new WatermarkBackfillService(
+            new Mock<IPhotoRepository>().Object,
+            new Mock<IStorageProvider>().Object,
+            new Mock<IAuditLogRepository>().Object,
+            new Mock<ILogger<WatermarkBackfillService>>().Object);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            svc.RegenerateAsync(
+                new WatermarkBackfillRequest(null, "  "),
+                "admin-id", "admin@example.com"));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            svc.RegenerateAsync(
+                new WatermarkBackfillRequest(null, ""),
+                "admin-id", "admin@example.com"));
+    }
 }
