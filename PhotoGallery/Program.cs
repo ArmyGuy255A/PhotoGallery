@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using PhotoGallery;
 using PhotoGallery.Data;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Interfaces;
@@ -45,6 +46,13 @@ if (!string.IsNullOrWhiteSpace(keyVaultUri))
         new Uri(keyVaultUri),
         new DefaultAzureCredential());
 }
+
+// Bridge Key-Vault-canonical secret names to the strongly-typed binding paths
+// the rest of the codebase already consumes (see ConfigurationCanonicalAliases).
+// Single source of truth for the cross-branch naming contract with the
+// platform engineer's Terraform module.
+ConfigurationCanonicalAliases.BridgeKeyVaultCanonicalNames(
+    builder.Configuration, builder.Configuration);
 
 // Bind strongly-typed configuration first so downstream registrations can use it.
 // Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
