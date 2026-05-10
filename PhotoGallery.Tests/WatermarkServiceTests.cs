@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Moq;
+using PhotoGallery.Models;
 using PhotoGallery.Services;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -133,5 +134,59 @@ public class WatermarkServiceTests
         // Higher quality JPEG should be a larger file
         Assert.True(output2.Length > output1.Length,
             $"Q95 ({output2.Length}) should be larger than Q50 ({output1.Length})");
+    }
+
+    // -------------------------------------------------------------------------------------
+    // FormatDisplayName — display-name fallback chain (PRs #47 / #48 + EPIC May 2026).
+    // The pre-fix code rendered the raw Photo.UploadedBy GUID into every watermark; these
+    // tests pin the new resolution chain so a regression is caught before another sweep ships.
+    // -------------------------------------------------------------------------------------
+
+    [Fact]
+    public void FormatDisplayName_FirstAndLastBothPresent_PrefersFullName()
+    {
+        var user = new User { FirstName = "Ada", LastName = "Lovelace", Email = "ada@example.com" };
+        Assert.Equal("© Ada Lovelace", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_OnlyFirstName_StillUsesIt()
+    {
+        var user = new User { FirstName = "Ada", LastName = null, Email = "ada@example.com" };
+        Assert.Equal("© Ada", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_OnlyLastName_StillUsesIt()
+    {
+        var user = new User { FirstName = null, LastName = "Lovelace", Email = "ada@example.com" };
+        Assert.Equal("© Lovelace", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_NoNamesButHasEmail_FallsBackToEmailLocalPart()
+    {
+        var user = new User { FirstName = null, LastName = null, Email = "ada@example.com" };
+        Assert.Equal("© ada", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_WhitespaceNamesWithEmail_FallsBackToEmailLocalPart()
+    {
+        var user = new User { FirstName = "  ", LastName = "  ", Email = "ada@example.com" };
+        Assert.Equal("© ada", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_NoNamesNoEmail_FallsBackToGeneric()
+    {
+        var user = new User { FirstName = null, LastName = null, Email = null };
+        Assert.Equal("© Photo Gallery", WatermarkService.FormatDisplayName(user));
+    }
+
+    [Fact]
+    public void FormatDisplayName_NullUser_FallsBackToGeneric()
+    {
+        Assert.Equal("© Photo Gallery", WatermarkService.FormatDisplayName(null));
     }
 }
