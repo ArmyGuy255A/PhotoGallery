@@ -1,4 +1,4 @@
-import { ApplicationConfig, inject, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
+import { ApplicationConfig, ErrorHandler, inject, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 
@@ -7,6 +7,7 @@ import { jwtInterceptor } from './services/jwt.interceptor';
 import { RuntimeConfigService } from './services/runtime-config.service';
 import { AuthService } from './services/auth.service';
 import { CartService } from './services/cart.service';
+import { AppInsightsErrorHandler, AppInsightsService } from './services/app-insights.service';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -18,10 +19,16 @@ export const appConfig: ApplicationConfig = {
     // API call returns 401 with authHeaderPresent=False on the backend
     // because the Authorization header is silently never attached.
     provideHttpClient(withInterceptors([jwtInterceptor])),
-    // Fetch public runtime config (e.g. Google OAuth ClientId) before bootstrap.
-    // Reads from backend GET /api/config/public so values are env-var driven
-    // and don't require an Angular rebuild to change.
+    // Fetch public runtime config (e.g. Google OAuth ClientId, Application
+    // Insights connection string) before bootstrap. Reads from backend
+    // GET /api/config/public so values are env-var driven and don't require
+    // an Angular rebuild to change.
     provideAppInitializer(() => inject(RuntimeConfigService).load()),
+    // Initialise Application Insights right after runtime config loads.
+    // No-op when the backend returns an empty connection string (local dev).
+    provideAppInitializer(() => inject(AppInsightsService).initialise()),
+    // Route uncaught Angular errors into App Insights as exceptions.
+    { provide: ErrorHandler, useClass: AppInsightsErrorHandler },
     // Fire-and-forget: when the user is authenticated at boot, hydrate the
     // server-backed cart in the background so the navbar badge / drawer have
     // accurate state on first paint. Errors are logged but do NOT block

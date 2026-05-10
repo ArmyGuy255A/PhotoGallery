@@ -17,6 +17,7 @@ import { environment } from '../../environments/environment';
  */
 export interface PublicConfig {
   googleClientId: string;
+  applicationInsightsConnectionString: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -32,7 +33,7 @@ export class RuntimeConfigService {
       this.config = await firstValueFrom(this.http.get<PublicConfig>(url));
     } catch (err) {
       console.error('RuntimeConfigService: failed to load /api/config/public', err);
-      this.config = { googleClientId: '' };
+      this.config = { googleClientId: '', applicationInsightsConnectionString: '' };
     }
   }
 
@@ -43,5 +44,11 @@ export class RuntimeConfigService {
       return '';
     }
     return this.config.googleClientId;
+  }
+
+  /** Application Insights connection string for browser-side telemetry.
+   *  Empty in local dev where the backend isn't wired to an AI resource. */
+  get applicationInsightsConnectionString(): string {
+    return this.config?.applicationInsightsConnectionString ?? '';
   }
 }
