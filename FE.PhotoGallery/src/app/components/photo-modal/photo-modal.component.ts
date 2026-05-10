@@ -19,7 +19,10 @@ export interface ModalPhoto {
  *   Esc — close
  *   ← → — navigate
  *
- * Add-to-cart slot is rendered via [showCartButton] toggle and (cartAction) output.
+ * Add/Remove cart slot is rendered via [showCartButton] toggle and driven by
+ * [isInCart]: false → green "+ Add to Cart"; true → red "− Remove from Cart".
+ * A single (cartAction) output fires for both cases — the parent decides add
+ * vs. remove based on the same `isInCart` flag it passes in.
  */
 @Component({
   selector: 'app-photo-modal',
