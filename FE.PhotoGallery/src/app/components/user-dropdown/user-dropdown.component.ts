@@ -65,6 +65,14 @@ import { GravatarService } from '../../services/gravatar.service';
           role="menuitem"
           (click)="close()"
         >Shared Albums</a>
+        <a
+          *ngIf="isAdmin"
+          class="menu-item"
+          routerLink="/admin/settings"
+          data-testid="user-dropdown-admin-settings"
+          role="menuitem"
+          (click)="close()"
+        >Admin Settings</a>
         <div class="divider"></div>
         <button
           type="button"
@@ -237,6 +245,11 @@ export class UserDropdownComponent implements OnInit, OnDestroy {
     const ln = this.currentUser.lastName?.trim() || '';
     const full = `${fn} ${ln}`.trim();
     return full || this.currentUser.email;
+  }
+
+  get isAdmin(): boolean {
+    return Array.isArray(this.currentUser?.roles)
+      && this.currentUser!.roles.includes('Admin');
   }
 
   toggle(event: MouseEvent): void {
