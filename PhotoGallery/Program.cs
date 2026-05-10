@@ -102,13 +102,14 @@ builder.Services.AddScoped<IAlbumRepository, AlbumRepository>();
 builder.Services.AddScoped<IPhotoRepository, PhotoRepository>();
 builder.Services.AddScoped<IPhotoVersionUrlRepository, PhotoVersionUrlRepository>();
 builder.Services.AddScoped<IAccessCodeRepository, AccessCodeRepository>();
+builder.Services.AddScoped<IUserCartRepository, UserCartRepository>();
 builder.Services.AddScoped<IProcessingQueueRepository, ProcessingQueueRepository>();
 builder.Services.AddScoped<IProcessingQueueItemRepository, ProcessingQueueItemRepository>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
 // Register services
 builder.Services.AddScoped<PhotoVersionUrlService>();
-builder.Services.AddScoped<ZipDownloadService>();
+builder.Services.AddScoped<ICartZipService, CartZipService>();
 builder.Services.AddSingleton<WatermarkService>();
 builder.Services.AddScoped<IWatermarkTextResolver, WatermarkTextResolver>();
 builder.Services.AddScoped<IWatermarkBackfillService, WatermarkBackfillService>();
