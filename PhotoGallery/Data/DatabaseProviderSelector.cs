@@ -12,9 +12,11 @@ namespace PhotoGallery.Data;
 ///   <item><c>ConnectionStrings:DefaultConnection</c> — required, resolved from Key Vault in the Azure-backed profile.</item>
 /// </list>
 ///
-/// Note: the project currently ships only Sqlite migrations. SqlServer migrations
-/// are an open follow-up (see the README "Local development modes" section and
-/// the backend-dev hand-off).
+/// Note: SqlServer migrations live under Data/Migrations/SqlServer/ and are
+/// scaffolded against <see cref="ApplicationDbContextSqlServer"/>. The Sqlite
+/// migrations under Data/Migrations/ are the default and bind to the base
+/// <see cref="ApplicationDbContext"/>. Program.cs picks which context to
+/// register based on the same <c>Database:Provider</c> key consumed here.
 /// </summary>
 public static class DatabaseProviderSelector
 {

@@ -67,9 +67,27 @@ var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://loca
 builder.WebHost.UseUrls(urls);
 
 // Database provider switch — Sqlite (all-local default) | SqlServer (Azure-backed dev).
-// See PhotoGallery/Data/DatabaseProviderSelector.cs for behavior + open items.
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    DatabaseProviderSelector.Apply(options, builder.Configuration));
+// See PhotoGallery/Data/DatabaseProviderSelector.cs for behavior.
+//
+// Migration sets are provider-specific because EF Core ties each migration to
+// a concrete DbContext type:
+//   - Sqlite     → ApplicationDbContext       (Data/Migrations/)
+//   - SqlServer  → ApplicationDbContextSqlServer (Data/Migrations/SqlServer/)
+// Consumers always inject ApplicationDbContext; the SqlServer subclass is
+// reachable through the same base type via a forwarding scoped registration.
+var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
+if (string.Equals(dbProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddDbContext<ApplicationDbContextSqlServer>(options =>
+        DatabaseProviderSelector.Apply(options, builder.Configuration));
+    builder.Services.AddScoped<ApplicationDbContext>(sp =>
+        sp.GetRequiredService<ApplicationDbContextSqlServer>());
+}
+else
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        DatabaseProviderSelector.Apply(options, builder.Configuration));
+}
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 // Configure CORS — AllowFrontendDev is scoped to the SPA origin from
