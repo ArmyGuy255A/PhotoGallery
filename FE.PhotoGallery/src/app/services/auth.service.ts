@@ -280,8 +280,7 @@ export class AuthService {
     const decoded = this.decodeJwt(appToken) as any;
     if (!decoded) return null;
 
-    const rolesRaw = decoded.role ?? decoded.roles ?? [];
-    const roles = Array.isArray(rolesRaw) ? rolesRaw : [rolesRaw];
+    const roles = AuthService.extractRoles(decoded);
 
     return {
       id: decoded.sub ?? '',
@@ -290,6 +289,31 @@ export class AuthService {
       lastName: decoded.family_name ?? decoded.lastName,
       roles
     };
+  }
+
+  /**
+   * Extract roles from a decoded JWT payload, accepting any of:
+   *   - ``role``  — short-form claim emitted by current backend
+   *   - ``roles`` — plural variant some IdPs use
+   *   - ``http://schemas.microsoft.com/ws/2008/06/identity/claims/role`` —
+   *     legacy long-URI claim (ClaimTypes.Role) that pre-PR-A admin tokens
+   *     still in localStorage carry. Keeping this fallback means existing
+   *     logged-in admins don't get force-logged-out at deploy time.
+   *
+   * Always returns an array (possibly empty), normalising scalar claim
+   * values into a single-element array for downstream consumers.
+   */
+  static extractRoles(decoded: Record<string, unknown> | null | undefined): string[] {
+    if (!decoded) return [];
+    const longUri = 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role';
+    const raw = (decoded as any).role
+      ?? (decoded as any).roles
+      ?? (decoded as any)[longUri]
+      ?? [];
+    if (Array.isArray(raw)) {
+      return raw.filter((r): r is string => typeof r === 'string');
+    }
+    return typeof raw === 'string' ? [raw] : [];
   }
 
   private getIdpIssuer(): IdentityProviderType | null {
