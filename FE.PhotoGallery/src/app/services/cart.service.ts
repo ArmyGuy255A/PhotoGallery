@@ -348,8 +348,14 @@ export class CartService {
         // Avoid optimistic duplicate.
         const existing = this.items$.value;
         if (existing.some(i => i.photoId === item.photoId && i.quality === item.quality)) return;
+        // Issue #110: when merging server-returned fields with the locally-staged
+        // item, never let server-supplied null/undefined clobber a value the call
+        // site already provided. The backend used to return SourceAlbumTitle: null
+        // on add, which silently downgraded the item into the cart drawer's
+        // "Other" bucket. The backend is now fixed too, but this guard means
+        // older deployments and partial responses don't regress the UX.
         const merged: CartItem = returned
-          ? this.normalizeServerItem({ ...item, ...returned })
+          ? this.normalizeServerItem(this.mergePreservingDefined(item, returned))
           : { ...item };
         this.items$.next([...existing, merged]);
       },
@@ -370,6 +376,24 @@ export class CartService {
         this.errors$.next('Failed to add to cart. Please try again.');
       }
     });
+  }
+
+  /**
+   * Merge two <see cref="CartItem"/> shallow copies, preferring values from
+   * <paramref name="overrides"/> only when they are NOT null/undefined. Used to
+   * keep locally-set fields (like sourceAlbumTitle from a /albums/:id click)
+   * intact when the server response omits them.
+   */
+  private mergePreservingDefined(base: CartItem, overrides: Partial<CartItem>): CartItem {
+    const out: CartItem = { ...base };
+    for (const key of Object.keys(overrides) as (keyof CartItem)[]) {
+      const v = overrides[key];
+      if (v !== undefined && v !== null) {
+        // Cast widening is safe — we mirror the source field exactly.
+        (out as unknown as Record<string, unknown>)[key as string] = v as unknown;
+      }
+    }
+    return out;
   }
 
   private async migrateLocalStorageCarts(): Promise<void> {

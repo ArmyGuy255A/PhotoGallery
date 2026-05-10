@@ -82,6 +82,18 @@ describe('NavbarComponent', () => {
   });
 
 
+  it('does not render the search bar (issue #103 — removed from navbar)', async () => {
+    await setup(true);
+    expect(fixture.debugElement.query(By.css('.navbar-center'))).toBeNull();
+    expect(fixture.debugElement.query(By.css('mat-form-field'))).toBeNull();
+    expect(fixture.debugElement.query(By.css('input[placeholder="Search"]'))).toBeNull();
+  });
+
+  it('does not render the theme toggle (issue #103 — removed from navbar)', async () => {
+    await setup(true);
+    expect(fixture.debugElement.query(By.css('app-theme'))).toBeNull();
+  });
+
   it('navigates to /login when the login icon is clicked', async () => {
     await setup(false);
     const btn = fixture.debugElement.query(By.css('button.login-icon'));

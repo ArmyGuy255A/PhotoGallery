@@ -8,8 +8,6 @@ mat-toolbar {
   padding-top: 3px;
   padding-bottom: 3px;
   @include mat.toolbar-overrides((
-    //container-background-color: orange,
-    //container-text-color: red,
     mobile-height: 45px,
     standard-height: 45px,
   ));
@@ -23,7 +21,6 @@ mat-toolbar {
 }
 
 .navbar-left,
-.navbar-center,
 .navbar-right {
   display: flex;
   align-items: center;
@@ -33,34 +30,9 @@ mat-toolbar {
   flex: 1;
 }
 
-.navbar-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-
-
-}
-
 .navbar-right {
   flex: 1;
   justify-content: flex-end;
-}
-
-.search-field {
-  display: flex;
-  align-items: center;
-  height: 35px;
-
-  max-width: 500px;
-  width: 100%;
-  @include mat.form-field-overrides((
-    //outlined-outline-color: ????,
-    outlined-container-shape: 25px,
-    container-vertical-padding: 2%,
-  ));
-}
-
-.pill-search-button {
-  margin-right: 10px;
+  // Bug F: visible whitespace between cart button and gravatar/user dropdown.
+  gap: 12px;
 }

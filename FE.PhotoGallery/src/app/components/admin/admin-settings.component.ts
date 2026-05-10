@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 
 /**
  * Placeholder Admin Settings page.
@@ -11,13 +12,14 @@ import { Component } from '@angular/core';
 @Component({
   selector: 'app-admin-settings',
   standalone: true,
-  imports: [],
+  imports: [BackToDashboardComponent],
   template: `
     <section
       class="admin-settings"
       data-testid="admin-settings-page"
       aria-labelledby="admin-settings-title"
     >
+      <app-back-to-dashboard></app-back-to-dashboard>
       <h1 id="admin-settings-title">Admin Settings</h1>
       <section class="coming-soon">
         <p>Admin configuration is coming soon.</p>
@@ -34,7 +36,7 @@ import { Component } from '@angular/core';
       margin: 0 auto;
     }
     h1 {
-      margin: 0 0 12px;
+      margin: 8px 0 12px;
       font-size: 24px;
     }
     .coming-soon p {

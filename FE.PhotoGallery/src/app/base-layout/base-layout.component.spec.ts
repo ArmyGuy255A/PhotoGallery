@@ -14,6 +14,9 @@ class AuthServiceStub {
   isAuthenticatedSync(): boolean {
     return false;
   }
+  isAdmin(): boolean {
+    return false;
+  }
 }
 
 describe('BaseLayoutComponent', () => {

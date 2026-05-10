@@ -1,4 +1,5 @@
 import { Component } from '@angular/core';
+import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 
 /**
  * Account Settings page — MVP placeholder.
@@ -11,10 +12,11 @@ import { Component } from '@angular/core';
 @Component({
   selector: 'app-account-settings',
   standalone: true,
-  imports: [],
+  imports: [BackToDashboardComponent],
   template: `
     <div class="account-settings" data-testid="account-settings-page">
       <header>
+        <app-back-to-dashboard></app-back-to-dashboard>
         <h1>Account Settings</h1>
         <p class="subtitle">Manage your profile and preferences.</p>
       </header>
@@ -31,7 +33,7 @@ import { Component } from '@angular/core';
   styles: [`
     .account-settings { max-width: 1200px; margin: 0 auto; padding: 24px; }
     header { margin-bottom: 24px; }
-    h1 { margin: 0 0 4px 0; font-size: 26px; color: #333; }
+    h1 { margin: 8px 0 4px 0; font-size: 26px; color: #333; }
     .subtitle { color: #666; margin: 0; }
     .coming-soon {
       background: white;

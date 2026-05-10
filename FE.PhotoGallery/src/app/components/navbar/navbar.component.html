@@ -6,43 +6,10 @@
         <mat-icon>menu</mat-icon>
       </button>
       <span class="app-title">{{ globalStateService.title }}</span>
-
-    </div>
-<!--     <span class="navbar-spacer"></span>-->
-
-    <!-- Center Zone -->
-    <div class="navbar-center">
-      <mat-form-field appearance="outline" class="search-field dense-10">
-        <input matInput placeholder="Search" #searchBox />
-
-        <!-- Clear (X) Icon: Only shows when there's input -->
-        <button
-          *ngIf="searchBox.value"
-          mat-icon-button
-          matSuffix
-          aria-label="Clear"
-          (click)="searchBox.value = ''"
-        >
-          <mat-icon>close</mat-icon>
-        </button>
-
-        <!-- Pill-style Search Icon -->
-        <button
-          mat-icon-button
-          matSuffix
-          class="pill-search-button"
-          aria-label="Search"
-
-        >
-          <mat-icon>search</mat-icon>
-        </button>
-      </mat-form-field>
     </div>
 
     <!-- Right Zone -->
-
     <div class="navbar-right">
-      <app-theme></app-theme>
       <app-cart-button *ngIf="isAuthenticated"></app-cart-button>
       <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
       <button
@@ -54,8 +21,5 @@
         <mat-icon>login</mat-icon>
       </button>
     </div>
-
-    <!-- Left Zone -->
-
   </mat-toolbar-row>
 </mat-toolbar>

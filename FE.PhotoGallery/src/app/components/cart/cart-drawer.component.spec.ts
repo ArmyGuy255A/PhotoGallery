@@ -96,4 +96,35 @@ describe('CartDrawerComponent', () => {
   it('does not render skipped warning when no items were skipped', () => {
     expect(fixture.debugElement.query(By.css('[data-testid="cart-skipped-warning"]'))).toBeNull();
   });
+
+  describe('per-item quality picker (issue #109)', () => {
+    beforeEach(() => {
+      // Add updateQuality to the stub for this block.
+      (cart as unknown as { updateQuality: jasmine.Spy }).updateQuality =
+        jasmine.createSpy('updateQuality');
+      cart.cartItems$.next([item('p1', 'A1', 'Alpha')]);
+      fixture.detectChanges();
+    });
+
+    it('renders a quality <select> with all four options per item', () => {
+      const select = fixture.debugElement
+        .query(By.css('[data-testid="cart-item-quality-select"]'))
+        .nativeElement as HTMLSelectElement;
+      const values = Array.from(select.options).map(o => o.value);
+      expect(values).toEqual(['Low', 'Medium', 'High', 'Original']);
+    });
+
+    it('changing the picker calls cart.updateQuality with old + new', () => {
+      const select = fixture.debugElement
+        .query(By.css('[data-testid="cart-item-quality-select"]'))
+        .nativeElement as HTMLSelectElement;
+      // Select 'Original' (last option).
+      select.value = 'Original';
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges();
+
+      const spy = (cart as unknown as { updateQuality: jasmine.Spy }).updateQuality;
+      expect(spy).toHaveBeenCalledWith('p1', 'High', 'Original');
+    });
+  });
 });

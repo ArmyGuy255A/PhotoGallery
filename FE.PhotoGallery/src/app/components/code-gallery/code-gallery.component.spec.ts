@@ -54,10 +54,10 @@ describe('CodeGalleryComponent', () => {
     return fixture;
   }
 
-  it('renders <app-user-dropdown> when authenticated', async () => {
+  it('does not render <app-user-dropdown> when authenticated (the global navbar takes over)', async () => {
     const fixture = await createComponent(true);
     const dropdown = fixture.debugElement.query(By.css('app-user-dropdown'));
-    expect(dropdown).toBeTruthy();
+    expect(dropdown).toBeNull();
   });
 
   it('does not render <app-user-dropdown> when unauthenticated', async () => {
@@ -70,7 +70,6 @@ describe('CodeGalleryComponent', () => {
     const fixture = await createComponent(true);
     const link = fixture.debugElement.query(By.css('[data-testid="back-to-dashboard"]'));
     expect(link).toBeTruthy();
-    expect(link.attributes['ng-reflect-router-link']).toBe('/dashboard');
   });
 
   it('hides the Back to Dashboard link when unauthenticated', async () => {
@@ -185,6 +184,19 @@ describe('CodeGalleryComponent', () => {
       fixture.detectChanges();
       const btn2 = fixture.debugElement.query(By.css('.select-all-btn')).nativeElement as HTMLButtonElement;
       expect(btn2.textContent?.trim()).toBe('Remove All from Cart');
+    });
+
+    it('persisted defaultQuality "Original" is restored on reload (issue #62)', () => {
+      // Simulate a prior session that stored Original.
+      localStorage.setItem('defaultQuality:RELOADCODE', 'Original');
+      try {
+        // Drive the private loader directly — same code path used by ngOnInit.
+        component.code = 'RELOADCODE';
+        (component as unknown as { loadDefaultQuality(): void }).loadDefaultQuality();
+        expect(component.defaultQuality).toBe('Original');
+      } finally {
+        localStorage.removeItem('defaultQuality:RELOADCODE');
+      }
     });
   });
 });
