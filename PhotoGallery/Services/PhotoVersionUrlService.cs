@@ -179,6 +179,19 @@ public class PhotoVersionUrlService
             throw new ArgumentOutOfRangeException(nameof(ttlMinutes), "TTL must be positive.");
         }
 
+        // Regression guard (PR-B / bug #7): Original is the paid-checkout / archival
+        // rendition and must NEVER be served watermarked, regardless of what the caller
+        // requested. Watermarks only exist for the Medium guest-preview variant
+        // (see D009). Coercing here means a buggy caller (e.g. a future endpoint that
+        // forwards watermarked=true unconditionally) cannot leak a watermarked Original.
+        if (quality == QualityType.Original && watermarked)
+        {
+            _logger.LogWarning(
+                "Refusing to serve watermarked variant for Original quality on photo {PhotoId}; coercing watermarked=false",
+                photoId);
+            watermarked = false;
+        }
+
         try
         {
             var photo = await _photoRepository.GetByIdAsync(photoId);
