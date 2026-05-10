@@ -1,4 +1,5 @@
-import { Routes } from '@angular/router';
+import { Routes, CanMatchFn } from '@angular/router';
+import { inject } from '@angular/core';
 import { LoginComponent } from './components/login/login.component';
 import { DashboardComponent } from './components/dashboard/dashboard.component';
 import { AlbumsCreateComponent } from './components/albums/albums-create.component';
@@ -9,7 +10,16 @@ import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.
 import { AccountSettingsComponent } from './components/account/account-settings.component';
 import { AdminSettingsComponent } from './components/admin/admin-settings.component';
 import { BaseLayoutComponent } from './base-layout/base-layout.component';
+import { AuthService } from './services/auth.service';
 import { authGuard, adminGuard } from './services/auth.guard';
+
+/**
+ * canMatch helper for the public, unwrapped `/code/:code` route. Returns
+ * `true` only when the visitor is NOT authenticated — authenticated
+ * visitors fall through to the BaseLayoutComponent-wrapped variant below
+ * (issue #99) so they see the global navbar + cart drawer.
+ */
+const anonymousOnlyMatch: CanMatchFn = () => !inject(AuthService).isAuthenticatedSync();
 
 export const routes: Routes = [
   // Public routes — rendered without the BaseLayoutComponent shell.
@@ -18,10 +28,13 @@ export const routes: Routes = [
     component: LoginComponent
   },
   {
-    // Public access-code route per requirement #4 — no auth guard, no shell.
-    // Anonymous viewers must not see the authenticated nav/sidenav.
+    // Public, chrome-less access-code route (anonymous viewers only).
+    // The CartPanel + download telemetry on this path stay intact.
+    // Authenticated users skip this match and fall through to the
+    // BaseLayoutComponent-wrapped child route below — see issue #99.
     path: 'code/:code',
-    component: CodeGalleryComponent
+    component: CodeGalleryComponent,
+    canMatch: [anonymousOnlyMatch]
   },
 
   // Authenticated app shell — every child route renders inside
@@ -36,6 +49,10 @@ export const routes: Routes = [
       { path: 'albums/:id/edit', component: AlbumEditComponent, canActivate: [adminGuard] },
       { path: 'albums/:id', component: AlbumDetailComponent },
       { path: 'shared-albums', component: SharedAlbumsComponent },
+      // Authenticated viewers of /code/:code render through BaseLayoutComponent
+      // so the global navbar (cart button + user dropdown) and global cart
+      // drawer are visible — issue #99.
+      { path: 'code/:code', component: CodeGalleryComponent },
       // Stub Account Settings — real content lands in issue #67.
       { path: 'account', component: AccountSettingsComponent },
       // Stub Admin Settings — real content lands in issue #70.

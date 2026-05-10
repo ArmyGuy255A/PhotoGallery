@@ -171,6 +171,13 @@ public class CartController : ControllerBase
         var persisted = await _cartRepository.AddAsync(row);
         await _cartRepository.SaveChangesAsync();
 
+        // Issue #110: surface SourceAlbumTitle on the AddToCart response so the
+        // FE drawer can group new items under their album immediately. Previously
+        // we returned null here, which the FE merge was happy to overlay onto
+        // the locally-staged item, demoting it into the "Other" bucket until the
+        // next GET /api/cart pulled the joined Album.Title.
+        var sourceAlbum = await _albumRepository.GetByIdAsync(persisted.SourceAlbumId ?? photo.AlbumId);
+
         _logger.LogInformation(
             "User {UserId} added cart item {PhotoId} {Quality}", userId, photoId, quality);
 
@@ -179,7 +186,7 @@ public class CartController : ControllerBase
             PhotoId = persisted.PhotoId.ToString(),
             Quality = persisted.Quality.ToString(),
             SourceAlbumId = persisted.SourceAlbumId?.ToString(),
-            SourceAlbumTitle = null,
+            SourceAlbumTitle = sourceAlbum?.Title,
             FileName = photo.FileName,
             ThumbnailUrl = null,
             AddedAt = persisted.AddedAt
@@ -295,6 +302,29 @@ public class CartController : ControllerBase
             output: Response.Body,
             accessCodeId: null,
             remoteIp: remoteIp);
+
+        // Issue #111: previously the server kept every cart row after streaming
+        // the ZIP, so the next add → download cycle re-shipped the prior items.
+        // After a successful stream remove every row we considered (both the
+        // streamed items and the ones we skipped — they're no longer
+        // downloadable and shouldn't linger to confuse the user). The 403 and
+        // 400 paths above leave the cart untouched.
+        try
+        {
+            foreach (var row in rows)
+            {
+                await _cartRepository.RemoveAsync(userId, row.PhotoId, row.Quality);
+            }
+            await _cartRepository.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            // Streaming has already completed — log and continue. The FE clears
+            // its local items$ optimistically; a stale server row will be
+            // reconciled on the next GET /api/cart.
+            _logger.LogWarning(ex,
+                "Failed to clear cart for user {UserId} after successful download (zip already streamed)", userId);
+        }
 
         _logger.LogInformation(
             "User {UserId} cart download: {Added}/{Validated} streamed, {Skipped} skipped",

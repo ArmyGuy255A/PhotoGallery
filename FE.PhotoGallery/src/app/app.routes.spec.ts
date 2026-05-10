@@ -46,6 +46,15 @@ describe('app.routes', () => {
     expect(code).toBeTruthy();
     expect(code!.component).toBe(CodeGalleryComponent);
     expect(code!.canActivate ?? []).not.toContain(authGuard);
+    // Issue #99: the public, chrome-less route is gated by canMatch so it
+    // only matches for unauthenticated viewers; authenticated viewers fall
+    // through to the BaseLayoutComponent-wrapped child route.
+    expect(Array.isArray(code!.canMatch) && code!.canMatch.length > 0).toBeTrue();
+  });
+
+  it('also mounts /code/:code as a BaseLayoutComponent child for authed viewers (issue #99)', () => {
+    const code = findChild('code/:code');
+    expect(code.component).toBe(CodeGalleryComponent);
   });
 
   it('uses BaseLayoutComponent as the parent for authenticated routes, guarded by authGuard', () => {

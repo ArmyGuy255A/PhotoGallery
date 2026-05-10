@@ -1,8 +1,9 @@
 import { Component, OnDestroy, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
-import { CartCapError, CartItem, CartService } from '../../services/cart.service';
+import { CartCapError, CartItem, CartQuality, CartService } from '../../services/cart.service';
 
 interface CartGroup {
   albumId: string;
@@ -22,7 +23,7 @@ interface CartGroup {
 @Component({
   selector: 'app-cart-drawer',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   template: `
     <div class="cart-overlay" *ngIf="isOpen" (click)="close()" data-testid="cart-overlay"></div>
 
@@ -64,7 +65,20 @@ interface CartGroup {
                 <div class="item-info">
                   <div class="item-name" [title]="item.fileName">{{ item.fileName }}</div>
                   <div class="item-controls">
-                    <span class="quality-pill">{{ item.quality }}</span>
+                    <!-- Issue #109: quality picker per item — was a static pill,
+                         which left users no way to bump Low → High without
+                         removing and re-adding the item. -->
+                    <select
+                      class="quality-select"
+                      [ngModel]="item.quality"
+                      (ngModelChange)="onQualityChange(item, $event)"
+                      [attr.aria-label]="'Quality for ' + item.fileName"
+                      data-testid="cart-item-quality-select">
+                      <option value="Low">Low</option>
+                      <option value="Medium">Medium</option>
+                      <option value="High">High</option>
+                      <option value="Original">Original</option>
+                    </select>
                     <button type="button"
                             class="remove-btn"
                             (click)="onRemove(item)"
@@ -165,6 +179,15 @@ interface CartGroup {
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .item-controls { display: flex; gap: 8px; align-items: center; }
+    .quality-select {
+      flex: 1;
+      padding: 4px 6px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 12px;
+      background: white;
+      color: #333;
+    }
     .quality-pill {
       background: #e3f2fd; color: #0066cc;
       padding: 2px 8px; border-radius: 999px;
@@ -242,6 +265,16 @@ export class CartDrawerComponent implements OnInit, OnDestroy {
 
   onRemove(item: CartItem): void {
     this.cart.removeItem(item.photoId, item.quality);
+  }
+
+  /**
+   * Per-item quality picker handler (issue #109). Routes through
+   * <c>CartService.updateQuality</c> so the authed/anonymous branching is
+   * handled in one place.
+   */
+  onQualityChange(item: CartItem, newQuality: CartQuality): void {
+    if (!newQuality || newQuality === item.quality) return;
+    this.cart.updateQuality(item.photoId, item.quality, newQuality);
   }
 
   onClear(): void {

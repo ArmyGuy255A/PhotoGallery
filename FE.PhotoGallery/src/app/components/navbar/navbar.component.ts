@@ -4,21 +4,18 @@ import {AuthService, User} from '../../services/auth.service';
 import {MatIconModule} from '@angular/material/icon';
 import {MatButtonModule} from '@angular/material/button';
 import {MatToolbarModule} from '@angular/material/toolbar';
-import {MatFormFieldModule} from '@angular/material/form-field';
-import {MatInput} from '@angular/material/input';
 import {CommonModule} from '@angular/common';
 import {Router} from '@angular/router';
 import {Subject} from 'rxjs';
 import {takeUntil} from 'rxjs/operators';
-import {ThemeComponent} from '../theme/theme.component';
 import {UserDropdownComponent} from '../user-dropdown/user-dropdown.component';
 import {CartButtonComponent} from '../cart/cart-button.component';
 
 @Component({
   selector: 'app-navbar',
   imports: [
-    CommonModule, MatToolbarModule, MatButtonModule, MatIconModule, MatFormFieldModule, MatInput,
-    ThemeComponent, UserDropdownComponent, CartButtonComponent,
+    CommonModule, MatToolbarModule, MatButtonModule, MatIconModule,
+    UserDropdownComponent, CartButtonComponent,
   ],
   templateUrl: './navbar.component.html',
   styleUrl: './navbar.component.scss'

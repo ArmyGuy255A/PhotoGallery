@@ -1,8 +1,14 @@
 <mat-sidenav-container class="sidenav-container">
   <mat-sidenav mode="over" [opened]="globalStateService.sidebarOpen" fixedTopGap="50" fixedInViewport="true">
     <mat-nav-list>
-      @for (mod of globalStateService.modules; track mod) {
-        <a mat-list-item>{{ mod }}</a>
+      @for (item of visibleNavItems(); track item.routerLink) {
+        <a mat-list-item
+           [routerLink]="item.routerLink"
+           routerLinkActive="active"
+           [routerLinkActiveOptions]="{ exact: false }"
+           (click)="onNavigate()">
+          {{ item.label }}
+        </a>
       }
     </mat-nav-list>
   </mat-sidenav>
