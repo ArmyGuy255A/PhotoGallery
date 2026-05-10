@@ -135,6 +135,61 @@ docker run -p 9000:9000 -p 9001:9001 minio/minio server /data
 
 ## Development
 
+### Local development modes
+
+PhotoGallery supports two local-dev modes. Pick the one that matches what you're testing.
+
+#### Mode A: All-local (default)
+
+Everything runs in Docker on your laptop. No cloud dependencies. This is what you want for everyday feature work.
+
+- **Storage:** MinIO (S3-compatible) at `localhost:9000`
+- **Database:** Sqlite file (`app.db`)
+- **Auth:** typically `DISABLE_AUTH=true` for fast iteration; flip off to test real OAuth
+- **Launch profile:** `http` or `https` (sets `ASPNETCORE_ENVIRONMENT=Development`)
+
+```powershell
+docker compose up -d                 # start MinIO + Keycloak (Postgres for KC only)
+dotnet run --project PhotoGallery    # backend on :5105
+cd FE.PhotoGallery; npm start        # frontend on :4300
+```
+
+#### Mode B: Azure-backed local (`DevelopmentAzure`)
+
+Backend runs on your laptop but reads secrets from **Azure Key Vault** and talks to **real Azure Blob Storage** + **Azure SQL Database**. Used to validate the production wire without deploying. Real Google OAuth + JWT stay on (no `DISABLE_AUTH`).
+
+- **Storage:** Azure Blob (`Storage:Provider=AzureBlob`, `Storage:AzureBlob:AccountUrl=https://<acct>.blob.core.windows.net/`)
+- **Database:** Azure SQL (`Database:Provider=SqlServer`, connection string resolved from Key Vault)
+- **Secrets:** Key Vault, accessed via `DefaultAzureCredential` — `az login` locally, Managed Identity in Azure
+- **Launch profile:** `AzureDev` (sets `ASPNETCORE_ENVIRONMENT=DevelopmentAzure`, which auto-loads `appsettings.DevelopmentAzure.json`)
+
+**Prerequisites**
+
+1. Azure CLI installed + `az login` against the dev tenant.
+2. RBAC role on the dev Key Vault: **Key Vault Secrets User** (read) at minimum.
+3. RBAC role on the dev Storage Account: **Storage Blob Data Contributor**.
+4. RBAC role on the dev Azure SQL: depends on auth mode (typically AAD-authenticated DB user).
+5. Fill in `<TO-BE-FILLED>` placeholders in `PhotoGallery/appsettings.DevelopmentAzure.json` with values supplied by the platform engineer.
+
+**Run it**
+
+```powershell
+az login
+dotnet run --project PhotoGallery --launch-profile AzureDev
+```
+
+**Configuration precedence** (highest wins, applies to both modes):
+
+```
+env vars  >  appsettings.{Environment}.json  >  Azure Key Vault  >  appsettings.json
+```
+
+**Key Vault secret naming.** Use the standard double-dash nesting convention — e.g. the secret named `ConnectionStrings--DefaultConnection` lands at `ConnectionStrings:DefaultConnection`.
+
+**Important.** If `KeyVault:Uri` is empty/unset, the Key Vault config provider is NOT registered. That guarantees the all-local stack, xUnit tests, and CI never reach Azure.
+
+> Full step-by-step (RBAC role assignment, Key Vault secret seeding, troubleshooting `DefaultAzureCredential`): see [`Documentation/Runbooks/local-azure-dev.md`](Documentation/Runbooks/local-azure-dev.md) (authored by platform engineer; tracked separately).
+
 ### Project Structure
 
 ```
