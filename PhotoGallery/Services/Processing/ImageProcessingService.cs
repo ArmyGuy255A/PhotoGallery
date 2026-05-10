@@ -248,27 +248,31 @@ public class ImageProcessingService : IImageProcessor
 
                 _logger.LogInformation("Saved {Quality} version to {Path}", item.Quality, outputPath);
 
-                // For Medium quality, also generate a watermarked variant for non-purchased viewing.
-                // Reference: D009 (Watermark Pipeline). The watermarked Medium is what guests/the
-                // photo modal sees; the unwatermarked Medium is delivered only via cart-checkout zip.
-                if (item.Quality == QualityType.Medium)
+                // For public-viewing qualities (Thumbnail + Medium), also generate watermarked
+                // variants. Reference: D009 (Watermark Pipeline). Public viewers (access-code
+                // gallery, photo modal) see the watermarked Thumbnail/Medium; the unwatermarked
+                // variants are delivered only via cart-checkout. Original/Low/High are never
+                // watermarked here (defense in depth — Original ships only via paid checkout).
+                if (item.Quality == QualityType.Medium || item.Quality == QualityType.Thumbnail)
                 {
-                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, cancellationToken);
+                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, qualityName, cancellationToken);
                 }
             }
         }
     }
 
     /// <summary>
-    /// Render and store a watermarked version of the just-resized Medium image.
+    /// Render and store a watermarked version of the just-resized image.
+    /// Used for Thumbnail and Medium qualities — the variants public/guest viewers see.
     /// Failures are logged but do not fail the parent queue item — the unwatermarked
-    /// Medium is still useful, and the consistency checker will retry watermark generation.
+    /// variant is still useful, and the consistency checker will retry watermark generation.
     /// </summary>
     private async Task GenerateWatermarkedVariantAsync(
         Photo photo,
         ProcessingQueueItem item,
         Image image,
         int jpegQuality,
+        string qualityName,
         CancellationToken cancellationToken)
     {
         try
@@ -276,7 +280,7 @@ public class ImageProcessingService : IImageProcessor
             using var scope = _serviceProvider.CreateScope();
             var watermarkService = scope.ServiceProvider.GetRequiredService<WatermarkService>();
 
-            // Encode the (already-resized) Medium image into a fresh stream so the watermark
+            // Encode the (already-resized) image into a fresh stream so the watermark
             // service can re-decode + apply watermark without mutating the original `image`.
             using var sourceStream = new MemoryStream();
             await image.SaveAsJpegAsync(sourceStream, new JpegEncoder { Quality = jpegQuality }, cancellationToken);
@@ -290,16 +294,16 @@ public class ImageProcessingService : IImageProcessor
                 sourceStream, watermarkedStream, watermarkText, jpegQuality, cancellationToken);
             watermarkedStream.Position = 0;
 
-            var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/medium-watermarked.jpg";
+            var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{qualityName}-watermarked.jpg";
             await _storageProvider.UploadAsync(outputPath, watermarkedStream, "image/jpeg");
 
-            _logger.LogInformation("Saved watermarked Medium variant to {Path}", outputPath);
+            _logger.LogInformation("Saved watermarked {Quality} variant to {Path}", item.Quality, outputPath);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Failed to generate watermarked Medium for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked Medium.",
-                item.PhotoId);
+                "Failed to generate watermarked {Quality} for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked variant.",
+                item.Quality, item.PhotoId);
         }
     }
 
