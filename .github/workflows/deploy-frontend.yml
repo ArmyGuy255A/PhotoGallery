@@ -39,19 +39,18 @@ jobs:
         working-directory: FE.PhotoGallery
         run: npm run build -- --configuration=production
 
-      # Azure SWA action runs from repo root. It will skip its own build
-      # because we point app_artifact_location at the already-built browser
-      # bundle. app_build_command is left empty for the same reason.
+      # When skip_app_build is true, the SWA action looks for index.html
+      # directly under app_location (it does NOT combine app_location +
+      # output_location). Point app_location at the built browser folder.
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
-          app_location: 'FE.PhotoGallery'
           # Angular 19 application builder emits to <outputPath>/browser.
-          # outputPath in angular.json is 'dist/fe.photo-gallery', so the
-          # final folder containing index.html is dist/fe.photo-gallery/browser.
-          output_location: 'dist/fe.photo-gallery/browser'
-          app_build_command: ''
+          # outputPath in angular.json is 'dist/fe.photo-gallery'.
+          app_location: 'FE.PhotoGallery/dist/fe.photo-gallery/browser'
+          output_location: ''
           skip_app_build: true
+          skip_api_build: true
