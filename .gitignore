@@ -214,3 +214,7 @@ playwright-report/
 !PhotoGallery/appsettings.Test.json
 PhotoGallery.code-workspace
 *.lscache
+
+# Local-only appsettings overlays (per-developer secrets, KV URIs, etc.)
+**/appsettings.*.Local.json
+

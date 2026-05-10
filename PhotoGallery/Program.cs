@@ -1,5 +1,6 @@
 using Authentication;
 using Authentication.Services;
+using Azure.Identity;
 using Configuration;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -7,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using PhotoGallery;
 using PhotoGallery.Data;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Interfaces;
@@ -20,6 +22,54 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// -----------------------------------------------------------------------------
+// Local-only, gitignored overlays. Loaded after appsettings.{Environment}.json
+// so they override committed defaults, and before Key Vault so KV still wins
+// for production secrets when configured.
+//   1. appsettings.Local.json              — env-agnostic (e.g. Google OAuth)
+//   2. appsettings.{Environment}.Local.json — env-specific (e.g. KV URI)
+// -----------------------------------------------------------------------------
+builder.Configuration.AddJsonFile(
+    "appsettings.Local.json",
+    optional: true,
+    reloadOnChange: true);
+builder.Configuration.AddJsonFile(
+    $"appsettings.{builder.Environment.EnvironmentName}.Local.json",
+    optional: true,
+    reloadOnChange: true);
+
+// -----------------------------------------------------------------------------
+// Azure Key Vault as a configuration source (opt-in).
+//
+// Activated only when KeyVault:Uri is non-empty so the all-local stack, xUnit
+// tests, and CI never reach Azure. DefaultAzureCredential transparently picks
+// up `az login` credentials locally and Managed Identity when running in Azure.
+//
+// Configuration precedence (highest wins):
+//   1. Environment variables          (e.g. ConnectionStrings__DefaultConnection)
+//   2. appsettings.{Environment}.json (e.g. appsettings.DevelopmentAzure.json)
+//   3. Azure Key Vault                (when KeyVault:Uri is set)
+//   4. appsettings.json
+//
+// Key Vault secret naming: use double-dash to nest, e.g.
+//   "ConnectionStrings--DefaultConnection" → ConnectionStrings:DefaultConnection.
+// Coordinated with the platform engineer (see Documentation/Runbooks/local-azure-dev.md).
+// -----------------------------------------------------------------------------
+var keyVaultUri = builder.Configuration["KeyVault:Uri"];
+if (!string.IsNullOrWhiteSpace(keyVaultUri))
+{
+    builder.Configuration.AddAzureKeyVault(
+        new Uri(keyVaultUri),
+        new DefaultAzureCredential());
+}
+
+// Bridge Key-Vault-canonical secret names to the strongly-typed binding paths
+// the rest of the codebase already consumes (see ConfigurationCanonicalAliases).
+// Single source of truth for the cross-branch naming contract with the
+// platform engineer's Terraform module.
+ConfigurationCanonicalAliases.BridgeKeyVaultCanonicalNames(
+    builder.Configuration, builder.Configuration);
+
 // Bind strongly-typed configuration first so downstream registrations can use it.
 // Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
 builder.Services.AddConfigurationServices(builder.Configuration, out var settings);
@@ -32,17 +82,28 @@ builder.Host.UseSerilog((context, configuration) =>
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
 builder.WebHost.UseUrls(urls);
 
-// Add services to the container.
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ??
-                       throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
+// Database provider switch — Sqlite (all-local default) | SqlServer (Azure-backed dev).
+// See PhotoGallery/Data/DatabaseProviderSelector.cs for behavior.
+//
+// Migration sets are provider-specific because EF Core ties each migration to
+// a concrete DbContext type:
+//   - Sqlite     → ApplicationDbContext       (Data/Migrations/)
+//   - SqlServer  → ApplicationDbContextSqlServer (Data/Migrations/SqlServer/)
+// Consumers always inject ApplicationDbContext; the SqlServer subclass is
+// reachable through the same base type via a forwarding scoped registration.
+var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
+if (string.Equals(dbProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
 {
-    options.UseSqlite(connectionString, sqliteOptions =>
-    {
-        sqliteOptions.CommandTimeout(5);
-    });
-    options.UseQueryTrackingBehavior(QueryTrackingBehavior.TrackAll);
-});
+    builder.Services.AddDbContext<ApplicationDbContextSqlServer>(options =>
+        DatabaseProviderSelector.Apply(options, builder.Configuration));
+    builder.Services.AddScoped<ApplicationDbContext>(sp =>
+        sp.GetRequiredService<ApplicationDbContextSqlServer>());
+}
+else
+{
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        DatabaseProviderSelector.Apply(options, builder.Configuration));
+}
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 // Configure CORS — AllowFrontendDev is scoped to the SPA origin from
