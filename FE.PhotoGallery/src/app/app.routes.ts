@@ -6,57 +6,45 @@ import { AlbumDetailComponent } from './components/albums/album-detail.component
 import { AlbumEditComponent } from './components/albums/album-edit.component';
 import { CodeGalleryComponent } from './components/code-gallery/code-gallery.component';
 import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.component';
+import { AccountSettingsComponent } from './components/account/account-settings.component';
+import { BaseLayoutComponent } from './base-layout/base-layout.component';
 import { authGuard, adminGuard } from './services/auth.guard';
 
 export const routes: Routes = [
+  // Public routes — rendered without the BaseLayoutComponent shell.
   {
     path: 'login',
     component: LoginComponent
   },
   {
-    // Public access-code route per requirement #4 — no auth guard.
-    // Clients with an access code visit /code/{code} to view an album.
+    // Public access-code route per requirement #4 — no auth guard, no shell.
+    // Anonymous viewers must not see the authenticated nav/sidenav.
     path: 'code/:code',
     component: CodeGalleryComponent
   },
-  {
-    path: 'dashboard',
-    component: DashboardComponent,
-    canActivate: [authGuard]
-  },
-  {
-    path: 'albums/create',
-    component: AlbumsCreateComponent,
-    canActivate: [authGuard, adminGuard]
-  },
-  {
-    path: 'albums/:id/edit',
-    component: AlbumEditComponent,
-    canActivate: [authGuard, adminGuard]
-  },
-  {
-    path: 'albums/:id',
-    component: AlbumDetailComponent,
-    canActivate: [authGuard]
-  },
-  {
-    path: 'shared-albums',
-    component: SharedAlbumsComponent,
-    canActivate: [authGuard]
-  },
-  {
-    // Stub redirect — future EPIC will add a real Account Settings page.
-    path: 'account',
-    redirectTo: '/dashboard'
-  },
+
+  // Authenticated app shell — every child route renders inside
+  // <app-navbar> + <app-sidenav> + <app-footer> via BaseLayoutComponent.
   {
     path: '',
-    component: DashboardComponent,
-    canActivate: [authGuard]
+    component: BaseLayoutComponent,
+    canActivate: [authGuard],
+    children: [
+      { path: 'dashboard', component: DashboardComponent },
+      { path: 'albums/create', component: AlbumsCreateComponent, canActivate: [adminGuard] },
+      { path: 'albums/:id/edit', component: AlbumEditComponent, canActivate: [adminGuard] },
+      { path: 'albums/:id', component: AlbumDetailComponent },
+      { path: 'shared-albums', component: SharedAlbumsComponent },
+      // Stub Account Settings — real content lands in issue #67.
+      { path: 'account', component: AccountSettingsComponent },
+      { path: '', redirectTo: 'dashboard', pathMatch: 'full' }
+    ]
   },
+
+  // Catch-all → /dashboard (redirect, never clobbers BaseLayoutComponent).
   {
     path: '**',
-    component: DashboardComponent,
-    canActivate: [authGuard]
+    redirectTo: '/dashboard'
   }
 ];
+
