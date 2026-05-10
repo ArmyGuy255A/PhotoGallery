@@ -349,6 +349,9 @@ export class CartPanelComponent {
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(objectUrl);
+      // Clear the cart on successful download only — preserve cart on failure
+      // so the user can retry without re-adding items.
+      this.cart.clear();
     } catch (err: any) {
       this.errorMessage = err?.message || 'Download failed. Please try again.';
       console.error('Cart download error:', err);
