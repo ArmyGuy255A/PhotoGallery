@@ -106,16 +106,23 @@ else
 }
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
-// Configure CORS — AllowFrontendDev is scoped to the SPA origin from
-// ConfigurationSettings.Frontend.Url (env var Frontend__Url) and permits
+// Configure CORS — AllowFrontendDev unions ConfigurationSettings.Frontend.Url
+// with ConfigurationSettings.Cors.AllowedOrigins (env-bound via
+// Cors__AllowedOrigins__N), deduplicates, and strips empties. Allows
 // credentials so future cookie-based flows Just Work. AllowAnyOrigin is
 // avoided because it's incompatible with AllowCredentials and weakens
 // prod parity. Mirrors VerdantIQ's named-policy pattern.
+var allowedOrigins = new[] { settings.Frontend.Url }
+    .Concat(settings.Cors.AllowedOrigins ?? Enumerable.Empty<string>())
+    .Where(o => !string.IsNullOrWhiteSpace(o))
+    .Select(o => o.TrimEnd('/'))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontendDev", cors =>
     {
-        cors.WithOrigins(settings.Frontend.Url)
+        cors.WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();

@@ -12,6 +12,7 @@ terraform/
 │   ├── keyvault/               # RBAC-mode Key Vault + seed secrets
 │   ├── compute/                # Container Apps env + API container app (UAMI, KV refs)
 │   ├── acr/                    # Azure Container Registry (Basic, AAD auth)
+│   ├── staticwebapp/           # Azure Static Web Apps (Free, Angular FE)
 │   └── observability/          # Log Analytics + App Insights
 └── dev/                        # dev environment composition
     ├── main.tf                 # wires modules together
@@ -37,6 +38,7 @@ for the developer workflow.
 | Key Vault | Standard | <$1 |
 | Container Apps Environment + App | **Consumption, scale-to-zero (min=0, max=1, 0.5 vCPU/1 GiB)** | **~$0** idle (pay per request) |
 | Azure Container Registry | **Basic** (10 GB included, AAD auth, no geo-rep) | **~$5** |
+| Static Web Apps (Angular FE) | **Free** (100 GB BW, free SSL, custom domains) | **$0** |
 | Log Analytics + App Insights | first 5 GB free | $0 |
 | **Total dev footprint, idle** | | **~$11–12/mo** |
 

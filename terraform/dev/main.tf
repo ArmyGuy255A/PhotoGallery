@@ -97,6 +97,7 @@ locals {
   cae_name     = "cae-${local.prefix}-${local.env}"
   ca_name      = "ca-${local.prefix}-api-${local.env}"
   acr_name     = "acr${local.short_prefix}${local.env}${local.suffix}" # 5-50 lowercase alnum, globally unique
+  swa_name     = "swa-${local.prefix}-${local.env}"
 
   common_tags = {
     project     = "PhotoGallery"
@@ -296,7 +297,7 @@ module "compute" {
     "email-acs-connectionstring"          = "Email__AzureCommunicationServices__ConnectionString"
   }
 
-  extra_env = {
+  extra_env = merge({
     # Provider selectors
     "Storage__Provider"  = "AzureBlob"
     "Database__Provider" = "SqlServer"
@@ -309,10 +310,51 @@ module "compute" {
 
     # Key Vault URI — bootstraps the KV config provider in Program.cs.
     "KeyVault__Uri" = module.keyvault.vault_uri
-  }
+
+    # CORS allowlist — origin(s) the API will permit cross-origin requests
+    # from. Indexed (`__0`, `__1`, ...) so .NET binds them into the
+    # `Cors:AllowedOrigins` List<string>. Slot 0 is the SWA default
+    # hostname; slots 1..N come from var.frontend_origin_extra (e.g.
+    # http://localhost:4200 when running the FE locally against the cloud
+    # API). Frontend.Url is also pointed at the SWA so OAuth return URLs
+    # land back on the deployed SPA.
+    "Cors__AllowedOrigins__0" = module.staticwebapp.default_host_url
+    "Frontend__Url"           = module.staticwebapp.default_host_url
+    }, {
+    for idx, origin in var.frontend_origin_extra :
+    "Cors__AllowedOrigins__${idx + 1}" => origin
+  })
 
   app_insights_connection_string = module.observability.app_insights_connection_string
 
   tags = local.common_tags
 }
 
+
+###############################################################################
+# Static Web Apps — Free-tier hosting for the Angular frontend.
+#
+# See DESIGN_DECISIONS.md D015. The deploy GitHub Action (owned by the FE
+# dev) reads the api_key output to push built artifacts. SWA exposes the
+# backend FQDN as BACKEND_API_URL so the SPA's staticwebapp.config.json can
+# optionally proxy /api/* to the ACA container app.
+###############################################################################
+
+module "staticwebapp" {
+  source = "../modules/staticwebapp"
+
+  name                = local.swa_name
+  resource_group_name = data.azurerm_resource_group.this.name
+  # SWA Free is region-restricted. eastus2 is in the allow-list and matches
+  # the rest of the dev footprint's region.
+  location = "eastus2"
+  sku_tier = "Free"
+  sku_size = "Free"
+  # Intentionally NOT passing backend_api_url here — the API's CORS list
+  # already depends on the SWA hostname (compute -> staticwebapp), and
+  # cross-wiring SWA -> compute via BACKEND_API_URL would create a cycle.
+  # The FE GH Actions deploy step sets BACKEND_API_URL out of band after
+  # both resources exist (`az staticwebapp appsettings set ...`).
+
+  tags = local.common_tags
+}
