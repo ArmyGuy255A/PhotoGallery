@@ -195,7 +195,13 @@ public class CartControllerTests
             Quality = "Medium",
             SourceAlbumId = album.Id.ToString()
         });
-        Assert.IsType<OkObjectResult>(result.Result);
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var dto = Assert.IsType<CartItemDto>(ok.Value);
+        // Issue #110: AddToCart must populate SourceAlbumTitle on the response
+        // so the FE drawer can group new items under their album immediately
+        // (instead of falling into the "Other" bucket until the next GET).
+        Assert.Equal(album.Title, dto.SourceAlbumTitle);
+        Assert.Equal(album.Id.ToString(), dto.SourceAlbumId);
         Assert.Single(db.UserCartItems);
     }
 

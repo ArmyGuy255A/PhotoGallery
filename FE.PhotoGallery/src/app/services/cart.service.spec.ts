@@ -261,6 +261,33 @@ describe('CartService', () => {
       expect(service.items[0].photoId).toBe('p1');
     });
 
+    it('addItem keeps the locally-set sourceAlbumTitle when server returns null (issue #110)', async () => {
+      const initPromise = service.loadForUser();
+      await flushMicrotasks();
+      httpMock.expectOne(`${environment.apiUrl}/api/cart`).flush({ items: [] });
+      await initPromise;
+
+      service.addItem({
+        photoId: 'p1',
+        fileName: 'p1.jpg',
+        quality: 'High',
+        sourceAlbumId: 'A1',
+        sourceAlbumTitle: 'Alpha'
+      });
+      const req = httpMock.expectOne(`${environment.apiUrl}/api/cart`);
+      // Older deployments / partial responses may echo a null SourceAlbumTitle.
+      // The merge must not let that overwrite the title the call site supplied.
+      req.flush({
+        photoId: 'p1',
+        fileName: 'p1.jpg',
+        quality: 'High',
+        sourceAlbumId: 'A1',
+        sourceAlbumTitle: null
+      });
+
+      expect(service.items[0].sourceAlbumTitle).toBe('Alpha');
+    });
+
     it('addItem on 409 cap_reached emits a cap error message', async () => {
       const initPromise = service.loadForUser();
       await flushMicrotasks();

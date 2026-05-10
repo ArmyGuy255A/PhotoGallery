@@ -171,6 +171,13 @@ public class CartController : ControllerBase
         var persisted = await _cartRepository.AddAsync(row);
         await _cartRepository.SaveChangesAsync();
 
+        // Issue #110: surface SourceAlbumTitle on the AddToCart response so the
+        // FE drawer can group new items under their album immediately. Previously
+        // we returned null here, which the FE merge was happy to overlay onto
+        // the locally-staged item, demoting it into the "Other" bucket until the
+        // next GET /api/cart pulled the joined Album.Title.
+        var sourceAlbum = await _albumRepository.GetByIdAsync(persisted.SourceAlbumId ?? photo.AlbumId);
+
         _logger.LogInformation(
             "User {UserId} added cart item {PhotoId} {Quality}", userId, photoId, quality);
 
@@ -179,7 +186,7 @@ public class CartController : ControllerBase
             PhotoId = persisted.PhotoId.ToString(),
             Quality = persisted.Quality.ToString(),
             SourceAlbumId = persisted.SourceAlbumId?.ToString(),
-            SourceAlbumTitle = null,
+            SourceAlbumTitle = sourceAlbum?.Title,
             FileName = photo.FileName,
             ThumbnailUrl = null,
             AddedAt = persisted.AddedAt

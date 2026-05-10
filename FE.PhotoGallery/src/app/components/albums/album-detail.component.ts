@@ -113,10 +113,10 @@ interface Album {
                   <button
                     type="button"
                     class="add-cart-btn"
-                    (click)="onAddToCart(photo)"
-                    [disabled]="isInCart(photo)"
+                    [class.in-cart]="isInCart(photo)"
+                    (click)="onCartButtonClick(photo)"
                     data-testid="album-photo-add-to-cart">
-                    {{ isInCart(photo) ? '✓ Added' : '+ Add to Cart' }}
+                    {{ isInCart(photo) ? '✕ Remove' : '+ Add' }}
                   </button>
                 </div>
               </div>
@@ -587,14 +587,19 @@ interface Album {
       font-size: 12px;
       font-weight: 500;
     }
-    .photo-cart-actions .add-cart-btn:hover:not(:disabled) {
+    .photo-cart-actions .add-cart-btn:hover {
       background: #e3f2fd;
     }
-    .photo-cart-actions .add-cart-btn:disabled {
-      background: #c8e6c9;
-      border-color: #2e7d32;
-      color: #2e7d32;
-      cursor: default;
+    /* Issue #108: in-cart state shows a Remove affordance (red) so the user
+       can undo from the card itself instead of being stuck with a disabled
+       button. */
+    .photo-cart-actions .add-cart-btn.in-cart {
+      background: #fff;
+      border-color: #c62828;
+      color: #c62828;
+    }
+    .photo-cart-actions .add-cart-btn.in-cart:hover {
+      background: #fdecea;
     }
   `]
 })
@@ -804,6 +809,20 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   isInCart(photo: Photo): boolean {
     const quality = this.selectedQuality[photo.id] || 'Medium';
     return this.cart.contains(photo.id, quality);
+  }
+
+  /**
+   * Click handler for the per-photo cart button. Toggles add ↔ remove based on
+   * the current cart state (issue #108). Replaces the previous "disabled when
+   * added" UX which gave users no way to undo from the card.
+   */
+  onCartButtonClick(photo: Photo): void {
+    const quality: CartQuality = this.selectedQuality[photo.id] || 'Medium';
+    if (this.cart.contains(photo.id, quality)) {
+      this.cart.removeItem(photo.id, quality);
+    } else {
+      this.onAddToCart(photo);
+    }
   }
 
   onAddToCart(photo: Photo): void {

@@ -80,6 +80,35 @@ describe('AlbumDetailComponent — cart integration (#58)', () => {
     expect(selects.length).toBe(1);
   });
 
+  it('default-state cart button reads "+ Add" (issue #108)', () => {
+    const btn: HTMLButtonElement = fixture.debugElement
+      .query(By.css('[data-testid="album-photo-add-to-cart"]')).nativeElement;
+    expect(btn.textContent?.trim()).toBe('+ Add');
+    expect(btn.disabled).toBeFalse();
+  });
+
+  it('in-cart state cart button reads "✕ Remove" and stays clickable (issue #108)', () => {
+    cart.contains = jasmine.createSpy('contains').and.returnValue(true);
+    fixture.detectChanges();
+    const btn: HTMLButtonElement = fixture.debugElement
+      .query(By.css('[data-testid="album-photo-add-to-cart"]')).nativeElement;
+    expect(btn.textContent?.trim()).toBe('✕ Remove');
+    expect(btn.disabled).toBeFalse();
+  });
+
+  it('clicking the in-cart Remove button calls CartService.removeItem (issue #108)', () => {
+    cart.contains = jasmine.createSpy('contains').and.returnValue(true);
+    fixture.detectChanges();
+
+    const btn = fixture.debugElement.query(By.css('[data-testid="album-photo-add-to-cart"]'));
+    btn.triggerEventHandler('click', null);
+
+    expect(cart.removeItem).toHaveBeenCalledTimes(1);
+    const args = cart.removeItem.calls.mostRecent().args;
+    expect(args[0]).toBe('p1');
+    expect(args[1]).toBe('Medium');
+  });
+
   it('clicking Add to Cart calls CartService.addItem with the album context', () => {
     const btn = fixture.debugElement.query(By.css('[data-testid="album-photo-add-to-cart"]'));
     btn.triggerEventHandler('click', null);
