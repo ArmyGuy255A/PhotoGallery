@@ -64,3 +64,7 @@ This is captured as a known issue, not a blocker for B3.
 - Custom watermark per photographer (logo upload, text customization)
 - Format expansion (RAW, HEIC) — would justify Magick.NET migration
 - Resolve commercial-license question in standalone ADR before app monetization
+
+## Update — Thumbnails are now watermarked alongside Medium (PR #48)
+
+The watermark pipeline initially produced only `medium-watermarked.jpg`. PR #48 extended it to also emit `thumbnail-watermarked.jpg`, applying the same tiled-diagonal pattern at thumbnail resolution. A one-shot backfill produced the new variant for every existing photo so guest previews on album list pages no longer leak un-watermarked thumbnails. No other changes to the pipeline; the watermark service, font, opacity, and rotation are unchanged. See [STORAGE_LAYER.md — Storage Path Structure](../../Documentation/Architecture/STORAGE_LAYER.md#storage-path-structure) for the updated layout.
