@@ -1440,7 +1440,86 @@ When a new feature is proposed:
 
 ---
 
+## D015: GitHub Actions → ACR via Workload Identity Federation (OIDC)
+
+**Status**: Approved · **Date**: 2026-05-10 · **Owner**: pg-devops-cicd
+
+### Context
+
+D014 stood up ACR with `admin_enabled = false` — pushes from a developer
+laptop authenticate via AAD (`az acr login` + AcrPush on the dev principal).
+The CI/CD pipeline (`.github/workflows/build.yml`) builds the backend and
+frontend images on every push to `main` but had `push: false` because no
+trusted identity was wired up to ACR. We need merges to `main` to publish
+`latest` + `<git-sha>` tags to `acrpgdeva4pi.azurecr.io` so ACA can pick
+up the new revision.
+
+### Decision
+
+Use **GitHub OIDC + Azure AD Workload Identity Federation** instead of a
+client-secret service principal:
+
+1. Provision a dedicated AAD application + service principal per environment
+   (`photogallery-github-actions-dev`) via the new `terraform/modules/github_oidc`
+   module.
+2. Register a federated identity credential trusting GitHub's OIDC issuer
+   (`https://token.actions.githubusercontent.com`) with the subject
+   `repo:ArmyGuy255A/PhotoGallery:ref:refs/heads/main`. Only pushes on
+   `main` (i.e. merged PRs) can assume the SP.
+3. Assign **AcrPush** to that SP scoped to the ACR resource — nothing else.
+4. CI uses `azure/login@v2` with `client-id`/`tenant-id`/`subscription-id`
+   from GitHub **repo variables** (not secrets — these are non-sensitive
+   identifiers), then `az acr login`, then `docker/build-push-action@v5`
+   with `push: true`.
+
+### Rationale
+
+- **No long-lived secrets.** GitHub issues a short-lived OIDC token per job;
+  Azure AD trades it for an access token scoped to AcrPush. Nothing to
+  rotate, nothing to leak in logs.
+- **Least privilege.** The SP holds only AcrPush on a single registry, and
+  the federated credential's `subject` claim prevents fork PRs or other
+  branches from assuming it.
+- **Idempotent.** All of it is Terraform-managed; tearing down the
+  environment removes the trust automatically.
+
+### Implementation
+
+- `terraform/modules/github_oidc/` — reusable module (app + SP + N federated
+  credentials via `for_each` over a `subjects` map).
+- `terraform/dev/main.tf` — instantiates the module with the `main` subject
+  and assigns AcrPush against `module.acr.id`.
+- `terraform/dev/outputs.tf` — surfaces `github_actions_client_id`,
+  `tenant_id`, `subscription_id`, `container_registry_login_server`.
+- `.github/workflows/build.yml` — `build-docker` job adds
+  `permissions: id-token: write`, logs in via `azure/login@v2`, runs
+  `az acr login`, and pushes both images with `latest` + `${{ github.sha }}`
+  tags.
+
+### Post-apply runbook
+
+After `terraform apply` in `terraform/dev`:
+
+```bash
+gh variable set AZURE_CLIENT_ID       --body "$(terraform output -raw github_actions_client_id)"
+gh variable set AZURE_TENANT_ID       --body "$(terraform output -raw tenant_id)"
+gh variable set AZURE_SUBSCRIPTION_ID --body "$(terraform output -raw subscription_id)"
+gh variable set ACR_LOGIN_SERVER      --body "$(terraform output -raw container_registry_login_server)"
+```
+
+### Alternatives considered
+
+- **Service principal with client secret** — rejected; long-lived credentials
+  in a GitHub secret violate the "no secrets in Key Vault" spirit of D014
+  and require manual rotation.
+- **ACR admin user + push token** — rejected; admin user is explicitly
+  disabled in the ACR module per D014.
+- **GitHub-hosted ACR push token via `azure/docker-login`** — same problem
+  as service-principal secrets.
+
+---
+
 **Last Updated**: 2026-05-10  
-**Total Decisions**: 11 (D001-D008, D010, D011, D014; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
+**Total Decisions**: 12 (D001-D008, D010, D011, D014, D015; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
 **In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)

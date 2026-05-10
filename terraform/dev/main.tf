@@ -219,6 +219,32 @@ resource "azurerm_role_assignment" "dev_acr_push" {
 }
 
 ###############################################################################
+# GitHub Actions OIDC — workload-identity-federated service principal that
+# the CI pipeline assumes (no long-lived secrets) to push images to ACR on
+# merge-to-main. See DESIGN_DECISIONS.md D015.
+###############################################################################
+
+module "github_oidc" {
+  source = "../modules/github_oidc"
+
+  display_name      = "photogallery-github-actions-${local.env}"
+  github_repository = var.github_repository
+
+  # Only trust pushes on refs/heads/main. Add a `pull-request` subject if/when
+  # we need PR pipelines to read from Azure (e.g. preview environments).
+  subjects = {
+    "main" = "repo:${var.github_repository}:ref:refs/heads/main"
+  }
+}
+
+# AcrPush so the GitHub Actions SP can publish images to the ACR.
+resource "azurerm_role_assignment" "github_actions_acr_push" {
+  scope                = module.acr.id
+  role_definition_name = "AcrPush"
+  principal_id         = module.github_oidc.service_principal_object_id
+}
+
+###############################################################################
 # Compute — Azure Container Apps (Consumption, scale-to-zero) for the API.
 # Provisioned now with a placeholder image so the resource exists, ingress is
 # wired, and the UAMI can be registered in Azure SQL via the manual T-SQL

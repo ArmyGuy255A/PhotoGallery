@@ -70,3 +70,29 @@ output "container_registry_login_server" {
   description = "Full ACR login server (e.g. acrpgdeva4pi.azurecr.io). Use in `az acr login` and as the docker push target."
   value       = module.acr.login_server
 }
+
+###############################################################################
+# GitHub Actions OIDC — values to set as repo variables/secrets so the CI
+# pipeline can authenticate to Azure with no long-lived credentials.
+#
+# After `terraform apply`, surface and set:
+#   gh variable set AZURE_CLIENT_ID       --body "$(terraform output -raw github_actions_client_id)"
+#   gh variable set AZURE_TENANT_ID       --body "$(terraform output -raw tenant_id)"
+#   gh variable set AZURE_SUBSCRIPTION_ID --body "$(terraform output -raw subscription_id)"
+#   gh variable set ACR_LOGIN_SERVER      --body "$(terraform output -raw container_registry_login_server)"
+###############################################################################
+
+output "github_actions_client_id" {
+  description = "Client ID of the GitHub Actions OIDC AAD app. Set as the AZURE_CLIENT_ID GitHub repo variable."
+  value       = module.github_oidc.client_id
+}
+
+output "tenant_id" {
+  description = "AAD tenant ID. Set as the AZURE_TENANT_ID GitHub repo variable."
+  value       = data.azurerm_client_config.current.tenant_id
+}
+
+output "subscription_id" {
+  description = "Azure subscription ID. Set as the AZURE_SUBSCRIPTION_ID GitHub repo variable."
+  value       = data.azurerm_client_config.current.subscription_id
+}

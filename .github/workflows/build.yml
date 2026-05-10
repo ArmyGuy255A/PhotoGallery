@@ -130,29 +130,55 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # OIDC token issuance for azure/login@v2 — see DESIGN_DECISIONS.md D015.
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Workload-Identity-Federation login. AZURE_CLIENT_ID / AZURE_TENANT_ID /
+      # AZURE_SUBSCRIPTION_ID are repository variables produced by
+      # `terraform output` after the github_oidc module applies.
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # `az acr login` exchanges the AAD token for an ACR refresh token and
+      # writes it to the local docker config, which docker/build-push-action
+      # then picks up. No registry username/password ever materialises.
+      - name: ACR login
+        run: az acr login --name "${ACR_LOGIN_SERVER%%.*}"
+
       # Build context is the repo root because Dockerfile.backend now copies
       # multiple sub-projects (Authentication/, Configuration/, PhotoGallery/).
-      - name: Build backend image
+      - name: Build & push backend image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.backend
-          push: false
-          tags: photogallery-backend:${{ github.sha }}
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/photogallery-backend:latest
+            ${{ env.ACR_LOGIN_SERVER }}/photogallery-backend:${{ github.sha }}
 
-      - name: Build frontend image
+      - name: Build & push frontend image
         uses: docker/build-push-action@v5
         with:
           context: ./FE.PhotoGallery
           file: ./FE.PhotoGallery/Dockerfile
-          push: false
-          tags: photogallery-frontend:${{ github.sha }}
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:latest
+            ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:${{ github.sha }}
 
   security-scan:
     name: NuGet vulnerability scan (informational)
