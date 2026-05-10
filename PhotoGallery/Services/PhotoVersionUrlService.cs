@@ -24,6 +24,7 @@ public class PhotoVersionUrlService
     private readonly IPhotoRepository _photoRepository;
     private readonly IConfiguration _configuration;
     private readonly ILogger<PhotoVersionUrlService> _logger;
+    private readonly WatermarkService? _watermarkService;
 
     private readonly int _ttlDays;
     private readonly int _refreshWindowDays;
@@ -35,13 +36,15 @@ public class PhotoVersionUrlService
         IPhotoVersionUrlRepository urlRepository,
         IPhotoRepository photoRepository,
         IConfiguration configuration,
-        ILogger<PhotoVersionUrlService> logger)
+        ILogger<PhotoVersionUrlService> logger,
+        WatermarkService? watermarkService = null)
     {
         _storageProvider = storageProvider;
         _urlRepository = urlRepository;
         _photoRepository = photoRepository;
         _configuration = configuration;
         _logger = logger;
+        _watermarkService = watermarkService;
 
         // Load configuration
         _ttlDays = _configuration.GetValue("BlobStorage:PreSignedUrlTTLDays", 7);
@@ -183,10 +186,13 @@ public class PhotoVersionUrlService
                 return null;
             }
 
-            // Watermarked variant only exists for Medium quality
-            var useWatermarked = watermarked && quality == QualityType.Medium;
+            // Watermarked variants only exist for public-viewing qualities (Thumbnail + Medium).
+            // Defense in depth: even if a future caller passes watermarked: true with Original
+            // (PR-B's new enum value) or Low/High, we never serve a watermarked Original — those
+            // qualities ship only via paid cart-checkout.
+            var useWatermarked = watermarked && (quality == QualityType.Medium || quality == QualityType.Thumbnail);
             var storageKey = useWatermarked
-                ? BuildWatermarkedMediumStorageKey(photo.AlbumId, photoId)
+                ? BuildWatermarkedStorageKey(photo.AlbumId, photoId, quality)
                 : BuildStorageKey(photo.AlbumId, photoId, quality);
 
             var exists = await _storageProvider.ExistsAsync(storageKey);
@@ -194,22 +200,35 @@ public class PhotoVersionUrlService
             {
                 if (useWatermarked)
                 {
-                    // Watermarked variant not yet generated — fall back to the unwatermarked Medium.
-                    // This keeps guests from seeing a placeholder in the brief window between
-                    // photo upload and watermark generation.
-                    _logger.LogInformation(
-                        "Watermarked variant not present for photo {PhotoId}; falling back to unwatermarked Medium",
-                        photoId);
-                    var fallbackKey = BuildStorageKey(photo.AlbumId, photoId, quality);
-                    if (!await _storageProvider.ExistsAsync(fallbackKey))
+                    // Legacy albums processed before the watermark pipeline (PR #21) lack the
+                    // watermarked variant. Generate it inline now (download unwatermarked variant
+                    // → watermark → upload) so subsequent requests hit the cached object. The
+                    // first-request latency on legacy photos (~1s) is the documented trade-off
+                    // versus an explicit admin "reprocess album" step. Reference: D009.
+                    var unwatermarkedKey = BuildStorageKey(photo.AlbumId, photoId, quality);
+                    var generated = await TryGenerateWatermarkedVariantAsync(
+                        photo, photoId, quality, unwatermarkedKey, storageKey);
+                    if (!generated)
                     {
-                        _logger.LogWarning("Photo version file not found in storage: {StorageKey}", fallbackKey);
-                        return null;
+                        // Backfill failed (source missing or watermark service unavailable).
+                        // Fall back to the unwatermarked variant so guests still see something.
+                        if (!await _storageProvider.ExistsAsync(unwatermarkedKey))
+                        {
+                            _logger.LogWarning("Photo version file not found in storage: {StorageKey}", unwatermarkedKey);
+                            return null;
+                        }
+                        _logger.LogInformation(
+                            "Watermarked variant unavailable for photo {PhotoId} quality {Quality}; falling back to unwatermarked",
+                            photoId, quality);
+                        return await _storageProvider.GetUrlAsync(unwatermarkedKey, ttlMinutes);
                     }
-                    return await _storageProvider.GetUrlAsync(fallbackKey, ttlMinutes);
+                    // Successful inline backfill — fall through to issue URL for the new object.
                 }
-                _logger.LogWarning("Photo version file not found in storage: {StorageKey}", storageKey);
-                return null;
+                else
+                {
+                    _logger.LogWarning("Photo version file not found in storage: {StorageKey}", storageKey);
+                    return null;
+                }
             }
 
             var presignedUrl = await _storageProvider.GetUrlAsync(storageKey, ttlMinutes);
@@ -230,11 +249,84 @@ public class PhotoVersionUrlService
     }
 
     /// <summary>
-    /// Storage key for the watermarked Medium variant. Reference: D009.
+    /// Storage key for a watermarked variant. Reference: D009.
+    /// Only Thumbnail and Medium are watermarkable — callers must guard before calling.
+    /// </summary>
+    internal static string BuildWatermarkedStorageKey(Guid albumId, Guid photoId, QualityType quality)
+    {
+        return $"photogallery/{albumId}/{photoId}/{quality.ToString().ToLower()}-watermarked.jpg";
+    }
+
+    /// <summary>
+    /// Backwards-compatible alias for the Medium watermarked key. Retained so external callers
+    /// that referenced the old name continue to compile.
     /// </summary>
     internal static string BuildWatermarkedMediumStorageKey(Guid albumId, Guid photoId)
+        => BuildWatermarkedStorageKey(albumId, photoId, QualityType.Medium);
+
+    /// <summary>
+    /// Self-healing backfill for legacy albums processed before the watermark pipeline (PR #21).
+    /// Downloads the unwatermarked variant, applies the watermark, and uploads to the watermarked
+    /// storage key. Returns true if the upload succeeded and a fresh object now exists.
+    ///
+    /// First-request latency on legacy photos is acceptable (~1s) since subsequent requests hit
+    /// the cached watermarked object. Reference: D009 (Watermark Pipeline), bug #6.
+    /// </summary>
+    private async Task<bool> TryGenerateWatermarkedVariantAsync(
+        Photo photo,
+        Guid photoId,
+        QualityType quality,
+        string sourceKey,
+        string watermarkedKey)
     {
-        return $"photogallery/{albumId}/{photoId}/medium-watermarked.jpg";
+        if (_watermarkService == null)
+        {
+            _logger.LogWarning(
+                "WatermarkService not configured; cannot generate watermarked {Quality} for photo {PhotoId} on demand",
+                quality, photoId);
+            return false;
+        }
+
+        try
+        {
+            if (!await _storageProvider.ExistsAsync(sourceKey))
+            {
+                _logger.LogWarning(
+                    "Source variant {SourceKey} missing — cannot generate watermarked {Quality} for photo {PhotoId}",
+                    sourceKey, quality, photoId);
+                return false;
+            }
+
+            using var sourceStream = await _storageProvider.DownloadAsync(sourceKey);
+            if (sourceStream == null)
+            {
+                _logger.LogWarning(
+                    "Failed to read {SourceKey} from storage; cannot backfill watermarked {Quality} for photo {PhotoId}",
+                    sourceKey, quality, photoId);
+                return false;
+            }
+
+            using var watermarkedStream = new MemoryStream();
+            var watermarkText = $"© {photo.UploadedBy ?? "Photo Gallery"}";
+            // Match Medium's encode quality (85) used by the upload-time pipeline.
+            await _watermarkService.ApplyWatermarkAsync(
+                sourceStream, watermarkedStream, watermarkText);
+            watermarkedStream.Position = 0;
+
+            await _storageProvider.UploadAsync(watermarkedKey, watermarkedStream, "image/jpeg");
+
+            _logger.LogInformation(
+                "Generated watermarked {Quality} variant on demand for photo {PhotoId}",
+                quality, photoId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to generate watermarked {Quality} variant on demand for photo {PhotoId}",
+                quality, photoId);
+            return false;
+        }
     }
 
     /// <summary>
