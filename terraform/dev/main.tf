@@ -17,9 +17,10 @@
 #   Key Vault standard      ~$0.03/10k ops                          <$1
 #   Container Apps Consumption (scale-to-zero, idle)                ~$0
 #     active execution charges only (per request, sub-cent at MVP scale)
+#   Azure Container Registry Basic SKU                              ~$5
 #   Log Analytics + App Insights (first 5 GB free)                  $0
 #   ----------------------------------------------------------- ----------
-#   TOTAL dev footprint, idle                                     ~$6-7/mo
+#   TOTAL dev footprint, idle                                    ~$11-12/mo
 ###############################################################################
 
 terraform {
@@ -59,6 +60,11 @@ provider "azurerm" {
     }
   }
   subscription_id = var.subscription_id
+
+  # Use AAD for storage data-plane operations (the storage account has
+  # shared_access_key_enabled = false). Required so Terraform's post-create
+  # blob-service availability poll can authenticate.
+  storage_use_azuread = true
 }
 
 provider "azuread" {}
@@ -83,13 +89,14 @@ locals {
   suffix       = random_string.suffix.result
 
   sa_name      = "st${local.short_prefix}${local.env}${local.suffix}" # 3-24 lowercase alnum
-  sql_server   = "sql-${local.prefix}-${local.env}-${local.suffix}"
+  sql_server   = "sql-${local.prefix}-${local.env}-${local.suffix}-cu"
   sql_database = local.prefix
   kv_name      = "kv-${local.short_prefix}-${local.env}-${local.suffix}" # <= 24 chars
   log_name     = "log-${local.prefix}-${local.env}"
   ai_name      = "appi-${local.prefix}-${local.env}"
   cae_name     = "cae-${local.prefix}-${local.env}"
   ca_name      = "ca-${local.prefix}-api-${local.env}"
+  acr_name     = "acr${local.short_prefix}${local.env}${local.suffix}" # 5-50 lowercase alnum, globally unique
 
   common_tags = {
     project     = "PhotoGallery"
@@ -135,7 +142,10 @@ module "sql" {
   server_name         = local.sql_server
   database_name       = local.sql_database
   resource_group_name = data.azurerm_resource_group.this.name
-  location            = data.azurerm_resource_group.this.location
+  # MSDN/Visual Studio Enterprise subs are restricted from SQL provisioning
+  # in eastus2/eastus/westus2. centralus typically allows it. Override here
+  # only — the other resources stay co-located with the RG.
+  location            = "centralus"
   sku_name            = var.sql_sku_name
   max_size_gb         = var.sql_max_size_gb
   aad_admin_login     = var.aad_admin_login
@@ -170,6 +180,45 @@ module "observability" {
 }
 
 ###############################################################################
+# Container Registry — Azure Container Registry (Basic SKU, ~$5/mo).
+#
+# Per DESIGN_DECISIONS.md D014, we pivoted from ghcr.io to ACR so the image
+# tier lives in the same RG/sub as the rest of the dev footprint (single
+# billing/access boundary) and pulls authenticate via the ACA UAMI without
+# managing external registry creds. Pushes from a developer machine use AAD
+# via `az acr login` (AcrPush role assigned below).
+###############################################################################
+
+module "acr" {
+  source = "../modules/acr"
+
+  name                = local.acr_name
+  resource_group_name = data.azurerm_resource_group.this.name
+  location            = data.azurerm_resource_group.this.location
+  sku                 = "Basic"
+  admin_enabled       = false
+  tags                = local.common_tags
+}
+
+# AcrPull for the ACA user-assigned managed identity so the container app can
+# pull private images at revision-deploy time. Wired here (not in the compute
+# module) to keep cross-module role assignments in the composition root and
+# avoid a circular dep between compute and acr modules.
+resource "azurerm_role_assignment" "aca_acr_pull" {
+  scope                = module.acr.id
+  role_definition_name = "AcrPull"
+  principal_id         = module.compute.uami_principal_id
+}
+
+# AcrPush for the developer principal so `az acr login` + `docker push` works
+# locally without enabling the admin user on ACR.
+resource "azurerm_role_assignment" "dev_acr_push" {
+  scope                = module.acr.id
+  role_definition_name = "AcrPush"
+  principal_id         = var.dev_principal_object_id
+}
+
+###############################################################################
 # Compute — Azure Container Apps (Consumption, scale-to-zero) for the API.
 # Provisioned now with a placeholder image so the resource exists, ingress is
 # wired, and the UAMI can be registered in Azure SQL via the manual T-SQL
@@ -189,6 +238,10 @@ module "compute" {
 
   image       = var.container_app_image
   target_port = var.container_app_target_port
+
+  # Authenticate ACA pulls against ACR via the UAMI. The AcrPull role
+  # assignment is in dev/main.tf (azurerm_role_assignment.aca_acr_pull).
+  container_registry_server = module.acr.login_server
 
   key_vault_id       = module.keyvault.vault_id
   storage_account_id = module.storage.storage_account_id

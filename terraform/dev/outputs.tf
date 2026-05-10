@@ -56,3 +56,17 @@ output "container_app_uami_name" {
 output "container_app_uami_principal_id" {
   value = module.compute.uami_principal_id
 }
+
+###############################################################################
+# Container Registry
+###############################################################################
+
+output "container_registry_name" {
+  description = "ACR name (e.g. acrpgdeva4pi)."
+  value       = module.acr.name
+}
+
+output "container_registry_login_server" {
+  description = "Full ACR login server (e.g. acrpgdeva4pi.azurecr.io). Use in `az acr login` and as the docker push target."
+  value       = module.acr.login_server
+}

@@ -110,6 +110,18 @@ variable "app_insights_connection_string" {
   sensitive   = true
 }
 
+variable "container_registry_server" {
+  description = <<-EOT
+    Optional ACR login server (e.g. "acrpgdeva4pi.azurecr.io"). When non-empty,
+    a `registry` block is added to the container app authenticating via the
+    UAMI (which must hold AcrPull on the registry — wired by the caller).
+    Leave empty to fall back to anonymous pulls (placeholder image, ghcr.io
+    public packages, etc.).
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

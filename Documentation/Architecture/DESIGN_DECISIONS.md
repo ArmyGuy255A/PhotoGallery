@@ -1329,6 +1329,92 @@ must match that table exactly.
 
 ---
 
+## D014: Pivot from ghcr.io to Azure Container Registry (Basic SKU) for Dev
+
+### Status
+
+Approved — implemented 2026-05-10 on `u/copilot/feat/azure-dev-integration`.
+
+### Context
+
+D013 (above) shipped the dev compute tier with the API image hosted on
+**ghcr.io as a public package** (free), pulled anonymously by Azure Container
+Apps. That kept the registry line item at $0 and had a simple "open source
+anyway" story.
+
+Two pressures changed the calculus:
+
+1. **Single billing/access boundary.** Every other dev-tier resource lives in
+   the `PhotoGallery-dev` resource group on subscription
+   `4fc243fa-…-d13152` (per D012). Splitting the image tier out to GitHub
+   means a separate IAM model (GitHub PATs / OIDC), separate audit trail,
+   and a separate place to revoke access on offboarding.
+2. **AAD-only credential story.** The rest of the footprint authenticates
+   over AAD (UAMI for the app; developer principal via `az login`). The
+   ghcr.io path forced us to either accept anonymous public pulls *or*
+   provision a long-lived PAT secret in ACA's registry block. Neither
+   matches the "no shared keys" posture from D011.
+
+### Decision
+
+Add an **Azure Container Registry, SKU `Basic`** to the dev footprint:
+
+- Name: `acrpgdeva4pi` (lowercase alnum, ACR's globally-unique constraint).
+- `admin_enabled = false` — no shared username/password ever issued.
+- ACA pulls authenticate via the existing **UAMI** (`AcrPull` role on the
+  registry). Wired in the composition root, not the compute module, to
+  avoid a circular dep between `modules/compute` and `modules/acr`.
+- Developer pushes use **AAD** (`az acr login` against the AAD-backed flow,
+  then `docker push`). The developer principal holds **`AcrPush`** on the
+  registry — assigned in `dev/main.tf` against `var.dev_principal_object_id`.
+- ACA's `registry { server, identity }` block is added behind a new optional
+  input `container_registry_server` on the compute module. Empty string =
+  no registry block (preserves the D013 anonymous-MCR-placeholder path for
+  any future env that wants it).
+
+### Consequences
+
+**Pros**
+
+- Single RG/sub for billing, RBAC, audit, and offboarding.
+- No long-lived registry credentials anywhere — pulls and pushes are both
+  AAD, end-to-end. Matches D011's posture.
+- Image tier survives if the GitHub org / package is deleted or the PAT is
+  rotated; coupled to Azure tenant lifecycle instead.
+- ACR Tasks available later (build-on-push, vuln scanning hookup) without
+  another migration.
+
+**Cons / Trade-offs**
+
+- **+$5/mo** flat. Dev footprint goes from ~$6-7/mo idle to ~$11-12/mo idle.
+  Acceptable for MVP; documented in `terraform/README.md` cost table.
+- **Lose ghcr.io's free public-image story.** Anyone wanting to pull the
+  image now needs an AAD identity with `AcrPull` on `acrpgdeva4pi`. For an
+  open-source project this is friction; mitigated by the fact that the
+  source is on GitHub and a cold rebuild is `docker build`.
+- **Basic SKU has no private endpoint** (Premium-only). Network access stays
+  public; AAD does the auth. Acceptable for dev.
+- No geo-replication on Basic. Acceptable — single-region dev only.
+
+### Notes
+
+- The compute module's `image` attribute remains in `lifecycle.ignore_changes`
+  (per D013), so CI/CD can flip the running image (`acrpgdeva4pi.azurecr.io/
+  photogallery-backend:<tag>`) without fighting Terraform.
+- When prod ships, revisit SKU. Premium ($1.67/day ≈ $50/mo) buys
+  geo-replication, private link, and content trust — likely worth it for
+  prod, overkill for dev.
+
+### References
+
+- `terraform/modules/acr/` — new module (azurerm_container_registry, Basic, admin off)
+- `terraform/dev/main.tf` — wires `module.acr`, adds `azurerm_role_assignment.aca_acr_pull` and `dev_acr_push`, plumbs `container_registry_server` into compute
+- `terraform/modules/compute/` — new optional `container_registry_server` variable, dynamic `registry` block on the container app authenticated via the UAMI
+- `terraform/dev/outputs.tf` — `container_registry_name`, `container_registry_login_server`
+- `Documentation/Runbooks/local-azure-dev.md` — "Container Registry" section (push/pull workflow)
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:
@@ -1355,6 +1441,6 @@ When a new feature is proposed:
 ---
 
 **Last Updated**: 2026-05-10  
-**Total Decisions**: 10 (D001-D008, D010, D011; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
+**Total Decisions**: 11 (D001-D008, D010, D011, D014; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
 **In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)

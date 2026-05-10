@@ -11,6 +11,7 @@ terraform/
 │   ├── sql/                    # Azure SQL Server + Database (AAD-only, Basic SKU)
 │   ├── keyvault/               # RBAC-mode Key Vault + seed secrets
 │   ├── compute/                # Container Apps env + API container app (UAMI, KV refs)
+│   ├── acr/                    # Azure Container Registry (Basic, AAD auth)
 │   └── observability/          # Log Analytics + App Insights
 └── dev/                        # dev environment composition
     ├── main.tf                 # wires modules together
@@ -35,8 +36,9 @@ for the developer workflow.
 | Azure SQL Database | **Basic** (5 DTU, 2 GB cap) | **~$5** |
 | Key Vault | Standard | <$1 |
 | Container Apps Environment + App | **Consumption, scale-to-zero (min=0, max=1, 0.5 vCPU/1 GiB)** | **~$0** idle (pay per request) |
+| Azure Container Registry | **Basic** (10 GB included, AAD auth, no geo-rep) | **~$5** |
 | Log Analytics + App Insights | first 5 GB free | $0 |
-| **Total dev footprint, idle** | | **~$6–7/mo** |
+| **Total dev footprint, idle** | | **~$11–12/mo** |
 
 Notes:
 
@@ -47,10 +49,12 @@ Notes:
 - **Container Apps Consumption** with `min_replicas = 0` truly scales to
   zero between requests. You pay per-request CPU/memory seconds (sub-cent
   at MVP traffic). Cold-start is ~1-3 s.
-- **No registry cost** — placeholder image lives on MCR (anonymous), real
-  PhotoGallery backend image lives on **ghcr.io** as a public package
-  (free). ACR Basic ($5/mo) is only added if/when private images become a
-  requirement.
+- **Azure Container Registry, Basic SKU** ($5/mo flat, 10 GB included
+  storage, no geo-replication). Pulls authenticated via the ACA UAMI
+  (`AcrPull`); pushes via `az acr login` + the developer's `AcrPush` role
+  assignment — no admin user, no long-lived registry creds. We pivoted from
+  ghcr.io to ACR for single-RG/sub billing and access boundary —
+  see DESIGN_DECISIONS.md D014.
 - **Frontend hosting** is out of scope for this Terraform pass. Cheapest
   path will be **Azure Static Web Apps Free tier** (0 $/mo, generous
   bandwidth). Tracked as a follow-up.

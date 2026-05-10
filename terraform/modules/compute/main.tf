@@ -91,6 +91,18 @@ resource "azurerm_container_app" "this" {
     identity_ids = [azurerm_user_assigned_identity.aca.id]
   }
 
+  # ACR pulls authenticated via the UAMI. Only emitted when a registry
+  # server is supplied — keeps the placeholder/MCR/ghcr.io path clean.
+  # The UAMI must hold AcrPull on the registry; that role assignment is
+  # owned by the caller (see dev/main.tf -> azurerm_role_assignment.aca_acr_pull).
+  dynamic "registry" {
+    for_each = var.container_registry_server == "" ? toset([]) : toset([var.container_registry_server])
+    content {
+      server   = registry.value
+      identity = azurerm_user_assigned_identity.aca.id
+    }
+  }
+
   # KV-backed secrets — one block per logical name. The UAMI (already granted
   # "Key Vault Secrets User" above, with time_sleep for propagation) resolves
   # these at revision-deploy time.

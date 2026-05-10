@@ -260,6 +260,49 @@ Expected behavior:
 4. Browser-side photo URL is a user-delegation SAS (URL contains
    `?sv=...&skoid=...&sks=b&sig=...`) valid for 60 min.
 
+## 5a. Container Registry (push the API image)
+
+The dev footprint includes an **Azure Container Registry, Basic SKU**
+(`acrpgdeva4pi.azurecr.io`). Pulls from ACA authenticate via the API's
+UAMI (already granted `AcrPull` by Terraform). Pushes use AAD via your
+own login (Terraform grants you `AcrPush` against `var.dev_principal_object_id`).
+
+```powershell
+# 1. Get the registry login server from Terraform outputs
+$acr = (terraform -chdir=terraform/dev output -raw container_registry_login_server)
+# -> acrpgdeva4pi.azurecr.io
+
+# 2. Log in with AAD (no admin user, no PAT — just your az session)
+az acr login --name acrpgdeva4pi
+
+# 3. Build the backend image locally (from repo root)
+docker build -f Dockerfile.backend -t "$acr/photogallery-backend:dev" .
+
+# 4. Push
+docker push "$acr/photogallery-backend:dev"
+
+# 5. Point the running container app at the new image. The compute module
+#    has `image` in lifecycle.ignore_changes, so this is an out-of-band CD
+#    step (Terraform will not fight it on the next apply).
+az containerapp update `
+  --name ca-photogallery-api-dev `
+  --resource-group PhotoGallery-dev `
+  --image "$acr/photogallery-backend:dev"
+```
+
+Notes:
+
+- `az acr login` against a Basic SKU registry uses the AAD-backed flow.
+  It writes a short-lived (~3 h) access token into Docker's auth store.
+  No long-lived registry credential ever exists locally.
+- ACA's pull is also AAD: the `registry { server = "...azurecr.io",
+  identity = <UAMI> }` block in the container app authenticates each
+  pull against the UAMI's `AcrPull` role on the registry. There are no
+  registry secrets in Key Vault or in the container app config.
+- If you re-tag the same digest (e.g. push `:dev` repeatedly), ACA only
+  pulls the new image when a new revision is created — the
+  `az containerapp update --image` call above forces that.
+
 ## 6. Tear down
 
 ```powershell
@@ -268,10 +311,10 @@ terraform destroy
 ```
 
 `terraform destroy` only removes the workload resources it manages (storage,
-SQL, Key Vault, observability). The `PhotoGallery-dev` resource group itself
-and the state Storage Account inside it survive — they were created out of
-band by the bootstrap script and are intentionally **not** under Terraform
-management (see DESIGN_DECISIONS.md D012). Leave them for the next
+SQL, Key Vault, observability, ACR). The `PhotoGallery-dev` resource group
+itself and the state Storage Account inside it survive — they were created
+out of band by the bootstrap script and are intentionally **not** under
+Terraform management (see DESIGN_DECISIONS.md D012). Leave them for the next
 provisioning cycle. If you really want a clean slate, run
 `az group delete --name PhotoGallery-dev --yes` afterward — but you'll have
 to rerun the bootstrap to re-provision.
@@ -298,8 +341,9 @@ to rerun the bootstrap to re-provision.
 | Azure SQL Database | **Basic** (5 DTU, 2 GB cap) | **~$5** |
 | Key Vault | Standard | <$1 |
 | Container Apps Environment + API app | **Consumption, scale-to-zero (min=0, max=1, 0.5 vCPU/1 GiB)** | **~$0** idle (pay per request) |
+| Azure Container Registry | **Basic** (10 GB included, AAD auth, no geo-rep) | **~$5** |
 | Log Analytics + App Insights | first 5 GB free | $0 |
-| **Total dev footprint, idle** | | **~$6–7/mo** |
+| **Total dev footprint, idle** | | **~$11–12/mo** |
 
 Notes:
 
@@ -310,9 +354,10 @@ Notes:
 - **Container Apps Consumption** with `min_replicas = 0` truly scales to
   zero between requests. You pay per-request CPU/memory seconds (sub-cent
   at MVP traffic). Cold-start ~1-3 s.
-- **No registry cost.** Placeholder image lives on MCR (anonymous);
-  PhotoGallery's real image will live on **ghcr.io** as a public package
-  (free). ACR Basic ($5/mo) deferred until private images are required.
+- **Azure Container Registry, Basic SKU** (~$5/mo flat). Hosts the
+  PhotoGallery backend image. Pulls authenticated via the ACA UAMI
+  (`AcrPull`); pushes via `az acr login` + `AcrPush` on the developer.
+  Replaces the earlier ghcr.io path — see DESIGN_DECISIONS.md D014.
 - **Frontend hosting** is out of scope for this Terraform pass. Cheapest
   path will be **Azure Static Web Apps Free tier**. Tracked as a follow-up.
 
