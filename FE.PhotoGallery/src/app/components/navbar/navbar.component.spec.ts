@@ -81,6 +81,7 @@ describe('NavbarComponent', () => {
     expect(fixture.debugElement.query(By.css('app-cart-button'))).toBeNull();
   });
 
+
   it('navigates to /login when the login icon is clicked', async () => {
     await setup(false);
     const btn = fixture.debugElement.query(By.css('button.login-icon'));

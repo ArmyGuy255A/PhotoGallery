@@ -100,6 +100,11 @@ public class ImageProcessingService : IImageProcessor
             var pendingItems = await itemRepository.GetPendingItemsAsync();
             var processedPhotos = new HashSet<Guid>();
 
+            // Per-batch cache so we resolve each uploader's display name at most once
+            // even when a photo's Thumbnail and Medium are processed in separate iterations
+            // (and across multiple photos by the same uploader).
+            var watermarkTextCache = new Dictionary<string, string>(StringComparer.Ordinal);
+
             foreach (var item in pendingItems)
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -107,7 +112,7 @@ public class ImageProcessingService : IImageProcessor
 
                 try
                 {
-                    await ProcessQualityAsync(item, itemRepository, photoRepository, cancellationToken);
+                    await ProcessQualityAsync(item, itemRepository, photoRepository, watermarkTextCache, cancellationToken);
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
                     processedPhotos.Add(item.PhotoId);
@@ -141,7 +146,7 @@ public class ImageProcessingService : IImageProcessor
                     await itemRepository.UpdateAsync(item);
                     await itemRepository.SaveChangesAsync();
 
-                    await ProcessQualityAsync(item, itemRepository, photoRepository, cancellationToken);
+                    await ProcessQualityAsync(item, itemRepository, photoRepository, watermarkTextCache, cancellationToken);
                     await itemRepository.MarkCompleteAsync(item.Id);
                     _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
                         item.PhotoId, item.Quality, item.RetryCount + 1);
@@ -192,7 +197,12 @@ public class ImageProcessingService : IImageProcessor
     }
 
     /// <summary>Process a single quality version of a photo</summary>
-    private async Task ProcessQualityAsync(ProcessingQueueItem item, IProcessingQueueItemRepository itemRepository, IPhotoRepository photoRepository, CancellationToken cancellationToken)
+    private async Task ProcessQualityAsync(
+        ProcessingQueueItem item,
+        IProcessingQueueItemRepository itemRepository,
+        IPhotoRepository photoRepository,
+        IDictionary<string, string> watermarkTextCache,
+        CancellationToken cancellationToken)
     {
         // Mark as processing
         item.Status = ProcessingStatus.Processing;
@@ -255,7 +265,7 @@ public class ImageProcessingService : IImageProcessor
                 // watermarked here (defense in depth — Original ships only via paid checkout).
                 if (item.Quality == QualityType.Medium || item.Quality == QualityType.Thumbnail)
                 {
-                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, qualityName, cancellationToken);
+                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, qualityName, watermarkTextCache, cancellationToken);
                 }
             }
         }
@@ -273,6 +283,7 @@ public class ImageProcessingService : IImageProcessor
         Image image,
         int jpegQuality,
         string qualityName,
+        IDictionary<string, string> watermarkTextCache,
         CancellationToken cancellationToken)
     {
         try
@@ -287,9 +298,14 @@ public class ImageProcessingService : IImageProcessor
             sourceStream.Position = 0;
 
             using var watermarkedStream = new MemoryStream();
-            // TODO (Phase 17b): pass the photographer's display name once user profile lands.
-            // For now use a generic copyright text.
-            var watermarkText = $"© {photo.UploadedBy ?? "Photo Gallery"}";
+
+            // Resolve the photographer's display name from the Users table — fixes the
+            // pre-fix bug where Photo.UploadedBy (a GUID string) was painted onto every
+            // watermarked variant verbatim. The resolver caches per-uploader lookups
+            // across the entire batch via watermarkTextCache. Reference: PRs #47 / #48.
+            var watermarkText = await ResolveWatermarkTextAsync(
+                scope.ServiceProvider, photo.UploadedBy, watermarkTextCache, cancellationToken);
+
             await watermarkService.ApplyWatermarkAsync(
                 sourceStream, watermarkedStream, watermarkText, jpegQuality, cancellationToken);
             watermarkedStream.Position = 0;
@@ -305,6 +321,41 @@ public class ImageProcessingService : IImageProcessor
                 "Failed to generate watermarked {Quality} for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked variant.",
                 item.Quality, item.PhotoId);
         }
+    }
+
+    /// <summary>
+    /// Resolve "© {display name}" for an uploader, memoizing in the supplied per-batch cache.
+    /// Falls back to "© Photo Gallery" on any resolver failure — watermark generation must
+    /// never block on auth/identity lookups.
+    /// </summary>
+    private async Task<string> ResolveWatermarkTextAsync(
+        IServiceProvider scopedProvider,
+        string? uploadedBy,
+        IDictionary<string, string> cache,
+        CancellationToken ct)
+    {
+        var key = uploadedBy ?? string.Empty;
+        if (cache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        string text;
+        try
+        {
+            var resolver = scopedProvider.GetRequiredService<IWatermarkTextResolver>();
+            text = await resolver.ResolveAsync(uploadedBy, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Watermark display-name resolution failed for uploader {UploadedBy}; falling back to generic.",
+                uploadedBy);
+            text = "© Photo Gallery";
+        }
+
+        cache[key] = text;
+        return text;
     }
 
     /// <summary>Get processing status for a queue</summary>

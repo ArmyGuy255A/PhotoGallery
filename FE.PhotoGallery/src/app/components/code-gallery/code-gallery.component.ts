@@ -93,15 +93,11 @@ interface CodeValidation {
         <div *ngIf="photos.length > 0" class="gallery-toolbar">
           <label class="default-quality">
             <span>Default quality:</span>
-            <!--
-              TODO (PR-B): add 'Original' option once watermark/Original quality
-              support lands. Until then we keep three options to match the
-              backend's currently-served qualities.
-            -->
             <select [(ngModel)]="defaultQuality" (ngModelChange)="onDefaultQualityChange($event)">
               <option value="Low">Low</option>
               <option value="Medium">Medium</option>
               <option value="High">High</option>
+              <option value="Original">Original</option>
             </select>
           </label>
           <button
@@ -109,7 +105,7 @@ interface CodeValidation {
             class="select-all-btn"
             (click)="onSelectAllToggle()"
             [title]="allVisibleInCart ? 'Remove all visible photos from cart' : 'Add all visible photos to cart at default quality'">
-            {{ allVisibleInCart ? 'Deselect All' : 'Select All' }}
+            {{ allVisibleInCart ? 'Remove All from Cart' : 'Add All to Cart' }}
           </button>
         </div>
 
@@ -133,11 +129,10 @@ interface CodeValidation {
             <div class="photo-meta">
               <div class="filename" [title]="photo.fileName">{{ photo.fileName }}</div>
               <div class="actions">
-                <!-- TODO (PR-E / F3): replace this per-photo dropdown's default with
-                     the user-level Default Quality selector once that toolbar control
-                     lands. Until then each photo defaults to 'Medium' (see
-                     selectedQuality fallback below). -->
-                <select [(ngModel)]="selectedQuality[photo.photoId]" class="quality-select">
+                <select
+                  [ngModel]="selectedQuality[photo.photoId]"
+                  (ngModelChange)="onPhotoQualityChange(photo.photoId, $event)"
+                  class="quality-select">
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
@@ -462,12 +457,15 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   photos: PublicPhoto[] = [];
   selectedQuality: Record<string, CartQuality> = {};
   /**
+   * PhotoIds whose quality has been explicitly chosen by the user via the
+   * per-photo dropdown. Used so that toolbar Default Quality changes only
+   * propagate to photos that have NOT been individually overridden.
+   */
+  qualityOverrides = new Set<string>();
+  /**
    * Default quality applied to single-Add and Select-All when the user hasn't
    * picked a per-photo override. Persisted in localStorage per access code so
    * subsequent visits remember the choice.
-   *
-   * TODO (PR-B): widen to include 'Original' once watermark/Original support
-   * is in. The current type only allows Low|Medium|High.
    */
   defaultQuality: CartQuality = 'Medium';
   loading = true;
@@ -594,12 +592,27 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
 
   onDefaultQualityChange(q: CartQuality): void {
     this.defaultQuality = q;
+    // Propagate to every photo whose quality has NOT been individually overridden.
+    for (const p of this.photos) {
+      if (!this.qualityOverrides.has(p.photoId)) {
+        this.selectedQuality[p.photoId] = q;
+      }
+    }
     if (!this.code) return;
     try {
       localStorage.setItem(this.defaultQualityStorageKey(this.code), q);
     } catch {
       // localStorage may be full or disabled — ignore, in-memory state still works
     }
+  }
+
+  /**
+   * Per-photo quality dropdown handler. Marks the photo as user-overridden so
+   * subsequent toolbar Default Quality changes do not clobber the explicit choice.
+   */
+  onPhotoQualityChange(photoId: string, q: CartQuality): void {
+    this.selectedQuality[photoId] = q;
+    this.qualityOverrides.add(photoId);
   }
 
   /**
@@ -741,8 +754,11 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
       .subscribe({
         next: (data) => {
           this.photos = data?.photos ?? [];
+          // Seed per-photo selectedQuality from the current defaultQuality for any
+          // photo that has NOT been individually overridden. Ensures the visible
+          // <select> value matches what onAddToCart will use.
           for (const p of this.photos) {
-            if (!this.selectedQuality[p.photoId]) {
+            if (!this.qualityOverrides.has(p.photoId)) {
               this.selectedQuality[p.photoId] = this.defaultQuality;
             }
           }

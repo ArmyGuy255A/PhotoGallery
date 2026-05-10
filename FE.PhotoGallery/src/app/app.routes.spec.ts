@@ -10,6 +10,7 @@ import { AlbumDetailComponent } from './components/albums/album-detail.component
 import { AlbumEditComponent } from './components/albums/album-edit.component';
 import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.component';
 import { AccountSettingsComponent } from './components/account/account-settings.component';
+import { AdminSettingsComponent } from './components/admin/admin-settings.component';
 import { authGuard, adminGuard } from './services/auth.guard';
 
 function findTopLevel(path: string): Route | undefined {
@@ -67,6 +68,13 @@ describe('app.routes', () => {
     expect(findChild('albums/:id/edit').component).toBe(AlbumEditComponent);
     expect(findChild('albums/:id/edit').canActivate).toContain(adminGuard);
   });
+
+  it('mounts /admin/settings as an adminGuard-protected child of the shell', () => {
+    const adminSettings = findChild('admin/settings');
+    expect(adminSettings.component).toBe(AdminSettingsComponent);
+    expect(adminSettings.canActivate).toContain(adminGuard);
+  });
+
 
   it('redirects empty child path to dashboard', () => {
     const empty = findChild('');

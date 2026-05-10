@@ -27,7 +27,7 @@ public class AccessCodeController : ControllerBase
     private readonly IStorageProvider _storageProvider;
     private readonly IImageProcessor _imageProcessor;
     private readonly PhotoVersionUrlService _urlService;
-    private readonly ZipDownloadService _zipService;
+    private readonly ICartZipService _cartZipService;
     private readonly ILogger<AccessCodeController> _logger;
 
     public AccessCodeController(
@@ -38,7 +38,7 @@ public class AccessCodeController : ControllerBase
         IStorageProvider storageProvider,
         IImageProcessor imageProcessor,
         PhotoVersionUrlService urlService,
-        ZipDownloadService zipService,
+        ICartZipService cartZipService,
         ILogger<AccessCodeController> logger)
     {
         _accessCodeRepository = accessCodeRepository;
@@ -48,7 +48,7 @@ public class AccessCodeController : ControllerBase
         _storageProvider = storageProvider;
         _imageProcessor = imageProcessor;
         _urlService = urlService;
-        _zipService = zipService;
+        _cartZipService = cartZipService;
         _logger = logger;
     }
 
@@ -78,7 +78,7 @@ public class AccessCodeController : ControllerBase
         {
             AlbumId = album.Id.ToString(),
             AlbumTitle = album.Title,
-            AlbumDescription = album.Description,
+            AlbumDescription = album.Description ?? string.Empty,
             IsValid = true,
             ExpirationDate = accessCode.ExpirationDate
         });
@@ -219,8 +219,10 @@ public class AccessCodeController : ControllerBase
             return NotFound("Album not found");
 
         // Server-side dedupe + validation. Reject Thumbnail (preview only) and any unknown enum.
+        // Album membership is enforced here (pre-authorisation) before handing pre-validated
+        // items to the shared cart-zip service.
         var seen = new HashSet<(Guid, QualityType)>();
-        var validated = new List<CartItem>();
+        var validated = new List<CartZipItem>();
         foreach (var item in request.Items)
         {
             if (!Guid.TryParse(item.PhotoId, out var photoGuid))
@@ -232,14 +234,32 @@ public class AccessCodeController : ControllerBase
             var key = (photoGuid, quality);
             if (!seen.Add(key))
                 continue;
-            validated.Add(new CartItem { PhotoId = photoGuid, Quality = quality });
+
+            var photo = await _photoRepository.GetByIdAsync(photoGuid);
+            if (photo == null)
+                continue;
+            if (photo.AlbumId != accessCode.AlbumId)
+            {
+                _logger.LogWarning(
+                    "Skipping {PhotoId}: does not belong to album {AlbumId} (security check)",
+                    photoGuid, accessCode.AlbumId);
+                continue;
+            }
+
+            validated.Add(new CartZipItem
+            {
+                PhotoId = photoGuid,
+                AlbumId = photo.AlbumId,
+                FileName = photo.FileName,
+                Quality = quality
+            });
         }
 
         if (validated.Count == 0)
             return BadRequest("No valid items in cart (Thumbnail is not downloadable).");
 
-        if (validated.Count > ZipDownloadService.MaxItemsPerCart)
-            return BadRequest($"Cart exceeds maximum of {ZipDownloadService.MaxItemsPerCart} items.");
+        if (validated.Count > CartZipService.MaxItemsPerCartConst)
+            return BadRequest($"Cart exceeds maximum of {CartZipService.MaxItemsPerCartConst} items.");
 
         // Build a sanitized download filename. The album title may contain spaces / unicode.
         var safeTitle = string.IsNullOrWhiteSpace(album.Title) ? "album" : album.Title;
@@ -265,11 +285,10 @@ public class AccessCodeController : ControllerBase
 
         var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString();
 
-        var added = await _zipService.StreamCartZipAsync(
-            albumId: album.Id,
-            accessCodeId: accessCode.Id,
+        var added = await _cartZipService.StreamCartZipAsync(
             items: validated,
             output: Response.Body,
+            accessCodeId: accessCode.Id,
             remoteIp: remoteIp);
 
         _logger.LogInformation(

@@ -2,116 +2,169 @@ name: Build & Test
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 jobs:
-  build-backend:
+  backend:
+    name: Backend build + tests
     runs-on: ubuntu-latest
-    
+    # dorny/test-reporter needs these to write the per-PR check run.
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-    
-    - name: Restore dependencies
-      run: dotnet restore ./PhotoGallery/PhotoGallery.csproj
-    
-    - name: Build
-      run: dotnet build ./PhotoGallery/PhotoGallery.csproj --no-restore --configuration Release
-    
-    - name: Run unit tests
-      run: dotnet test ./PhotoGallery.Tests/PhotoGallery.Tests.csproj --no-restore --verbosity normal
-    
-    - name: Publish
-      run: dotnet publish ./PhotoGallery/PhotoGallery.csproj -c Release -o ./publish
+      - uses: actions/checkout@v4
 
-  build-frontend:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      # Restore the entire solution so cross-cutting sub-projects
+      # (Authentication, Configuration) and their NuGet deps come along.
+      # See clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects".
+      - name: Restore
+        run: dotnet restore PhotoGallery.sln
+
+      - name: Build (Release, no restore)
+        run: dotnet build PhotoGallery.sln --configuration Release --no-restore
+
+      # Run every test project in the solution. Adding a new test project
+      # in the future will be picked up automatically.
+      # Tests MUST pass — no continue-on-error.
+      - name: Test
+        run: |
+          dotnet test PhotoGallery.sln \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=test-results.trx" \
+            --logger "console;verbosity=normal" \
+            --results-directory ./TestResults \
+            --collect:"XPlat Code Coverage"
+
+      - name: Upload test results (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: TestResults/
+
+      - name: Publish test summary
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Backend test results
+          path: TestResults/**/*.trx
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      - name: Publish (Release artifact)
+        run: dotnet publish PhotoGallery/PhotoGallery.csproj -c Release -o ./publish --no-build
+
+      - name: Upload publish artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-publish
+          path: publish/
+
+  frontend:
+    name: Frontend build + tests
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: 'FE.PhotoGallery/package-lock.json'
-    
-    - name: Install dependencies
-      run: cd FE.PhotoGallery && npm ci
-    
-    - name: Build
-      run: cd FE.PhotoGallery && npm run build
-    
-    - name: Run unit tests
-      run: cd FE.PhotoGallery && npm test -- --watch=false
-      continue-on-error: true
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: frontend-build
-        path: FE.PhotoGallery/dist/
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'FE.PhotoGallery/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: FE.PhotoGallery
+        run: npm ci
+
+      - name: Build (production)
+        working-directory: FE.PhotoGallery
+        run: npm run build
+
+      # Run Karma/Jasmine unit tests headless. Tests MUST pass.
+      # ChromeHeadlessCI launcher is configured in karma.conf.js (or use the
+      # default ChromeHeadless if not).
+      - name: Test
+        working-directory: FE.PhotoGallery
+        run: npm test -- --watch=false --browsers=ChromeHeadless --code-coverage
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: FE.PhotoGallery/coverage/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: FE.PhotoGallery/dist/
 
   lint-backend:
+    name: Backend warning audit
     runs-on: ubuntu-latest
-    
+    # Now that the warning baseline is clean, this is a required check.
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-    
-    - name: Analyze code style
-      run: dotnet build ./PhotoGallery/PhotoGallery.csproj --no-restore /p:TreatWarningsAsErrors=true
-      continue-on-error: true
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Restore
+        run: dotnet restore PhotoGallery.sln
+      - name: Build with warnings as errors
+        run: dotnet build PhotoGallery.sln --no-restore /p:TreatWarningsAsErrors=true
 
   build-docker:
-    needs: [build-backend, build-frontend]
+    name: Docker images
+    needs: [backend, frontend]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Build backend Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./PhotoGallery
-        file: ./PhotoGallery/Dockerfile.backend
-        push: false
-        tags: photogallery-backend:${{ github.sha }}
-    
-    - name: Build frontend Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./FE.PhotoGallery
-        file: ./FE.PhotoGallery/Dockerfile
-        push: false
-        tags: photogallery-frontend:${{ github.sha }}
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build context is the repo root because Dockerfile.backend now copies
+      # multiple sub-projects (Authentication/, Configuration/, PhotoGallery/).
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.backend
+          push: false
+          tags: photogallery-backend:${{ github.sha }}
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./FE.PhotoGallery
+          file: ./FE.PhotoGallery/Dockerfile
+          push: false
+          tags: photogallery-frontend:${{ github.sha }}
 
   security-scan:
+    name: NuGet vulnerability scan (informational)
     runs-on: ubuntu-latest
-    
+    # Informational only — surfaces transitive vulnerabilities without
+    # blocking. Promote to required once we have a triage process.
+    continue-on-error: true
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '9.0.x'
-    
-    - name: Scan for vulnerabilities
-      run: dotnet list ./PhotoGallery/PhotoGallery.csproj package --vulnerable --include-transitive
-      continue-on-error: true
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Scan
+        run: dotnet list PhotoGallery.sln package --vulnerable --include-transitive
+

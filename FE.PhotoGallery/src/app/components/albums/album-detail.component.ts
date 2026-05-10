@@ -79,8 +79,7 @@ interface Album {
                 <div class="photo-thumb-clickable"
                      (click)="openModal(i)"
                      (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)">
-                <div class="photo-status-badge" [ngClass]="getStatusClass(photo)" data-testid="photo-status-badge">
-                  <span *ngIf="photo.processingStatus === 'Complete'">✓</span>
+                <div *ngIf="getShouldShowBadge(photo)" class="photo-status-badge" [ngClass]="getStatusClass(photo)" data-testid="photo-status-badge">
                   <span *ngIf="photo.processingStatus === 'Processing'">⟳</span>
                   <span *ngIf="photo.processingStatus === 'Failed'">✗</span>
                 </div>
@@ -837,6 +836,10 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
     if (status === 'processing') return 'processing';
     if (status === 'failed') return 'failed';
     return 'pending';
+  }
+
+  getShouldShowBadge(photo: Photo): boolean {
+    return photo?.processingStatus === 'Processing' || photo?.processingStatus === 'Failed';
   }
 
   getCodeStatus(code: AccessCode): string {

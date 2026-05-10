@@ -57,7 +57,7 @@ public class AlbumsController : ControllerBase
         {
             Id = a.Id.ToString(),
             Title = a.Title,
-            Description = a.Description,
+            Description = a.Description ?? string.Empty,
             CreatedDate = a.CreatedDate,
             OwnerId = a.OwnerId,
             CanManage = a.OwnerId == userId || User.IsInRole("Admin")
@@ -461,7 +461,7 @@ public class AlbumsController : ControllerBase
         {
             Id = album.Id.ToString(),
             Title = album.Title,
-            Description = album.Description,
+            Description = album.Description ?? string.Empty,
             OwnerId = album.OwnerId,
             CreatedDate = album.CreatedDate,
             CreatedBy = album.CreatedBy

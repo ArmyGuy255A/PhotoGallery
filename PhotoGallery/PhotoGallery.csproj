@@ -35,7 +35,7 @@
         <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="2.1.6" />
         <PackageReference Include="Serilog" Version="4.1.0" />
         <PackageReference Include="Serilog.AspNetCore" Version="8.0.0" />
-        <PackageReference Include="Serilog.Sinks.Console" Version="5.1.1" />
+        <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
         <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     </ItemGroup>
 
@@ -43,36 +43,6 @@
       <Content Include="..\.dockerignore">
         <Link>.dockerignore</Link>
       </Content>
-    </ItemGroup>
-
-    <ItemGroup>
-      <_ContentIncludedByDefault Remove="Views\Home\Index.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\Home\Privacy.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\Shared\Error.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\Shared\_Layout.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\Shared\_LoginPartial.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\Shared\_ValidationScriptsPartial.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\_ViewImports.cshtml" />
-      <_ContentIncludedByDefault Remove="Views\_ViewStart.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Home\Index.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Home\Privacy.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Shared\Error.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Shared\_Layout.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Shared\_LoginPartial.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\Shared\_ValidationScriptsPartial.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\_ViewImports.cshtml" />
-      <_ContentIncludedByDefault Remove="Models\Views\_ViewStart.cshtml" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <AdditionalFiles Include="Views\Home\Index.cshtml" />
-      <AdditionalFiles Include="Views\Home\Privacy.cshtml" />
-      <AdditionalFiles Include="Views\Shared\Error.cshtml" />
-      <AdditionalFiles Include="Views\Shared\_Layout.cshtml" />
-      <AdditionalFiles Include="Views\Shared\_LoginPartial.cshtml" />
-      <AdditionalFiles Include="Views\Shared\_ValidationScriptsPartial.cshtml" />
-      <AdditionalFiles Include="Views\_ViewImports.cshtml" />
-      <AdditionalFiles Include="Views\_ViewStart.cshtml" />
     </ItemGroup>
 
 </Project>

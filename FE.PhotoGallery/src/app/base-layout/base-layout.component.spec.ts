@@ -53,6 +53,7 @@ describe('BaseLayoutComponent', () => {
     expect(container.query(By.css('app-cart-drawer'))).toBeTruthy();
   });
 
+
   it('hosts a <router-outlet/> (provided by app-sidenav) for child routes', () => {
     // BaseLayoutComponent delegates the routed content slot to <app-sidenav>'s
     // <mat-sidenav-content><router-outlet/></mat-sidenav-content>. Confirm

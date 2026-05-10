@@ -46,7 +46,7 @@ public class LoginController : Controller
         var clientId = _configuration["Google:ClientId"];
         var scopes = "openid email profile";
 
-        var authUrl = QueryHelpers.AddQueryString("https://accounts.google.com/o/oauth2/v2/auth", new Dictionary<string, string>
+        var authUrl = QueryHelpers.AddQueryString("https://accounts.google.com/o/oauth2/v2/auth", new Dictionary<string, string?>
         {
             { "client_id", clientId },
             { "redirect_uri", redirectUri },
@@ -71,9 +71,9 @@ public class LoginController : Controller
         var response = await httpClient.PostAsync(tokenEndpoint, new FormUrlEncodedContent(new Dictionary<string, string>
         {
             { "code", code },
-            { "client_id", _configuration["Google:ClientId"] },
-            { "client_secret", _configuration["Google:ClientSecret"] },
-            { "redirect_uri", redirectUri },
+            { "client_id", _configuration["Google:ClientId"] ?? string.Empty },
+            { "client_secret", _configuration["Google:ClientSecret"] ?? string.Empty },
+            { "redirect_uri", redirectUri ?? string.Empty },
             { "grant_type", "authorization_code" }
         }));
 
@@ -124,13 +124,13 @@ public class LoginController : Controller
 public class GoogleTokenResponse
 {
     [JsonPropertyName("access_token")]
-    public string AccessToken { get; set; }
+    public string AccessToken { get; set; } = string.Empty;
 
     [JsonPropertyName("id_token")]
-    public string IdToken { get; set; }
+    public string IdToken { get; set; } = string.Empty;
 }
 
 public class AuthTokenResponse
 {
-    public string Token { get; set; }
+    public string Token { get; set; } = string.Empty;
 }
