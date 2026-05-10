@@ -23,14 +23,20 @@ PhotoGallery uses an abstracted storage layer that supports multiple backends (M
 
 ```
 photogallery/
-├── {album_guid}/           # Album namespace
-│   └── {photo_guid}/       # Photo namespace
-│       ├── original.jpg    # Uploaded file (not processed)
-│       ├── high.jpg        # 50% compression
-│       ├── medium.jpg      # 75% compression
-│       ├── low.jpg         # 85% compression
-│       └── raw.jpg         # 100% quality
+├── {album_guid}/                       # Album namespace
+│   └── {photo_guid}/                   # Photo namespace
+│       ├── original.jpg                # Uploaded file (full resolution, served to paid carts)
+│       ├── high.jpg                    # 50% compression
+│       ├── medium.jpg                  # 75% compression
+│       ├── medium-watermarked.jpg      # 75% compression + tiled watermark (paid-photo guest preview)
+│       ├── thumbnail-watermarked.jpg   # Thumbnail + tiled watermark (paid-photo guest preview, PR #48)
+│       ├── low.jpg                     # 85% compression
+│       └── raw.jpg                     # 100% quality
 ```
+
+> **Original quality** (`original.jpg`) was added to the cart-quality choices in PR #50. Cart manifests requesting Original return a presigned URL pointing at this object directly — no resize, no re-encode.
+>
+> **Watermarked thumbnails** (`thumbnail-watermarked.jpg`) were introduced in PR #48 alongside a one-shot backfill that produced the variant for every existing photo. See [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md).
 
 **See [DESIGN_DECISIONS.md](./DESIGN_DECISIONS.md) - D005: Storage Path Structure Standard**
 
@@ -200,6 +206,83 @@ services:
 **Access**:
 - API: http://localhost:9000
 - Console: http://localhost:9001 (minioadmin / minioadmin)
+
+## CORS for SPA Streaming Downloads
+
+The SPA fetches photos **directly** from blob storage in two situations:
+
+1. **Inline `<img>` rendering** — uses presigned URLs in the `src` attribute. Browsers do not enforce CORS for image elements, so MinIO/Azure can serve these without any CORS config.
+2. **Cart download via [`client-zip`](https://github.com/Touffy/client-zip)** (see [DESIGN_DECISIONS.md — D010](./DESIGN_DECISIONS.md#d010-cart-download--client-side-zip-via-manifest-endpoint)) — uses `fetch(presignedUrl) → ReadableStream` to stream each photo into a client-side ZIP. **This path is a CORS request** because the response stream is consumed by JavaScript, not just rendered.
+
+Without CORS configured on the storage backend, the cart download fails with `TypeError: NetworkError when attempting to fetch resource` and a console message about a missing `Access-Control-Allow-Origin` header.
+
+### Why the SPA fetches storage directly (and not via the backend)
+
+Routing photo bytes through the backend would mean:
+- Every byte travels storage → backend → browser, doubling bandwidth.
+- The backend becomes a relay with no value-add and a memory ceiling at large cart sizes.
+- Sync-IO complications around `ZipArchive.Dispose` (the original failure that motivated D010).
+
+Direct-from-storage `fetch` lets MinIO / Azure Blob serve at their own throughput, and `client-zip` assembles the archive locally with constant backend memory.
+
+### MinIO (development)
+
+The repo ships `scripts/setup-minio-cors.ps1` which bootstraps the MinIO bucket policy via the `mc` admin client. Run it once after `docker compose up`:
+
+```powershell
+.\scripts\setup-minio-cors.ps1
+```
+
+If the script is unavailable, the equivalent `mc` commands are:
+
+```bash
+# Configure the mc alias for the local MinIO container
+mc alias set local http://localhost:9000 minioadmin minioadmin
+
+# Allow the SPA dev origin (or '*' for fully open dev)
+mc admin config set local cors_allow_origin="http://localhost:4300"
+mc admin service restart local
+```
+
+For older MinIO releases that do not expose the `cors_allow_origin` admin key, set the equivalent environment variables on the MinIO container:
+
+```yaml
+# docker-compose.yml (excerpt)
+services:
+  minio:
+    environment:
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:4300"
+```
+
+### Azure Blob Storage (production)
+
+Azure Storage exposes a per-account CORS rule list. Add the SPA origin via the Azure CLI:
+
+```bash
+az storage cors add \
+  --services b \
+  --methods GET HEAD \
+  --origins "https://photogallery.example.com" \
+  --allowed-headers "*" \
+  --exposed-headers "*" \
+  --max-age 3600 \
+  --account-name <storage-account>
+```
+
+**Notes**:
+- `--origins` should be the exact SPA origin(s); avoid `*` in production so credentials and signed URLs cannot be exfiltrated by arbitrary origins.
+- `--methods GET HEAD` is sufficient — the SPA only reads. Uploads still go through the backend.
+- The change propagates within ~30 seconds; verify with `az storage cors list --services b --account-name <account>`.
+
+### Smoke test
+
+After bootstrap, from a SPA-origin browser tab:
+
+```js
+const r = await fetch('<presigned-url>', { method: 'GET' });
+console.log(r.headers.get('access-control-allow-origin'));
+// Expect: 'http://localhost:4300' (or '*' in dev)
+```
 
 ## Migration Between Providers
 

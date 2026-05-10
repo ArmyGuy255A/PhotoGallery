@@ -907,6 +907,67 @@ public async Task<PhotoVersionUrl?> GetByPhotoAndQualityIncludingInactiveAsync(G
 
 ---
 
+## D010: Cart Download — Client-Side ZIP via Manifest Endpoint
+
+**Status**: ✅ Approved  
+**Date**: Phase 13 (2026-05-10)  
+**Approved By**: User  
+**Related**: [D002 Storage Provider Abstraction](#d002-storage-provider-abstraction-layer) • [D005 Storage Path Structure Standard](#d005-storage-path-structure-standard) • [STORAGE_LAYER.md — CORS for SPA Streaming](./STORAGE_LAYER.md#cors-for-spa-streaming-downloads)
+
+### Context
+
+The cart download endpoint historically streamed a server-built ZIP back to the browser: backend pulled each photo from blob storage into a `ZipArchive`, then relayed the bytes to the client. In production this surfaced two compounding problems:
+
+1. **`AllowSynchronousIO` failure** — `ZipArchive.Dispose` performs synchronous writes; ASP.NET Core 9 disallows this by default. Working around it with `AllowSynchronousIO=true` re-introduces a thread-pool starvation risk.
+2. **Bandwidth doubled** — every byte travels storage → backend → browser. With Original-quality variants (PR-B added), a 20-photo cart can be 400+ MB; the backend becomes a relay with no value-add.
+
+### Decision
+
+Replace server-streamed ZIP with a **manifest endpoint + client-side ZIP**:
+
+- Backend returns `POST /api/code/{code}/cart/manifest` → `[{ filename, url, sizeBytes? }]`, where each `url` is a short-lived (default 15 min) presigned URL pointing at the chosen-quality blob (`original.jpg`, `medium.jpg`, etc.).
+- Frontend uses [`client-zip`](https://github.com/Touffy/client-zip) (~2 KB, streaming, returns a `ReadableStream`) to assemble the ZIP locally from the presigned URLs.
+- Save flow:
+  - **Chromium** — `showSaveFilePicker()` → write the stream directly to the user's chosen path; constant memory.
+  - **Firefox / Safari** — fall back to `new Blob([stream])` + `<a download>`; the whole archive lands in memory before save.
+
+Backend logs one `Download` analytics row per item the manifest returned (URL issued = intent to download).
+
+### Rationale
+
+- **Eliminates server bandwidth relay** — bytes go storage → browser directly. Backend touches metadata only.
+- **Removes sync-IO ceremony** — no `ZipArchive.Dispose`, no `AllowSynchronousIO`, no thread-pool risk.
+- **Storage layer scales independently** — MinIO / Azure Blob serves the bytes at their own throughput; backend memory stays flat regardless of cart size.
+- **Stateless** — no per-request server allocation tied to download duration; presigned URLs are the only handoff.
+
+### Rejected Alternatives
+
+- ❌ **Keep server-streamed ZIP** — already broken in prod with the `AllowSynchronousIO` failure; even if patched, doesn't fix the bandwidth-doubling cost or memory ceiling at large cart sizes.
+- ❌ **Server zips once and stores the archive in blob storage, returns one URL** — would generate hundreds of duplicate ZIPs over time (every cart variant produces a unique archive). Unbounded storage growth with no clear retention policy. Also keeps the `ZipArchive.Dispose` problem at upload time rather than download time.
+- ❌ **Server-Sent Events / WebSocket-driven progress instead of `client-zip`** — extra protocol surface, doesn't change the bandwidth story, and modern browsers' streaming `fetch` + `client-zip` already deliver the progress UX with no extra plumbing.
+
+### Risks
+
+- **Firefox / Safari memory ceiling** — without `showSaveFilePicker`, the entire ZIP must fit in memory before save. For Original quality this can mean 400+ MB. The frontend warns the user when total manifest size exceeds a threshold (`~250 MB`) on a non-Chromium browser.
+- **Presigned URL TTL vs slow downloads** — default 15-minute TTL. A user on a slow connection downloading a multi-GB Original-quality cart may see URLs expire mid-stream. The cart panel offers a "retry" that re-fetches the manifest (issuing fresh URLs). TTL is configurable per environment if needed.
+- **CORS bootstrap required** — direct `fetch(url) → ReadableStream` from the SPA origin is a CORS request. MinIO (dev) and Azure Storage (prod) must both be configured to allow the SPA origin. See [STORAGE_LAYER.md — CORS for SPA Streaming Downloads](./STORAGE_LAYER.md#cors-for-spa-streaming-downloads).
+
+### Implementation
+
+- **Backend** — `POST /api/code/{code}/cart/manifest` controller action; `ZipDownloadService` removed; one `Download` row inserted per manifest item.
+- **Frontend** — `CartDownloadService` wraps manifest-fetch + `client-zip` + save flow; emits `{ phase: 'manifest' | 'streaming' | 'saving', bytesWritten?, totalBytes? }` progress events to the cart panel.
+- **Infra** — `scripts/setup-minio-cors.ps1` bootstraps the dev MinIO bucket; Azure prod uses `az storage cors add` (documented in STORAGE_LAYER.md).
+
+(See PR-F: `cart-download-manifest` for the full implementation.)
+
+### Tests
+
+- Backend — manifest controller test asserts every cart item produces one `{ filename, url }` entry, one `Download` row inserted, and chosen-quality routing (Original → `original.jpg`).
+- Frontend — `CartDownloadService` unit test mocks `fetch` with a `ReadableStream`, asserts manifest is fetched first, each item is fetched, and `client-zip` produces a valid archive header.
+- E2E — Playwright probe drives a small (3-photo) cart through the full flow on a Chromium build, verifies the saved file is a valid ZIP via the headless `showSaveFilePicker` shim.
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:
@@ -932,7 +993,7 @@ When a new feature is proposed:
 
 ---
 
-**Last Updated**: 2026-05-04  
-**Total Decisions**: 8  
+**Last Updated**: 2026-05-10  
+**Total Decisions**: 9 (D001-D008, D010; D009 lives in [docs/decisions/D009-watermark-pipeline.md](../../docs/decisions/D009-watermark-pipeline.md))  
 **All Approved**: ✅ Yes  
-**In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008)
+**In Implementation**: Phases 1-12 (D001-D005); Phase 13 in progress (D006-D008, D010)

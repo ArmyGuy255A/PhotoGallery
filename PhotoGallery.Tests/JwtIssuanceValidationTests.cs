@@ -80,8 +80,31 @@ public class JwtIssuanceValidationTests
         Assert.NotNull(validatedToken);
         Assert.Equal("user-123", principal.FindFirst(ClaimTypes.NameIdentifier)?.Value);
         Assert.Equal("user@example.com", principal.FindFirst(JwtRegisteredClaimNames.Email)?.Value);
-        Assert.Contains(principal.FindAll(ClaimTypes.Role), c => c.Value == "Admin");
-        Assert.Contains(principal.FindAll(ClaimTypes.Role), c => c.Value == "User");
+        // After PR-A, the JWT body carries the compact "role" claim name
+        // rather than the long ClaimTypes.Role URI. With InboundClaimTypeMap
+        // cleared the principal preserves the on-the-wire name.
+        Assert.Contains(principal.FindAll("role"), c => c.Value == "Admin");
+        Assert.Contains(principal.FindAll("role"), c => c.Value == "User");
+        // And the long URI must NOT be present on the wire.
+        Assert.Empty(principal.FindAll(ClaimTypes.Role));
+    }
+
+    [Fact]
+    public void IssuedToken_PayloadContains_ShortFormRoleClaim_NotLongUri()
+    {
+        // Direct assertion on the raw JWT body: parsing without going through
+        // any inbound claim-type mapping. Guards the on-the-wire contract that
+        // FE code (and any external consumer) decodes via base64 + JSON.parse.
+        var service = CreateService();
+        var token = service.GenerateTokenForUser(
+            userId: "user-123",
+            email: "user@example.com",
+            roles: new[] { "Admin" });
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+
+        Assert.Contains(jwt.Claims, c => c.Type == "role" && c.Value == "Admin");
+        Assert.DoesNotContain(jwt.Claims, c => c.Type == ClaimTypes.Role);
     }
 
     [Fact]

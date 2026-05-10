@@ -97,6 +97,38 @@ export class CartService {
     return true;
   }
 
+  /**
+   * Add multiple items to the cart in a single transaction.
+   *
+   * Skips items already present (matching photoId + quality) and de-duplicates
+   * within the input. Honors the 100-item cap; once the cap is reached,
+   * remaining items are dropped silently.
+   *
+   * Returns the number of items actually added (after dedupe + cap),
+   * so callers can render a single toast (e.g. Select All rendering
+   * "Added 100 photos (cap reached); 23 not added") instead of one per item.
+   */
+  addItems(items: CartItem[]): number {
+    if (!items || items.length === 0) return 0;
+    const existing = this.items$.value;
+    const seen = new Set<string>(existing.map(i => `${i.photoId}::${i.quality}`));
+    const next = [...existing];
+    let added = 0;
+    for (const item of items) {
+      if (next.length >= MAX_CART_SIZE) break;
+      const key = `${item.photoId}::${item.quality}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      next.push(item);
+      added++;
+    }
+    if (added > 0) {
+      this.items$.next(next);
+      this.persist();
+    }
+    return added;
+  }
+
   /** Remove an item by (photoId, quality). */
   removeItem(photoId: string, quality: CartQuality): void {
     const updated = this.items$.value.filter(

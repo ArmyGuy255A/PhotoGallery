@@ -5,10 +5,11 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
-import { CartService, CartQuality } from '../../services/cart.service';
+import { CartService, CartQuality, CartItem } from '../../services/cart.service';
 import { AuthService } from '../../services/auth.service';
 import { CartPanelComponent } from './cart-panel.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
+import { UserDropdownComponent } from '../user-dropdown/user-dropdown.component';
 import { environment } from '../../../environments/environment';
 
 interface PublicPhoto {
@@ -41,7 +42,7 @@ interface CodeValidation {
 @Component({
   selector: 'app-code-gallery',
   standalone: true,
-  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent],
+  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent, UserDropdownComponent],
   template: `
     <div class="code-gallery">
       <header class="gallery-header">
@@ -61,6 +62,7 @@ interface CodeValidation {
             🛒 Cart
             <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
           </button>
+          <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
         </div>
       </header>
 
@@ -76,6 +78,33 @@ interface CodeValidation {
         <p class="meta" *ngIf="album.expirationDate">
           Access expires {{ album.expirationDate | date: 'mediumDate' }}
         </p>
+
+        <div *ngIf="photos.length > 0" class="gallery-toolbar">
+          <label class="default-quality">
+            <span>Default quality:</span>
+            <!--
+              TODO (PR-B): add 'Original' option once watermark/Original quality
+              support lands. Until then we keep three options to match the
+              backend's currently-served qualities.
+            -->
+            <select [(ngModel)]="defaultQuality" (ngModelChange)="onDefaultQualityChange($event)">
+              <option value="Low">Low</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="select-all-btn"
+            (click)="onSelectAllToggle()"
+            [title]="allVisibleInCart ? 'Remove all visible photos from cart' : 'Add all visible photos to cart at default quality'">
+            {{ allVisibleInCart ? 'Deselect All' : 'Select All' }}
+          </button>
+        </div>
+
+        <div *ngIf="toastMessage" class="toast" role="status" aria-live="polite">
+          {{ toastMessage }}
+        </div>
 
         <div *ngIf="photos.length === 0" class="empty-message">
           <p>No photos in this album yet.</p>
@@ -120,8 +149,9 @@ interface CodeValidation {
         [(currentIndex)]="modalIndex"
         [isOpen]="modalOpen"
         [showCartButton]="true"
+        [isInCart]="isModalPhotoInCart"
         (closed)="modalOpen = false"
-        (cartAction)="onModalAddToCart($event)">
+        (cartAction)="onModalCartAction($event)">
       </app-photo-modal>
 
       <app-cart-panel
@@ -167,7 +197,7 @@ interface CodeValidation {
 
     .header-actions {
       display: flex;
-      gap: 10px;
+      gap: 12px;
       align-items: center;
     }
 
@@ -351,6 +381,54 @@ interface CodeValidation {
       color: #2e7d32;
       cursor: default;
     }
+
+    .gallery-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .default-quality {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: #555;
+    }
+
+    .default-quality select {
+      padding: 6px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .select-all-btn {
+      background: white;
+      border: 2px solid #0066cc;
+      color: #0066cc;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .select-all-btn:hover {
+      background: #e3f2fd;
+    }
+
+    .toast {
+      background: #fff3e0;
+      border: 1px solid #ffb74d;
+      color: #6d4c00;
+      padding: 10px 14px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
   `]
 })
 export class CodeGalleryComponent implements OnInit, OnDestroy {
@@ -358,6 +436,15 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   album: CodeValidation | null = null;
   photos: PublicPhoto[] = [];
   selectedQuality: Record<string, CartQuality> = {};
+  /**
+   * Default quality applied to single-Add and Select-All when the user hasn't
+   * picked a per-photo override. Persisted in localStorage per access code so
+   * subsequent visits remember the choice.
+   *
+   * TODO (PR-B): widen to include 'Original' once watermark/Original support
+   * is in. The current type only allows Low|Medium|High.
+   */
+  defaultQuality: CartQuality = 'Medium';
   loading = true;
   errorMessage = '';
   cartOpen = false;
@@ -365,12 +452,17 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   isAuthenticated = false;
   saving = false;
   saved = false;
+  /** Transient banner used for Select-All cap messaging. Cleared by a timer. */
+  toastMessage = '';
+  private toastTimer: number | null = null;
 
   // Modal state
   modalOpen = false;
   modalIndex = 0;
 
   private destroy$ = new Subject<void>();
+  /** Snapshot of cart photoIds (across all qualities) — drives modal isInCart and Select-All toggle state. */
+  private cartPhotoIds = new Set<string>();
 
   constructor(
     private route: ActivatedRoute,
@@ -386,6 +478,7 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
       this.code = params['code'];
       if (this.code) {
         this.cart.loadForCode(this.code);
+        this.loadDefaultQuality();
         this.loadAlbum();
         this.loadPhotos();
       }
@@ -393,12 +486,16 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
 
     this.cart.cart$.pipe(takeUntil(this.destroy$)).subscribe(items => {
       this.cartCount = items.length;
+      this.cartPhotoIds = new Set(items.map(i => i.photoId));
     });
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+    if (this.toastTimer !== null) {
+      clearTimeout(this.toastTimer);
+    }
   }
 
   /** Photos transformed for the PhotoModalComponent — uses mediumUrl as displayUrl. */
@@ -411,25 +508,52 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     }));
   }
 
+  /**
+   * Whether the photo currently displayed in the modal is in the cart at
+   * its current selected (or default) quality. Reactive — recomputed on
+   * every cart$ emission so Select-All while modal open updates the
+   * Add/Remove button live.
+   */
+  get isModalPhotoInCart(): boolean {
+    const modalPhoto = this.modalPhotos[this.modalIndex];
+    if (!modalPhoto) return false;
+    const quality = this.selectedQuality[modalPhoto.photoId] || this.defaultQuality;
+    return this.cart.contains(modalPhoto.photoId, quality);
+  }
+
+  /** True when every visible photo is already in the cart (any quality). Drives Select-All ↔ Deselect-All label. */
+  get allVisibleInCart(): boolean {
+    if (this.photos.length === 0) return false;
+    return this.photos.every(p => this.cartPhotoIds.has(p.photoId));
+  }
+
   openModal(index: number): void {
     this.modalIndex = index;
     this.modalOpen = true;
   }
 
-  onModalAddToCart(modalPhoto: ModalPhoto): void {
+  /**
+   * Modal cart-button handler. Adds or removes based on the same isInCart
+   * flag the modal uses to render its button — keeping the contract symmetrical.
+   */
+  onModalCartAction(modalPhoto: ModalPhoto): void {
     const photo = this.photos.find(p => p.photoId === modalPhoto.photoId);
-    if (photo) {
+    if (!photo) return;
+    const quality = this.selectedQuality[photo.photoId] || this.defaultQuality;
+    if (this.cart.contains(photo.photoId, quality)) {
+      this.cart.removeItem(photo.photoId, quality);
+    } else {
       this.onAddToCart(photo);
     }
   }
 
   isInCart(photo: PublicPhoto): boolean {
-    const quality = this.selectedQuality[photo.photoId] || 'Medium';
+    const quality = this.selectedQuality[photo.photoId] || this.defaultQuality;
     return this.cart.contains(photo.photoId, quality);
   }
 
   onAddToCart(photo: PublicPhoto): void {
-    const quality = this.selectedQuality[photo.photoId] || 'Medium';
+    const quality = this.selectedQuality[photo.photoId] || this.defaultQuality;
     const added = this.cart.addItem({
       photoId: photo.photoId,
       fileName: photo.fileName,
@@ -438,8 +562,96 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     });
     if (!added) {
       if (this.cart.count >= 100) {
-        alert('Cart is full (100 items max). Please download or remove items first.');
+        this.showToast('Cart is full (100 items max). Please download or remove items first.');
       }
+    }
+  }
+
+  onDefaultQualityChange(q: CartQuality): void {
+    this.defaultQuality = q;
+    if (!this.code) return;
+    try {
+      localStorage.setItem(this.defaultQualityStorageKey(this.code), q);
+    } catch {
+      // localStorage may be full or disabled — ignore, in-memory state still works
+    }
+  }
+
+  /**
+   * Toolbar Select All ↔ Deselect All toggle.
+   *
+   * - When at least one visible photo is missing from the cart: bulk-add the
+   *   missing ones at Default Quality (truncated at 100, single toast for excess).
+   * - When all visible photos are in the cart: remove every cart item whose
+   *   photoId belongs to a currently-visible photo (any quality).
+   */
+  onSelectAllToggle(): void {
+    if (this.allVisibleInCart) {
+      this.deselectAllVisible();
+    } else {
+      this.selectAllVisible();
+    }
+  }
+
+  private selectAllVisible(): void {
+    const missing = this.photos.filter(p => !this.cartPhotoIds.has(p.photoId));
+    if (missing.length === 0) return;
+
+    const items: CartItem[] = missing.map(p => ({
+      photoId: p.photoId,
+      fileName: p.fileName,
+      thumbnailUrl: p.thumbnailUrl,
+      quality: this.selectedQuality[p.photoId] || this.defaultQuality
+    }));
+
+    const requested = items.length;
+    const added = this.cart.addItems(items);
+    const skipped = requested - added;
+
+    if (added === requested) {
+      this.showToast(`Added ${added} photo${added === 1 ? '' : 's'} to cart.`);
+    } else if (added === 0) {
+      this.showToast('Cart is full (100 items max). Please download or remove items first.');
+    } else {
+      this.showToast(`Added ${added} photos (cap reached); ${skipped} not added.`);
+    }
+  }
+
+  private deselectAllVisible(): void {
+    const visibleIds = new Set(this.photos.map(p => p.photoId));
+    const toRemove = this.cart.items.filter(i => visibleIds.has(i.photoId));
+    for (const item of toRemove) {
+      this.cart.removeItem(item.photoId, item.quality);
+    }
+    if (toRemove.length > 0) {
+      this.showToast(`Removed ${toRemove.length} photo${toRemove.length === 1 ? '' : 's'} from cart.`);
+    }
+  }
+
+  private showToast(message: string): void {
+    this.toastMessage = message;
+    if (this.toastTimer !== null) {
+      clearTimeout(this.toastTimer);
+    }
+    this.toastTimer = setTimeout(() => {
+      this.toastMessage = '';
+      this.toastTimer = null;
+    }, 4000) as unknown as number;
+  }
+
+  private defaultQualityStorageKey(code: string): string {
+    return `defaultQuality:${code}`;
+  }
+
+  private loadDefaultQuality(): void {
+    if (!this.code) return;
+    try {
+      const stored = localStorage.getItem(this.defaultQualityStorageKey(this.code));
+      if (stored === 'Low' || stored === 'Medium' || stored === 'High') {
+        this.defaultQuality = stored;
+      }
+    } catch {
+      // localStorage unavailable — keep default
     }
   }
 
@@ -506,7 +718,7 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
           this.photos = data?.photos ?? [];
           for (const p of this.photos) {
             if (!this.selectedQuality[p.photoId]) {
-              this.selectedQuality[p.photoId] = 'Medium';
+              this.selectedQuality[p.photoId] = this.defaultQuality;
             }
           }
         },

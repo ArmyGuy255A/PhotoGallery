@@ -248,12 +248,14 @@ public class ImageProcessingService : IImageProcessor
 
                 _logger.LogInformation("Saved {Quality} version to {Path}", item.Quality, outputPath);
 
-                // For Medium quality, also generate a watermarked variant for non-purchased viewing.
-                // Reference: D009 (Watermark Pipeline). The watermarked Medium is what guests/the
-                // photo modal sees; the unwatermarked Medium is delivered only via cart-checkout zip.
-                if (item.Quality == QualityType.Medium)
+                // For public-viewing qualities (Thumbnail + Medium), also generate watermarked
+                // variants. Reference: D009 (Watermark Pipeline). Public viewers (access-code
+                // gallery, photo modal) see the watermarked Thumbnail/Medium; the unwatermarked
+                // variants are delivered only via cart-checkout. Original/Low/High are never
+                // watermarked here (defense in depth — Original ships only via paid checkout).
+                if (item.Quality == QualityType.Medium || item.Quality == QualityType.Thumbnail)
                 {
-                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, cancellationToken);
+                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, qualityName, cancellationToken);
                 }
             }
         }
