@@ -252,6 +252,17 @@ public class AccessCodeController : ControllerBase
         Response.ContentType = "application/zip";
         Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{fileName}\"");
 
+        // ZipArchive.Dispose performs synchronous writes to finalize the central
+        // directory, which Kestrel rejects by default with InvalidOperationException
+        // ""Synchronous operations are disallowed"". Enabling AllowSynchronousIO
+        // for *this* request only is the documented escape hatch — it scopes to the
+        // current HttpContext and does not affect global Kestrel settings. The
+        // alternative (buffering the entire ZIP to a MemoryStream) would consume
+        // up to MaxItemsPerCart * full-resolution-photo-bytes of memory per
+        // concurrent request, which is unbounded for prod.
+        var bodyControl = HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpBodyControlFeature>();
+        if (bodyControl != null) bodyControl.AllowSynchronousIO = true;
+
         var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString();
 
         var added = await _zipService.StreamCartZipAsync(
