@@ -86,13 +86,13 @@ public class ExternalAuthService : IExternalAuthService
             _logger.LogInformation("HandleExternalLogin: existing user {UserId} found for {Email}", user.Id, user.Email);
         }
 
-        var updateResult = await _userManager.UpdateAsync(user);
-        if (!updateResult.Succeeded)
-        {
-            _logger.LogError("HandleExternalLogin: UserManager.UpdateAsync failed for {Email}: {Errors}",
-                user.Email, string.Join("; ", updateResult.Errors.Select(e => $"{e.Code}={e.Description}")));
-            return null;
-        }
+        // Note: we deliberately do NOT call UpdateAsync(user) here — the user
+        // entity hasn't been mutated since FindByEmailAsync/CreateAsync, and an
+        // unnecessary UpdateAsync triggers ConcurrencyFailure when two parallel
+        // login requests for the same account race (e.g. SPA double-firing the
+        // POST during a single sign-in click). If a future field needs to be
+        // updated on every login (e.g. LastLoginAt), set it explicitly here
+        // *and* call UpdateAsync.
 
         // Resolve roles in PhotoGallery (web layer) and pass to the
         // cross-cutting JwtTokenService for issuance — keeps Authentication

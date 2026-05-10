@@ -33,6 +33,17 @@ export class AuthService {
   private isRefreshingToken = false;
   private refreshTokenPromise: Promise<void> | null = null;
 
+  /**
+   * In-flight signIn promise, keyed by provider type. Prevents the SPA from
+   * firing two concurrent /api/auth/external-login POSTs when both
+   * LoginComponent's eager-await (ngOnInit) and click handler call signIn()
+   * for the same login. Without this, the backend's HandleExternalLoginAsync
+   * processes two parallel requests for the same account, which races on
+   * UserManager state and previously surfaced as ``ConcurrencyFailure:
+   * Optimistic concurrency failure, object has been modified.``
+   */
+  private inFlightSignIn = new Map<IdentityProviderType, Promise<boolean>>();
+
   private isAuthenticatedSubject = new BehaviorSubject<boolean>(false);
   public isAuthenticated$ = this.isAuthenticatedSubject.asObservable();
 
@@ -58,8 +69,26 @@ export class AuthService {
     const provider = this.providers.get(providerType);
     if (!provider) throw new Error(`Unknown provider: ${providerType}`);
 
-    const idToken = await provider.signIn();
-    return this.signInWithToken(idToken, providerType);
+    // Dedupe: if a signIn for this provider is already in flight, return that
+    // promise instead of starting a second one. Both LoginComponent.ngOnInit's
+    // eager-await and the (click)="signInGoogle()" handler call this; without
+    // dedupe they each fire a separate POST and race on the backend.
+    const existing = this.inFlightSignIn.get(providerType);
+    if (existing) {
+      console.info('[AuthService] signIn already in flight — returning shared promise');
+      return existing;
+    }
+
+    const flow = (async () => {
+      try {
+        const idToken = await provider.signIn();
+        return await this.signInWithToken(idToken, providerType);
+      } finally {
+        this.inFlightSignIn.delete(providerType);
+      }
+    })();
+    this.inFlightSignIn.set(providerType, flow);
+    return flow;
   }
 
   async signInWithToken(token: string, providerType: IdentityProviderType = IdentityProviderType.Google): Promise<boolean> {
