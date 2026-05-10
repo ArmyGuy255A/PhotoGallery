@@ -41,20 +41,39 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ExternalLogin([FromBody] ExternalLoginRequest request)
     {
+        // Avoid logging the raw idToken — it's a credential. Length-only is enough
+        // to confirm the FE actually delivered something.
+        _logger.LogInformation(
+            "ExternalLogin: received request from {Provider} (idToken length: {Length})",
+            request.Provider, request.IdToken?.Length ?? 0);
+
+        if (string.IsNullOrEmpty(request.IdToken))
+        {
+            _logger.LogWarning("ExternalLogin: idToken is empty");
+            return BadRequest(new { error = "idToken is required." });
+        }
+
+        if (string.IsNullOrEmpty(request.Provider))
+        {
+            _logger.LogWarning("ExternalLogin: provider is empty");
+            return BadRequest(new { error = "provider is required." });
+        }
+
         try
         {
             var token = await _externalAuthService.HandleExternalLoginAsync(request.Provider, request.IdToken);
             if (token == null)
             {
-                _logger.LogWarning("Invalid external login for provider: {Provider}", request.Provider);
+                _logger.LogWarning("ExternalLogin: HandleExternalLoginAsync returned null for provider {Provider}", request.Provider);
                 return BadRequest(new { error = "Invalid external login." });
             }
 
+            _logger.LogInformation("ExternalLogin: succeeded for provider {Provider}, JWT issued (length: {Length})", request.Provider, token.Length);
             return Ok(new { token });
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in external login");
+            _logger.LogError(ex, "ExternalLogin: unhandled exception for provider {Provider}", request.Provider);
             return StatusCode(500, new { error = "An error occurred during authentication" });
         }
     }

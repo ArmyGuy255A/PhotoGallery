@@ -144,7 +144,12 @@ public class AlbumsController : ControllerBase
             return NotFound("Album not found");
 
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (album.OwnerId != userId)
+        // Admins can manage any album (matches the established pattern used by
+        // [Authorize] read endpoints above). Without the !isAdmin escape, an
+        // admin can only update albums they personally created — which breaks
+        // multi-admin tenancy (e.g. an album created during a DISABLE_AUTH=true
+        // dev session is locked to testadmin@localhost forever).
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
         if (!string.IsNullOrWhiteSpace(request.Title))
@@ -177,7 +182,8 @@ public class AlbumsController : ControllerBase
             return NotFound("Album not found");
 
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (album.OwnerId != userId)
+        // Admins can manage any album — see UpdateAlbum comment.
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
         await _albumRepository.DeleteAsync(album);
@@ -307,7 +313,8 @@ public class AlbumsController : ControllerBase
             return NotFound("Album not found");
 
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (album.OwnerId != userId)
+        // Admins can manage any album — see UpdateAlbum comment.
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
         var allCodes = await _accessCodeRepository.GetAllAsync();
@@ -349,7 +356,8 @@ public class AlbumsController : ControllerBase
         if (string.IsNullOrEmpty(userId))
             return Unauthorized();
 
-        if (album.OwnerId != userId)
+        // Admins can manage any album — see UpdateAlbum comment.
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
         // Generate unique code
@@ -429,7 +437,8 @@ public class AlbumsController : ControllerBase
             return NotFound("Album not found");
 
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (album.OwnerId != userId)
+        // Admins can manage any album — see UpdateAlbum comment.
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
         var accessCode = await _accessCodeRepository.GetByIdAsync(codeGuid);

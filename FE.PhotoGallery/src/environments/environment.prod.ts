@@ -1,6 +1,6 @@
 export const environment = {
   production: true,
-  apiUrl: '',  // Use relative path in production (reverse proxy)
-  googleClientId: ''  // populate via deployment-time env var or replace before deploy
-  googleClientId: ''  // populate at deploy time; non-secret
+  apiUrl: ''  // Use relative path in production (reverse proxy)
+  // googleClientId is now fetched at runtime from GET /api/config/public.
+  // See RuntimeConfigService and provideAppInitializer in app.config.ts.
 };

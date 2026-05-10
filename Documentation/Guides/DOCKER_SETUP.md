@@ -26,7 +26,7 @@ This will start:
 
 ### 2. Access the Services
 
-- **Frontend**: http://localhost:4200
+- **Frontend**: http://localhost:4300
 - **Backend API**: http://localhost:5105
 - **MinIO Console**: http://localhost:9001 (admin/minioadmin-password)
 - **Keycloak Console**: http://localhost:8080 (admin/admin-password)

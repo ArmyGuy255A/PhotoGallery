@@ -6,6 +6,15 @@ namespace Authentication.Classes;
 
 public class GoogleTokenValidator : IExternalTokenValidator
 {
+    /// <summary>
+    /// Tolerance window allowed between Google's token-issuance clock and the
+    /// validating server's clock. Without this, even a few seconds of skew
+    /// surfaces as <c>JWT is not yet valid</c>. Five minutes mirrors common
+    /// OIDC validator defaults (Microsoft.IdentityModel uses 5 min, AWS Cognito
+    /// uses 5 min) and is well within Google's own published guidance.
+    /// </summary>
+    private static readonly TimeSpan ClockSkewTolerance = TimeSpan.FromMinutes(5);
+
     public async Task<ExternalUserInfo> ValidateTokenAsync(string token)
     {
         ExternalUserInfo userInfo = new ExternalUserInfo
@@ -16,7 +25,15 @@ public class GoogleTokenValidator : IExternalTokenValidator
         GoogleJsonWebSignature.Payload payload;
         try
         {
-            payload = await GoogleJsonWebSignature.ValidateAsync(token);
+            // ValidationSettings.IssuedAtClockTolerance gives the Google validator
+            // a clock-skew window for both iat (issued-at) and nbf (not-before)
+            // checks; ExpirationTimeClockTolerance covers exp.
+            var settings = new GoogleJsonWebSignature.ValidationSettings
+            {
+                IssuedAtClockTolerance = ClockSkewTolerance,
+                ExpirationTimeClockTolerance = ClockSkewTolerance,
+            };
+            payload = await GoogleJsonWebSignature.ValidateAsync(token, settings);
         }
         catch (Exception ex)
         {
@@ -33,12 +50,13 @@ public class GoogleTokenValidator : IExternalTokenValidator
         if (string.IsNullOrEmpty(payload.Email))
         {
             userInfo.Error = "Invalid email";
+            return userInfo;
         }
 
-        if (string.IsNullOrEmpty(payload.Name))
-        {
-            userInfo.Error = "Invalid name";
-        }
+        // Name is optional — some Google accounts (e.g. service / minimal-scope
+        // sign-ins) don't return a populated name claim. Accept the token as
+        // long as the email is present; the web layer can fall back to the
+        // email's local-part for display purposes.
 
         userInfo.Email = payload.Email;
         userInfo.Name = payload.Name;

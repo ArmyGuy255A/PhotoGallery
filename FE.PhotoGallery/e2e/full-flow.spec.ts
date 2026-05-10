@@ -12,7 +12,7 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
   });
 
   test('1. Login - Should auto-authenticate with DISABLE_AUTH=true', async () => {
-    await page.goto('http://localhost:4200/');
+    await page.goto('http://localhost:4300/');
     
     // Should redirect to dashboard since DISABLE_AUTH is on
     await page.waitForURL(/.*dashboard.*/, { timeout: 5000 });
@@ -21,7 +21,7 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
   });
 
   test('2. Dashboard - Should display admin dashboard', async () => {
-    await page.goto('http://localhost:4200/dashboard');
+    await page.goto('http://localhost:4300/dashboard');
     
     // Check for dashboard elements
     const userEmail = page.locator('text=testadmin@localhost');
@@ -31,7 +31,7 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
   });
 
   test('3. Create Album - Should create a new album', async () => {
-    await page.goto('http://localhost:4200/dashboard');
+    await page.goto('http://localhost:4300/dashboard');
     
     // Look for album creation button or form
     // This is a simplified test - actual UI components may differ
@@ -149,7 +149,7 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
       accessCode = codeData.code;
       console.log('✅ Access code generated:', accessCode);
       console.log('   Expires in: 30 days');
-      console.log('   Share link: http://localhost:4200/code/' + accessCode);
+      console.log('   Share link: http://localhost:4300/code/' + accessCode);
     } else {
       console.log(`⚠️  Failed to generate access code: ${response.status()}`);
     }
@@ -236,7 +236,7 @@ test.describe('PhotoGallery Full Flow E2E Test', () => {
     }
     if (accessCode) {
       console.log('🔑 Access Code:', accessCode);
-      console.log('🔗 Share Link: http://localhost:4200/code/' + accessCode);
+      console.log('🔗 Share Link: http://localhost:4300/code/' + accessCode);
     }
     console.log('═══════════════════════════════════════════════════════════');
   });

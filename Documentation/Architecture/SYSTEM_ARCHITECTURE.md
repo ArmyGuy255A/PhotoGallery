@@ -314,7 +314,7 @@ Documentation/
 ## Environment Configuration
 
 ### Development
-- Frontend: http://localhost:4200
+- Frontend: http://localhost:4300
 - Backend: http://localhost:5105
 - Database: localhost:5432
 - Storage: http://localhost:9000 (MinIO)

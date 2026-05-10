@@ -45,5 +45,5 @@ export interface IdentityProvider {
     /**
      * Render the Button for the provider
      */
-    renderButton(containerId: string): void;
+    renderButton(containerId: string): void | Promise<void>;
 }

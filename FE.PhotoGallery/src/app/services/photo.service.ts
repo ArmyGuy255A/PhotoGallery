@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { tap, catchError } from 'rxjs/operators';
 import { environment } from '../../environments/environment';
+import { AuthService, TokenType } from './auth.service';
 
 export interface Photo {
   id: string;
@@ -49,7 +50,7 @@ export interface ProcessingStatus {
 export class PhotoService {
   private readonly API_URL = `${environment.apiUrl}/api/photos`;
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private authService: AuthService) {}
 
   /**
    * Upload a single photo to album
@@ -114,10 +115,22 @@ export class PhotoService {
   }
 
   /**
-   * Get thumbnail URL for a photo
+   * Get thumbnail URL for a photo.
+   *
+   * Browser-initiated image requests (``<img src=...>``) cannot carry the
+   * Authorization header that Angular's HttpClient + jwtInterceptor adds, so
+   * we append the AppToken as ``?access_token=...`` query string. Backend's
+   * JwtBearer OnMessageReceived handler reads this fallback when the
+   * Authorization header is absent. Standard pattern for protected file URLs.
+   *
+   * Returns an empty string if no AppToken is present (caller should not
+   * attempt to render the thumbnail until login completes).
    */
   getThumbnailUrl(photoId: string): string {
-    return `${this.API_URL}/${photoId}/download?quality=Thumbnail`;
+    const token = this.authService.getToken(TokenType.AppToken);
+    if (!token) return '';
+    const t = encodeURIComponent(token);
+    return `${this.API_URL}/${photoId}/download?quality=Thumbnail&access_token=${t}`;
   }
 
   /**

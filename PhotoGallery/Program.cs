@@ -1,8 +1,10 @@
 using Authentication;
 using Authentication.Services;
 using Configuration;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Data;
@@ -43,14 +45,19 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 });
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
-// Configure CORS
+// Configure CORS — AllowFrontendDev is scoped to the SPA origin from
+// ConfigurationSettings.Frontend.Url (env var Frontend__Url) and permits
+// credentials so future cookie-based flows Just Work. AllowAnyOrigin is
+// avoided because it's incompatible with AllowCredentials and weakens
+// prod parity. Mirrors VerdantIQ's named-policy pattern.
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("DevelopmentPolicy", cors =>
+    options.AddPolicy("AllowFrontendDev", cors =>
     {
-        cors.AllowAnyOrigin()
+        cors.WithOrigins(settings.Frontend.Url)
+            .AllowAnyHeader()
             .AllowAnyMethod()
-            .AllowAnyHeader();
+            .AllowCredentials();
     });
 });
 
@@ -138,6 +145,25 @@ builder.Services.AddHostedService<StorageConsistencyWorker>();
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>();
+
+// Restore JwtBearer as the default authentication scheme. AddDefaultIdentity
+// (above) calls AddIdentityCookies() which silently overrides the
+// DefaultAuthenticateScheme + DefaultChallengeScheme set by
+// AddAuthenticationServices to its own cookie scheme. Without this, [Authorize]
+// on API controllers would resolve against the (empty) Identity cookie
+// principal — producing 403 on protected endpoints even when a valid Bearer
+// JWT carrying the right roles is in the Authorization header.
+//
+// Symptom of the regression: GET /api/albums/{id}/access-codes returns 403
+// despite OnTokenValidated logging roles=[Admin]. The JwtBearer scheme
+// authenticated the token but [Authorize(Roles="Admin")] used the
+// IdentityApplicationScheme (now empty) for its principal lookup.
+builder.Services.Configure<AuthenticationOptions>(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+});
+
 builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
@@ -168,7 +194,19 @@ app.UseHttpsRedirection();
 app.UseRouting();
 
 // Enable CORS (before authentication)
-app.UseCors("DevelopmentPolicy");
+app.UseCors("AllowFrontendDev");
+
+// Required by Google Identity Services popup flow:
+// the popup uses window.postMessage back to the opener, which browsers
+// block when the opener's Cross-Origin-Opener-Policy is "same-origin".
+// "same-origin-allow-popups" keeps cross-origin isolation for the rest
+// of the page while permitting the GIS popup to communicate.
+// See Documentation/Architecture/AUTHENTICATION.md → COOP for GIS popup.
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups";
+    await next();
+});
 
 // Add DISABLE_AUTH middleware (before UseAuthentication)
 app.UseMiddleware<DisableAuthMiddleware>();

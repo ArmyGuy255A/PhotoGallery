@@ -171,7 +171,7 @@ Write-Status "================================================" Success
 Write-Host ""
 
 Write-Host "📊 Service Status:" -ForegroundColor Cyan
-Write-Host "  Frontend:  http://localhost:4200" -ForegroundColor Green
+Write-Host "  Frontend:  http://localhost:4300" -ForegroundColor Green
 Write-Host "  Backend:   http://localhost:5105" -ForegroundColor Green
 Write-Host "  MinIO:     http://localhost:9000 (Username: minioadmin, Password: minioadmin-password)" -ForegroundColor Green
 Write-Host "  PostgreSQL: localhost:5432" -ForegroundColor Green
@@ -184,7 +184,7 @@ Write-Host ""
 
 if (-not $NoOpen) {
     Write-Host "Opening browser..." -ForegroundColor Cyan
-    Start-Process "http://localhost:4200"
+    Start-Process "http://localhost:4300"
 }
 
 Write-Host ""

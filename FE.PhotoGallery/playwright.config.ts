@@ -17,7 +17,7 @@ export default defineConfig({
   workers: process.env['CI'] ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:4200',
+    baseURL: 'http://localhost:4300',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure'
   },
@@ -39,7 +39,7 @@ export default defineConfig({
 
   webServer: {
     command: 'ng serve',
-    url: 'http://localhost:4200',
+    url: 'http://localhost:4300',
     reuseExistingServer: !process.env['CI']
   }
 });

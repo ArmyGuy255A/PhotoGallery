@@ -38,7 +38,7 @@
         ┌───────────────────────────────────────┐
         │   ✅ All Services Ready!              │
         ├───────────────────────────────────────┤
-        │ Frontend:  http://localhost:4200      │
+        │ Frontend:  http://localhost:4300      │
         │ Backend:   http://localhost:5105      │
         │ MinIO:     http://localhost:9000      │
         │ Database:  localhost:5432             │
@@ -52,7 +52,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Your Browser                               │
-│                  http://localhost:4200                          │
+│                  http://localhost:4300                          │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
                     ┌───────▼─────────┐
@@ -103,7 +103,7 @@ start-all.ps1
 │
 └─ Angular Frontend
    ├─ Depends on: Backend ✓
-   └─ Exposes: http://localhost:4200
+   └─ Exposes: http://localhost:4300
 ```
 
 ---
@@ -186,7 +186,7 @@ Time │ Event
 15s  │ Backend health check OK ✓
 16s  │ Frontend starts (ng serve)
 20s  │ Frontend health check OK ✓
-21s  │ Browser opens to localhost:4200
+21s  │ Browser opens to localhost:4300
 25s  │ ✅ ALL SERVICES READY
 ```
 
@@ -217,7 +217,7 @@ Storage__Minio__UseSSL = 'false'
 cd D:\repos\PhotoGallery\PhotoGallery
 .\start-all.ps1
 
-# Browser automatically opens to http://localhost:4200
+# Browser automatically opens to http://localhost:4300
 # → Start coding!
 
 # When done, Ctrl+C in each window to stop
@@ -239,7 +239,7 @@ npx playwright test
 ```powershell
 .\start-all.ps1 -NoOpen
 
-# Manually open http://localhost:4200 when ready
+# Manually open http://localhost:4300 when ready
 ```
 
 ---
@@ -303,7 +303,7 @@ curl http://localhost:5105/api/albums
 ## Next Steps
 
 1. **Run the script**: `.\start-all.ps1`
-2. **Access the frontend**: http://localhost:4200
+2. **Access the frontend**: http://localhost:4300
 3. **Explore**: Create albums, test uploads
 4. **Debug**: Open DevTools (F12) and check console
 5. **Code**: Make changes and see hot-reload

@@ -189,6 +189,92 @@ var testUser = new User
 }
 ```
 
+## Google Cloud Console Setup
+
+The OAuth 2.0 Client used by both frontend (GIS popup) and backend (token exchange) **must** have correct **Authorized JavaScript origins** and **Authorized redirect URIs** registered in the Google Cloud Console — otherwise sign-in fails with one of:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Error 400: invalid_request` — *Missing required parameter: client_id* | `Google:ClientId` not set in backend config (FE fetches it from `/api/config/public` at runtime) | Set `Google__ClientId` env var or `Google:ClientId` in `appsettings.Development.json`, restart backend |
+| `Error 401: invalid_client` — *no registered origin* | The browser's origin (e.g. `http://localhost:4300`) is not in the OAuth client's *Authorized JavaScript origins* | Add the origin in Google Cloud Console (steps below); wait ~30s for propagation |
+| `Error 400: redirect_uri_mismatch` | Backend exchanged a code with a `redirect_uri` not in the OAuth client's *Authorized redirect URIs* | Add the exact redirect URI; values must match scheme + host + port + path |
+
+### Configuring the OAuth client
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com/) → **APIs & Services** → **Credentials**
+2. Click your OAuth 2.0 Client ID (the value in `Google:ClientId`)
+3. Under **Authorized JavaScript origins**, add the origins your SPA will load from. For a typical local dev setup:
+   - `http://localhost:4300` (Angular `ng serve`)
+   - `http://localhost:5105` (backend, if it ever serves the SPA itself)
+   - Plus any production / staging origins (`https://yourdomain.com`)
+4. Under **Authorized redirect URIs**, add the backend callback URL(s):
+   - `http://localhost:5105/api/auth/google-callback` (local dev)
+   - Plus production redirect URI
+5. **Save**. Google takes up to ~30 seconds to propagate the new origins; if sign-in still fails, wait and retry before assuming a code bug.
+
+### Still seeing `Error 401: invalid_client — no registered origin`?
+
+Even with the right origin saved, exact-string matching trips people up. Verify all of these:
+
+- [ ] You're editing the **same OAuth client** whose ID the backend serves at `GET /api/config/public`. Run:
+  ```powershell
+  curl http://localhost:5105/api/config/public
+  ```
+  The `googleClientId` returned must match the **Client ID** shown on the OAuth client edit page in Google Console. If they don't match, you're configuring the wrong client.
+- [ ] The registered origin is **exactly** `http://localhost:4300` — no trailing slash, no path, lowercase scheme/host.
+- [ ] Scheme matches: `http://` (not `https://`) for `localhost`. Mixing schemes is a common silent failure.
+- [ ] Port matches what `ng serve` actually bound to. If you see `Port 4300 is already in use` and accept a fallback (e.g. `4301`), the popup will fail because that port isn't registered.
+- [ ] You're testing in a **fresh browser tab / incognito** — Google's GIS SDK aggressively caches the previous origin/client config in some cases.
+- [ ] In the browser DevTools console, `GoogleAuthService` logs `[GIS init] origin=… clientId=…` on first sign-in attempt. The `origin` MUST be one of the registered Authorized JavaScript origins.
+
+If everything above checks out and the error persists, wait 5 minutes (rare propagation delay) before assuming a deeper bug.
+
+### Why the FE needs JavaScript origins, not just redirect URIs
+
+PhotoGallery uses the **Google Identity Services (GIS) popup flow** in the browser (see `FE.PhotoGallery/src/app/services/auth/providers/google-auth.service.ts`). GIS validates the calling origin against the OAuth client's *Authorized JavaScript origins* list before opening the consent popup. Redirect URIs only apply to server-side authorization-code flows (the legacy `LoginController.GoogleCallback` path).
+
+### COOP for the GIS popup
+
+The GIS popup posts the credential back to the opener tab via `window.postMessage`. Browsers block that when the opener's `Cross-Origin-Opener-Policy` is `same-origin` (the default for many dev servers and for cross-origin-isolated production sites). Symptom in DevTools:
+
+```
+client:381 Cross-Origin-Opener-Policy policy would block the window.postMessage call.
+```
+
+PhotoGallery sets `Cross-Origin-Opener-Policy: same-origin-allow-popups` in two places to keep dev and prod parity:
+
+- **Dev server** — `FE.PhotoGallery/angular.json` → `serve.options.headers`
+- **Backend** — `PhotoGallery/Program.cs` middleware (runs before the static file pipeline so every response carries the header)
+
+Additionally, `GoogleAuthService` enables `use_fedcm_for_prompt: true` so modern Chrome uses the FedCM API (no postMessage at all) — defense in depth for environments where the COOP header can't be controlled.
+
+#### If you still see the COOP error after pulling these fixes
+
+`ng serve` reads `serve.options.headers` **only at dev-server boot**. If the angular.json change came in via `git pull` while ng serve was already running, HMR will not apply the new header. Symptoms:
+
+- `curl -I http://localhost:4300/` returns no `Cross-Origin-Opener-Policy` header (or returns `same-origin`)
+- Browser DevTools shows the GIS COOP error on every login attempt
+- Backend logs show `DisableAuthMiddleware` requests but no `ExternalLogin: received request` lines
+
+Fix: **fully stop and restart `ng serve`** (`Ctrl+C` then `ng serve` again). HMR is not enough.
+
+Use `LoginComponent`'s `[LoginComponent] ngOnInit — auth flow build: <date>` console marker to confirm you've loaded the latest bundle.
+
+### CORS scoped to the SPA origin
+
+Backend CORS is named `AllowFrontendDev` and scoped to `ConfigurationSettings.Frontend.Url` (env var `Frontend__Url`, or `Frontend:Url` in `appsettings.{Environment}.json`). It permits credentials so future cookie-based flows Just Work. `AllowAnyOrigin` is deliberately avoided — it's incompatible with `AllowCredentials` and weakens prod parity.
+
+```jsonc
+// appsettings.Development.json (gitignored)
+{
+  "Frontend": {
+    "Url": "http://localhost:4300"
+  }
+}
+```
+
+Override per-environment to whitelist the production / staging SPA origin (e.g. `https://photogallery.example.com`).
+
 ## Frontend Integration
 
 ### Login
