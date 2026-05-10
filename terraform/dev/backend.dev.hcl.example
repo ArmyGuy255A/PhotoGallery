@@ -1,0 +1,11 @@
+# Backend config consumed by:
+#   terraform init -backend-config=backend.dev.hcl
+#
+# These values are produced by ../bootstrap/bootstrap-state.ps1.
+# Fill in after bootstrapping.
+
+resource_group_name  = "PhotoGallery-dev"
+storage_account_name = "stpgtfstateXXXX"   # written by bootstrap script
+container_name       = "tfstate"
+key                  = "dev.tfstate"
+use_azuread_auth     = true

@@ -1,0 +1,31 @@
+# Copy this to terraform.tfvars (gitignored) and fill in.
+
+# Pinned PhotoGallery dev subscription. Override only for forks/CI.
+subscription_id         = "4fc243fa-5de2-48cb-9c98-793701d13152"
+
+# Single RG that holds both tfstate + workload. Must start with "PhotoGallery".
+# Created by terraform/bootstrap/bootstrap-state.ps1.
+resource_group_name     = "PhotoGallery-dev"
+
+location                = "eastus2"
+owner_tag               = "you@example.com"
+
+# az ad signed-in-user show --query id -o tsv
+dev_principal_object_id = "00000000-0000-0000-0000-000000000000"
+
+# UPN/email of same dev (shown in Azure portal as SQL AAD admin)
+aad_admin_login         = "you@example.com"
+
+# curl -s https://api.ipify.org
+dev_public_ip           = "203.0.113.42"
+
+# --- Container Apps (optional overrides) ---------------------------------
+# Default image is the ACA placeholder so the resource exists before the
+# real backend is published. Once pg-devops-cicd publishes the real image
+# to GHCR, set:
+#   container_app_image = "ghcr.io/armyguy255a/photogallery-backend:latest"
+# (Note: image is in ignore_changes, so updating this var only affects new
+#  apply runs that recreate the container app — for routine image bumps,
+#  let the CI/CD revision-update path handle it instead.)
+# container_app_image       = "mcr.microsoft.com/k8se/quickstart:latest"
+# container_app_target_port = 8080
