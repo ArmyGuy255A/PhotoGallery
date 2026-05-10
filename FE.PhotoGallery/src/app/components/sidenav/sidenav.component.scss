@@ -4,9 +4,15 @@
   display: flex;
 
   mat-sidenav-content {
-    background-color: red;
+    // Bug C: removed stray red background that rendered as a red border
+    // around every page. Inherit the page background instead.
     height: 100%;
     width: 100%;
     padding: 16px;
+  }
+
+  // Bug G: ensure ancestor CSS resets cannot lower-case sidebar labels.
+  mat-nav-list a {
+    text-transform: none;
   }
 }

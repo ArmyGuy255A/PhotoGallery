@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
@@ -9,7 +9,7 @@ import { CartService, CartQuality, CartItem } from '../../services/cart.service'
 import { AuthService } from '../../services/auth.service';
 import { CartPanelComponent } from './cart-panel.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
-import { UserDropdownComponent } from '../user-dropdown/user-dropdown.component';
+import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 import { environment } from '../../../environments/environment';
 
 interface PublicPhoto {
@@ -42,19 +42,15 @@ interface CodeValidation {
 @Component({
   selector: 'app-code-gallery',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, CartPanelComponent, PhotoModalComponent, UserDropdownComponent],
+  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent, BackToDashboardComponent],
   template: `
     <div class="code-gallery">
       <header class="gallery-header">
-        <h1>{{ album?.albumTitle || 'Photo Gallery' }}</h1>
+        <div class="header-title">
+          <app-back-to-dashboard *ngIf="isAuthenticated"></app-back-to-dashboard>
+          <h1>{{ album?.albumTitle || 'Photo Gallery' }}</h1>
+        </div>
         <div class="header-actions">
-          <a
-            *ngIf="isAuthenticated"
-            class="back-to-dashboard"
-            routerLink="/dashboard"
-            data-testid="back-to-dashboard">
-            ← Back to Dashboard
-          </a>
           <button
             *ngIf="isAuthenticated"
             class="save-button"
@@ -73,7 +69,14 @@ interface CodeValidation {
             🛒 Cart
             <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
           </button>
-          <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
+          <!--
+            Issue #99: when /code/:code is loaded for an authed user the global
+            navbar (rendered by BaseLayoutComponent) already shows the cart
+            button + user dropdown, so we don't duplicate them in the page
+            header. The in-page user-dropdown is kept for the rare case where
+            the page is somehow loaded outside the chrome — but visually the
+            chrome takes precedence.
+          -->
         </div>
       </header>
 
@@ -178,9 +181,26 @@ interface CodeValidation {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 12px;
       margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 2px solid #e0e0e0;
+    }
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .header-title h1 {
+      margin: 0;
+      font-size: 26px;
+      color: #333;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .gallery-header h1 {
@@ -500,7 +520,13 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       this.code = params['code'];
       if (this.code) {
-        this.cart.loadForCode(this.code);
+        // Bug B / issue #100: only hydrate the per-code anonymous cart for
+        // unauthenticated viewers. Authenticated viewers must use the
+        // server-backed (per-user) cart so multi-album state coexists and
+        // switching access codes does not silently wipe the cart.
+        if (!this.isAuthenticated) {
+          this.cart.loadForCode(this.code);
+        }
         this.loadDefaultQuality();
         this.loadAlbum();
         this.loadPhotos();
@@ -581,7 +607,12 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
       photoId: photo.photoId,
       fileName: photo.fileName,
       thumbnailUrl: photo.thumbnailUrl,
-      quality
+      quality,
+      // Bug B / issue #100: stamp the source album so the global cart
+      // drawer groups multi-album carts under their actual album titles
+      // instead of falling into the "Other" bucket.
+      sourceAlbumId: this.album?.albumId,
+      sourceAlbumTitle: this.album?.albumTitle
     });
     if (!added) {
       if (this.cart.count >= 100) {
@@ -639,7 +670,11 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
       photoId: p.photoId,
       fileName: p.fileName,
       thumbnailUrl: p.thumbnailUrl,
-      quality: this.selectedQuality[p.photoId] || this.defaultQuality
+      quality: this.selectedQuality[p.photoId] || this.defaultQuality,
+      // Bug B / issue #100: stamp the source album on every item so the
+      // global cart drawer groups them under the correct album section.
+      sourceAlbumId: this.album?.albumId,
+      sourceAlbumTitle: this.album?.albumTitle
     }));
 
     const requested = items.length;

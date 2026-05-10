@@ -4,13 +4,17 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { ReactiveFormsModule, FormBuilder, FormGroup, Validators } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
+import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 
 @Component({
   selector: 'app-album-edit',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [CommonModule, ReactiveFormsModule, BackToDashboardComponent],
   template: `
     <div class="edit-album-container">
+      <div class="back-row">
+        <app-back-to-dashboard></app-back-to-dashboard>
+      </div>
       <div class="card">
         <div class="card-header">
           <h1>Edit Album</h1>
@@ -74,9 +78,16 @@ import { environment } from '../../../environments/environment';
       min-height: 100vh;
       background: #f5f7fa;
       display: flex;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       padding: 20px;
+    }
+
+    .back-row {
+      width: 100%;
+      max-width: 600px;
+      margin-bottom: 12px;
     }
 
     .card {

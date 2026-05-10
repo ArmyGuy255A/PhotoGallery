@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
@@ -10,6 +10,7 @@ import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.comp
 import { Subject, interval, Observable } from 'rxjs';
 import { takeUntil, switchMap } from 'rxjs/operators';
 import { CartService, CartQuality } from '../../services/cart.service';
+import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 
 interface Photo {
   id: string;
@@ -40,11 +41,11 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent],
+  imports: [CommonModule, FormsModule, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent, BackToDashboardComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
-        <button class="back-btn" routerLink="/dashboard">← Back to Dashboard</button>
+        <app-back-to-dashboard></app-back-to-dashboard>
         <h1 data-testid="album-title">{{ album?.title }}</h1>
       </header>
 

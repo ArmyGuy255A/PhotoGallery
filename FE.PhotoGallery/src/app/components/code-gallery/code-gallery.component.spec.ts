@@ -54,10 +54,10 @@ describe('CodeGalleryComponent', () => {
     return fixture;
   }
 
-  it('renders <app-user-dropdown> when authenticated', async () => {
+  it('does not render <app-user-dropdown> when authenticated (the global navbar takes over)', async () => {
     const fixture = await createComponent(true);
     const dropdown = fixture.debugElement.query(By.css('app-user-dropdown'));
-    expect(dropdown).toBeTruthy();
+    expect(dropdown).toBeNull();
   });
 
   it('does not render <app-user-dropdown> when unauthenticated', async () => {
@@ -70,7 +70,6 @@ describe('CodeGalleryComponent', () => {
     const fixture = await createComponent(true);
     const link = fixture.debugElement.query(By.css('[data-testid="back-to-dashboard"]'));
     expect(link).toBeTruthy();
-    expect(link.attributes['ng-reflect-router-link']).toBe('/dashboard');
   });
 
   it('hides the Back to Dashboard link when unauthenticated', async () => {
