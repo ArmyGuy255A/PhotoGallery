@@ -110,6 +110,8 @@ builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 builder.Services.AddScoped<PhotoVersionUrlService>();
 builder.Services.AddScoped<ZipDownloadService>();
 builder.Services.AddSingleton<WatermarkService>();
+builder.Services.AddScoped<IWatermarkTextResolver, WatermarkTextResolver>();
+builder.Services.AddScoped<IWatermarkBackfillService, WatermarkBackfillService>();
 builder.Services.AddScoped<GdprService>();
 builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 builder.Services.AddScoped<GdprService>();
