@@ -61,8 +61,12 @@ public class StorageProviderFactoryTests
     }
 
     [Fact]
-    public void Create_AzureBlob_ReturnsPlaceholderProvider()
+    public void Create_AzureBlob_ReturnsRealProvider()
     {
+        // The AzureBlob path constructs a real provider that uses
+        // DefaultAzureCredential under the hood. We only assert the type +
+        // that construction succeeded; round-trip SAS generation is covered
+        // by AzureBlobStorageProviderTests with an injected fetcher.
         var config = BuildConfig(new Dictionary<string, string?>
         {
             ["Storage:Provider"] = "AzureBlob",
@@ -75,19 +79,19 @@ public class StorageProviderFactoryTests
     }
 
     [Fact]
-    public async Task AzureBlobPlaceholder_ThrowsNotImplemented_OnUpload()
+    public void Create_AzureBlob_ThrowsWhenAccountUrlMissing()
     {
+        // No connection string, no account key — and the canonical config key
+        // (Storage:AzureBlob:AccountUrl) is missing too. The factory must fail
+        // loudly rather than silently falling back to anonymous access.
         var config = BuildConfig(new Dictionary<string, string?>
         {
-            ["Storage:Provider"] = "AzureBlob",
-            ["Storage:AzureBlob:AccountUrl"] = "https://example.blob.core.windows.net/"
+            ["Storage:Provider"] = "AzureBlob"
         });
 
-        var provider = StorageProviderFactory.Create(config, BuildServices());
-
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(() =>
-            provider.UploadAsync("k", new MemoryStream(), "image/png"));
-        Assert.Contains("AzureBlobStorageProvider pending", ex.Message);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            StorageProviderFactory.Create(config, BuildServices()));
+        Assert.Contains("Storage:AzureBlob:AccountUrl", ex.Message);
     }
 
     [Fact]

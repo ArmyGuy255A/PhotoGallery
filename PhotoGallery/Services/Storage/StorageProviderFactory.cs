@@ -1,5 +1,7 @@
 using Amazon;
 using Amazon.S3;
+using Azure.Identity;
+using Azure.Storage.Blobs;
 
 namespace PhotoGallery.Services.Storage;
 
@@ -12,8 +14,10 @@ namespace PhotoGallery.Services.Storage;
 ///   <item><c>Storage:Type</c> — legacy fallback retained for backward-compat with existing deployments.</item>
 /// </list>
 ///
-/// <c>AzureBlob</c> selects a placeholder that throws <see cref="NotImplementedException"/>.
-/// The real RBAC + DefaultAzureCredential implementation is pending — see backend dev / pg-architect.
+/// <c>AzureBlob</c> wires the RBAC + <c>DefaultAzureCredential</c> implementation
+/// (<see cref="AzureBlobStorageProvider"/>) that uses user-delegation SAS for
+/// presigned download URLs. This is the only auth model compatible with the
+/// dev Storage Account's <c>shared_access_key_enabled = false</c> Terraform setting.
 /// </summary>
 public class StorageProviderFactory
 {
@@ -28,7 +32,7 @@ public class StorageProviderFactory
         {
             "minio" => CreateMinioProvider(configuration, serviceProvider),
             "azure" => CreateAzureProvider(configuration, serviceProvider),
-            "azureblob" => CreateAzureBlobPlaceholder(configuration, serviceProvider),
+            "azureblob" => CreateAzureBlobProvider(configuration, serviceProvider),
             _ => throw new InvalidOperationException(
                 $"Unknown storage provider: {storageType}. Supported: Minio, AzureBlob, Azure.")
         };
@@ -61,16 +65,36 @@ public class StorageProviderFactory
     }
 
     /// <summary>
-    /// RBAC + DefaultAzureCredential-based Azure Blob provider, used by the
-    /// Azure-backed local-dev profile (<c>ASPNETCORE_ENVIRONMENT=DevelopmentAzure</c>).
-    /// Currently a placeholder that throws on use — DI shape is final so the real
-    /// implementation drops in without touching <c>Program.cs</c>.
+    /// RBAC + <c>DefaultAzureCredential</c>-based Azure Blob provider used by
+    /// the Azure-backed dev profile and (future) Azure production.
+    /// Construction is deliberately keyless: no connection string, no shared key.
+    /// Presigned download URLs are generated as user-delegation SAS.
     /// </summary>
-    private static IStorageProvider CreateAzureBlobPlaceholder(IConfiguration configuration, IServiceProvider serviceProvider)
+    private static IStorageProvider CreateAzureBlobProvider(IConfiguration configuration, IServiceProvider serviceProvider)
     {
-        var logger = serviceProvider.GetRequiredService<ILogger<AzureBlobStorageProvider>>();
-        var accountUrl = configuration["Storage:AzureBlob:AccountUrl"] ?? string.Empty;
+        var accountUrl = configuration["Storage:AzureBlob:AccountUrl"];
+        if (string.IsNullOrWhiteSpace(accountUrl))
+        {
+            throw new InvalidOperationException(
+                "Storage:AzureBlob:AccountUrl is required when Storage:Provider=AzureBlob. " +
+                "Set it in appsettings.{Environment}.json or via the Key Vault secret " +
+                "'Storage--AzureBlob--AccountUrl' (or override per developer via env var).");
+        }
+
         var containerName = configuration["Storage:AzureBlob:ContainerName"] ?? "photogallery";
-        return new AzureBlobStorageProvider(accountUrl, containerName, logger);
+
+        // DefaultAzureCredential transparently picks up:
+        //   - `az login` credentials in local dev,
+        //   - Managed Identity when running in Azure,
+        //   - Workload Identity in AKS.
+        // The Storage Account's shared_access_key_enabled is false, so any
+        // attempt to use account keys would fail by design.
+        var serviceClient = new BlobServiceClient(new Uri(accountUrl), new DefaultAzureCredential());
+
+        var udkLogger = serviceProvider.GetRequiredService<ILogger<CachingUserDelegationKeyProvider>>();
+        var udkProvider = new CachingUserDelegationKeyProvider(serviceClient, udkLogger);
+
+        var logger = serviceProvider.GetRequiredService<ILogger<AzureBlobStorageProvider>>();
+        return new AzureBlobStorageProvider(serviceClient, udkProvider, containerName, logger);
     }
 }

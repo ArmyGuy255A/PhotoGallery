@@ -48,4 +48,11 @@
       </Content>
     </ItemGroup>
 
+    <ItemGroup>
+      <!-- Expose internal test seams (e.g. CachingUserDelegationKeyProvider's
+           UserDelegationKeyFetcher ctor) to the xUnit project so we don't have
+           to mock sealed-ish Azure SDK clients. -->
+      <InternalsVisibleTo Include="PhotoGallery.Tests" />
+    </ItemGroup>
+
 </Project>

@@ -1,61 +1,229 @@
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
+
 namespace PhotoGallery.Services.Storage;
 
 /// <summary>
-/// Placeholder Azure Blob Storage provider for the Azure-backed local-dev
-/// profile (<c>ASPNETCORE_ENVIRONMENT=DevelopmentAzure</c>).
+/// Azure Blob Storage provider built for the Azure-backed PhotoGallery profile.
 ///
-/// The DI shape is intentionally final: <see cref="StorageProviderFactory"/>
-/// already constructs it from <c>Storage:AzureBlob:AccountUrl</c> + container name,
-/// and downstream code resolves <see cref="IStorageProvider"/> identically
-/// regardless of provider. The real implementation (DefaultAzureCredential +
-/// BlobServiceClient with RBAC, no connection strings) drops in here without
-/// touching <c>Program.cs</c> or the factory.
+/// Auth model:
+/// <list type="bullet">
+///   <item>Constructed with a <see cref="BlobServiceClient"/> that uses
+///         <c>DefaultAzureCredential</c> (no account keys, no connection strings).
+///         This is the only auth model compatible with the Terraform
+///         <c>shared_access_key_enabled = false</c> setting on the dev Storage Account.</item>
+///   <item>Download URLs (<see cref="GetUrlAsync"/>) are user-delegation SAS,
+///         signed with a <see cref="UserDelegationKey"/> fetched from Azure AD
+///         on behalf of the service principal and cached by
+///         <see cref="IUserDelegationKeyProvider"/>.</item>
+/// </list>
 ///
-/// Distinct from <see cref="AzureStorageProvider"/>, which uses connection-string
-/// auth and is retained for legacy <c>Storage:Provider=Azure</c> wiring.
-///
-/// Owner: backend dev. Tracked as a follow-up to the Azure-backed dev wiring PR.
+/// Distinct from the legacy <see cref="AzureStorageProvider"/> (connection-string +
+/// account-key SAS), which remains for the <c>Storage:Provider=Azure</c> alias.
 /// </summary>
 public sealed class AzureBlobStorageProvider : IStorageProvider
 {
-    private const string PendingMessage =
-        "AzureBlobStorageProvider pending — see backend dev. " +
-        "Set Storage:Provider=Minio for the all-local stack until the real impl lands.";
-
-    private readonly string _accountUrl;
+    private readonly BlobServiceClient _serviceClient;
+    private readonly IUserDelegationKeyProvider _udkProvider;
     private readonly string _containerName;
     private readonly ILogger<AzureBlobStorageProvider> _logger;
 
     public AzureBlobStorageProvider(
-        string accountUrl,
+        BlobServiceClient serviceClient,
+        IUserDelegationKeyProvider udkProvider,
         string containerName,
         ILogger<AzureBlobStorageProvider> logger)
     {
-        _accountUrl = accountUrl;
-        _containerName = containerName;
+        _serviceClient = serviceClient ?? throw new ArgumentNullException(nameof(serviceClient));
+        _udkProvider = udkProvider ?? throw new ArgumentNullException(nameof(udkProvider));
+        _containerName = string.IsNullOrWhiteSpace(containerName)
+            ? throw new ArgumentException("Container name is required.", nameof(containerName))
+            : containerName;
         _logger = logger;
-        _logger.LogInformation(
-            "AzureBlobStorageProvider placeholder constructed (AccountUrl={AccountUrl}, Container={Container}). " +
-            "Operations will throw NotImplementedException until the real impl lands.",
-            string.IsNullOrEmpty(_accountUrl) ? "<unset>" : _accountUrl,
-            _containerName);
     }
 
-    public Task<string> UploadAsync(string key, Stream fileStream, string contentType) =>
-        throw new NotImplementedException(PendingMessage);
+    private BlobContainerClient Container =>
+        _serviceClient.GetBlobContainerClient(_containerName);
 
-    public Task<Stream> DownloadAsync(string key) =>
-        throw new NotImplementedException(PendingMessage);
+    public async Task<string> UploadAsync(string key, Stream fileStream, string contentType)
+    {
+        try
+        {
+            await Container.CreateIfNotExistsAsync();
+            var blob = Container.GetBlobClient(key);
+            var options = new BlobUploadOptions
+            {
+                HttpHeaders = new BlobHttpHeaders { ContentType = contentType }
+            };
+            await blob.UploadAsync(fileStream, options);
+            _logger.LogInformation("File uploaded to Azure Blob: {Key}", key);
+            return blob.Uri.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading file to Azure Blob: {Key}", key);
+            throw;
+        }
+    }
 
-    public Task<bool> DeleteAsync(string key) =>
-        throw new NotImplementedException(PendingMessage);
+    public async Task<Stream> DownloadAsync(string key)
+    {
+        try
+        {
+            var blob = Container.GetBlobClient(key);
+            if (!await blob.ExistsAsync())
+            {
+                throw new FileNotFoundException($"Blob '{key}' not found in Azure Blob.");
+            }
+            var download = await blob.DownloadAsync();
+            _logger.LogInformation("File downloaded from Azure Blob: {Key}", key);
+            return download.Value.Content;
+        }
+        catch (Exception ex) when (ex is not FileNotFoundException)
+        {
+            _logger.LogError(ex, "Error downloading file from Azure Blob: {Key}", key);
+            throw;
+        }
+    }
 
-    public Task<string?> GetUrlAsync(string key, int expirationMinutes = 60) =>
-        throw new NotImplementedException(PendingMessage);
+    public async Task<bool> DeleteAsync(string key)
+    {
+        try
+        {
+            var blob = Container.GetBlobClient(key);
+            var response = await blob.DeleteIfExistsAsync();
+            if (response.Value)
+            {
+                _logger.LogInformation("File deleted from Azure Blob: {Key}", key);
+            }
+            return response.Value;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting file from Azure Blob: {Key}", key);
+            return false;
+        }
+    }
 
-    public Task<bool> ExistsAsync(string key) =>
-        throw new NotImplementedException(PendingMessage);
+    public async Task<string?> GetUrlAsync(string key, int expirationMinutes = 60)
+    {
+        try
+        {
+            var blob = Container.GetBlobClient(key);
+            if (!await blob.ExistsAsync())
+            {
+                return null;
+            }
 
-    public Task<IEnumerable<string>> ListAsync(string prefix) =>
-        throw new NotImplementedException(PendingMessage);
+            var udk = await _udkProvider.GetAsync();
+            var expiresOn = DateTimeOffset.UtcNow.AddMinutes(expirationMinutes);
+
+            var sasUri = BuildBlobSasUri(
+                accountName: _serviceClient.AccountName,
+                containerName: _containerName,
+                blobName: key,
+                userDelegationKey: udk,
+                expiresOn: expiresOn,
+                blobEndpoint: _serviceClient.Uri);
+
+            _logger.LogInformation(
+                "User-delegation SAS generated for Azure Blob: {Key} (expires {ExpiresOn}).",
+                key,
+                expiresOn);
+            return sasUri.ToString();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating user-delegation SAS for Azure Blob: {Key}", key);
+            return null;
+        }
+    }
+
+    public async Task<bool> ExistsAsync(string key)
+    {
+        try
+        {
+            var blob = Container.GetBlobClient(key);
+            return await blob.ExistsAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking blob existence in Azure Blob: {Key}", key);
+            return false;
+        }
+    }
+
+    public async Task<IEnumerable<string>> ListAsync(string prefix)
+    {
+        try
+        {
+            var items = new List<string>();
+            await foreach (var blobItem in Container.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, CancellationToken.None))
+            {
+                items.Add(blobItem.Name);
+            }
+            _logger.LogInformation(
+                "Listed {Count} blobs from Azure Blob with prefix: {Prefix}",
+                items.Count,
+                prefix);
+            return items;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing blobs from Azure Blob with prefix: {Prefix}", prefix);
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Builds a user-delegation SAS URI for the given blob.
+    ///
+    /// Pure helper — no network calls, no DI — so it's unit-testable with a
+    /// synthetic <see cref="UserDelegationKey"/> produced by
+    /// <see cref="BlobsModelFactory"/>.
+    ///
+    /// SAS shape:
+    /// <list type="bullet">
+    ///   <item><c>Protocol = SasProtocol.Https</c> — explicit, matching the
+    ///         protocol gotcha called out in <see cref="MinioStorageProvider"/>.
+    ///         Azure blob endpoints are always HTTPS and we lock that in so
+    ///         consumers can't be downgraded to HTTP.</item>
+    ///   <item><c>Resource = "b"</c> (single blob) with <c>Read</c> permission.</item>
+    ///   <item>Signed with the supplied <see cref="UserDelegationKey"/> — the
+    ///         resulting SAS includes <c>skoid</c>/<c>sktid</c> claims that
+    ///         account-key SAS does not, which is how downstream verification
+    ///         distinguishes the two.</item>
+    /// </list>
+    /// </summary>
+    internal static Uri BuildBlobSasUri(
+        string accountName,
+        string containerName,
+        string blobName,
+        UserDelegationKey userDelegationKey,
+        DateTimeOffset expiresOn,
+        Uri blobEndpoint)
+    {
+        var builder = new BlobSasBuilder
+        {
+            BlobContainerName = containerName,
+            BlobName = blobName,
+            Resource = "b",
+            StartsOn = DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMinutes(5)),
+            ExpiresOn = expiresOn,
+            Protocol = SasProtocol.Https,
+        };
+        builder.SetPermissions(BlobSasPermissions.Read);
+
+        var sasToken = builder.ToSasQueryParameters(userDelegationKey, accountName).ToString();
+
+        var basePath = blobEndpoint.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+        // Escape blob name segment-by-segment so slashes (virtual-directory
+        // separators in Azure Blob) remain intact while other reserved
+        // characters get properly percent-encoded.
+        var escapedBlobName = string.Join('/',
+            blobName.Split('/').Select(Uri.EscapeDataString));
+        var blobPath = $"{basePath}/{containerName}/{escapedBlobName}";
+        return new Uri($"{blobPath}?{sasToken}");
+    }
 }
