@@ -1171,6 +1171,148 @@ that doesn't start with `PhotoGallery`.
 
 ---
 
+## D013: Cheapest Dev SKUs — SQL Basic + Container Apps Consumption (scale-to-zero) + ghcr.io
+
+**Status**: Approved · **Date**: 2026-05-12 · **Owner**: pg-platform-engineer
+
+### Context
+
+D011 stood up the Azure dev footprint with Standard S0 SQL (~$15/mo) and no
+compute resource — the API ran locally against the cloud data plane. The
+product owner subsequently asked for two things:
+
+1. The **cheapest viable** Azure SQL SKU that still supports EF Core
+   migrations and AAD-only auth.
+2. A **cheapest viable** Azure compute target for the eventual API
+   container, provisionable now (placeholder image OK) so MI / KV / SQL
+   wiring is in place when pg-devops-cicd publishes the real image.
+
+Constraints carried forward from D012: single `PhotoGallery-dev` resource
+group, pinned subscription `4fc243fa-5de2-48cb-9c98-793701d13152`, all
+resources `PhotoGallery*`-prefixed where naming permits.
+
+### Decision
+
+**SQL: Basic (5 DTU, 2 GB) — flat ~$5/mo.**
+
+| Option | Cost | Verdict |
+|--------|------|---------|
+| **Basic (5 DTU, 2 GB)** | **~$5/mo flat** | **Chosen.** Simplest pricing. Supports AAD-only auth (since 2022) and EF Core migrations. 2 GB cap is plenty for MVP metadata (album/photo rows, users, carts measured in MB, not GB). |
+| Standard S0 (10 DTU, 250 GB) | ~$15/mo flat | Previous default. Rejected: the only thing it bought us over Basic was headroom we don't need yet, at 3× the cost. Trivial bump to S0 later via `sql_sku_name`. |
+| GP_S_Gen5_1 Serverless w/ auto-pause (60 min) | ~$1.50/mo idle (storage only) + ~$0.52/vCore-hr active | Rejected as default. Wins *only* if the DB is truly idle for weeks. For routine dev (a few hours/week of activity), it lands above Basic on cost AND adds 30-60 s cold-start pain on every wake. Documented as a "switch to this if you stop dev'ing for months at a time" alternative. |
+
+**Compute: Azure Container Apps, Consumption plan, scale-to-zero
+(`min_replicas = 0`, `max_replicas = 1`, 0.5 vCPU / 1 GiB).**
+
+| Option | Cost (idle) | Verdict |
+|--------|-------------|---------|
+| **ACA Consumption, scale-to-zero** | **~$0/mo idle** (per-request execution charges only, sub-cent at MVP) | **Chosen.** Idle cost effectively zero. Cold-start ~1-3 s. Supports KV secret references via managed identity, external HTTPS ingress, full revision/rollback. |
+| App Service B1 | ~$13/mo flat (always-on) | Rejected. 2× the entire current cost guard for "always warm" we don't need. |
+| ACA Dedicated workload profile | ~$70/mo+ flat | Rejected. Production-only consideration. |
+| AKS | ~$70/mo+ for the cluster alone | Rejected. Massively over-spec for a single API container. |
+
+**Registry: ghcr.io (free for public images), defer ACR.**
+
+PhotoGallery (`ArmyGuy255A/PhotoGallery`) is public on GitHub. **GitHub
+Container Registry** publishes the backend image as a public package at
+zero cost, with anonymous pull. Container Apps pulls anonymously — no
+registry credential block, no extra Terraform resource. **ACR Basic
+($5/mo)** is deferred until private images become a requirement (e.g., we
+add a closed-source paid tier or want signed-only images). Documented in
+the runbook.
+
+**Identity: user-assigned MI (UAMI), not system-assigned.**
+
+The container app's KV secret references resolve at revision-deploy time.
+With a system-assigned MI, the `principal_id` is only known *after* the
+container app exists, which creates a chicken-and-egg with the
+`Key Vault Secrets User` role assignment. UAMI breaks the cycle:
+
+1. Create UAMI (principal_id known immediately).
+2. Assign KV / Storage roles to UAMI's principal.
+3. `time_sleep` 60 s for AAD propagation.
+4. Create container app, attach UAMI, declare KV secrets with
+   `identity = <uami id>` — secrets resolve cleanly on first revision.
+
+The UAMI is also the SQL principal: a manual one-time T-SQL step
+(`CREATE USER [<uami-name>] FROM EXTERNAL PROVIDER` + `db_datareader` /
+`db_datawriter` / `db_ddladmin`) registers the UAMI in the DB. Terraform
+deliberately does not run T-SQL — keeping that out of the IaC plane avoids
+brittle null-resource wrappers. The runbook walks the developer through it.
+
+**Frontend hosting: out of scope for this pass.** Cheapest viable path
+will be **Azure Static Web Apps Free tier** (0 $/mo, generous bandwidth,
+built-in SSL). Tracked as a follow-up.
+
+### Cost summary (idle)
+
+| Resource | SKU | $/mo |
+|----------|-----|------|
+| Storage Account | Standard_LRS, Hot | <$1 |
+| Azure SQL Database | **Basic** | **~$5** |
+| Key Vault | Standard | <$1 |
+| Container Apps Env + App | **Consumption, scale-to-zero** | **~$0** idle |
+| Log Analytics + App Insights | first 5 GB free | $0 |
+| Container registry | ghcr.io public package | $0 |
+| **Total dev footprint, idle** | | **~$6–7/mo** |
+
+Down from ~$17/mo under D011 — a ~60% reduction with no loss of
+functionality for the MVP scope.
+
+### Alternatives considered (and rejected)
+
+- **SQL Serverless (GP_S) as the default.** Rejected — see table above.
+  Documented as a fallback for very-idle developers.
+- **System-assigned MI on the container app.** Rejected — chicken-and-egg
+  with KV role assignment forces apply-twice or a fragile
+  `null_resource` workaround. UAMI is the standard pattern.
+- **Embed image-pull credentials for ACR Basic.** Rejected — needless
+  complexity and $5/mo for a public OSS project. ghcr.io public package is
+  free.
+- **App Service B1 with always-on health probe.** Rejected — flat $13/mo
+  beats by ACA's near-zero idle cost handily for an MVP that's mostly idle.
+- **Provision frontend hosting in this pass.** Deferred — keeps this PR
+  scoped; SWA Free tier needs a custom-domain decision separately.
+
+### Consequences
+
+**Positive**
+
+- Idle cost ~$6–7/mo — enables long-lived dev environments without budget
+  pressure.
+- ACA's scale-to-zero pairs naturally with SQL Basic: both go quiet when
+  the developer isn't poking at them.
+- Terraform-managed UAMI + RBAC means re-creating the API resource is one
+  `terraform apply` away. The only manual step is the SQL `CREATE USER`.
+
+**Negative / follow-ups**
+
+- 2 GB SQL cap is a real limit. The runbook calls out the exact override
+  (`sql_sku_name = "S0"`) for when seed/migration data starts crowding it.
+- Cold-start on ACA (~1-3 s) and SQL Basic (~30-60 s after long idle)
+  combine to a worst-case ~minute on the *very first* request after a
+  long quiet period. Acceptable for dev; documented in troubleshooting.
+- First `terraform apply` may race AAD role propagation for the UAMI's
+  KV secret resolution. Mitigated with `time_sleep 60s` + a runbook note
+  ("re-run apply if the first one fails with 403"). The retry succeeds
+  cleanly because the role is already in place.
+- The SQL `CREATE USER ... FROM EXTERNAL PROVIDER` step is genuinely
+  out-of-band. If a developer destroys + re-creates the DB, they must
+  redo it. Tracked in the runbook (step 3a).
+- ghcr.io public package leaks the image bytes (image is open source
+  anyway). When PhotoGallery adds private functionality, revisit and add
+  an ACR Basic module (~$5/mo).
+
+### References
+
+- `terraform/modules/sql/` — SKU default flipped to `Basic`, `max_size_gb = 2`
+- `terraform/modules/compute/` — new module: ACA env + container app + UAMI + role assignments + `time_sleep`
+- `terraform/dev/main.tf` — wires `module.compute` after `module.observability`
+- `terraform/dev/variables.tf` — `container_app_image` (defaults to MCR placeholder), `container_app_target_port` (8080)
+- `Documentation/Runbooks/local-azure-dev.md` — step 3a (SQL UAMI registration), updated cost table, ACA troubleshooting
+
+---
+
 ## How to Add New Design Decisions
 
 When a new feature is proposed:

@@ -11,13 +11,15 @@
 # The app itself runs locally (dotnet run / docker-compose for FE) and reaches
 # Azure via DefaultAzureCredential resolved from `az login`.
 #
-# Estimated monthly cost (East US, December 2025 list prices):
+# Estimated monthly cost (East US 2, 2026 list prices):
 #   Storage Std_LRS hot     ~$0.50 (a few GB) + tx                  ~$1
-#   Azure SQL S0 (10 DTU)                                          ~$15
+#   Azure SQL Basic (5 DTU, 2 GB) — flat                           ~$5
 #   Key Vault standard      ~$0.03/10k ops                          <$1
+#   Container Apps Consumption (scale-to-zero, idle)                ~$0
+#     active execution charges only (per request, sub-cent at MVP scale)
 #   Log Analytics + App Insights (first 5 GB free)                  $0
 #   ----------------------------------------------------------- ----------
-#   TOTAL dev footprint                                          ~$17/mo
+#   TOTAL dev footprint, idle                                     ~$6-7/mo
 ###############################################################################
 
 terraform {
@@ -35,6 +37,10 @@ terraform {
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
     }
   }
 
@@ -82,6 +88,8 @@ locals {
   kv_name      = "kv-${local.short_prefix}-${local.env}-${local.suffix}" # <= 24 chars
   log_name     = "log-${local.prefix}-${local.env}"
   ai_name      = "appi-${local.prefix}-${local.env}"
+  cae_name     = "cae-${local.prefix}-${local.env}"
+  ca_name      = "ca-${local.prefix}-api-${local.env}"
 
   common_tags = {
     project     = "PhotoGallery"
@@ -161,5 +169,60 @@ module "observability" {
   resource_group_name = data.azurerm_resource_group.this.name
   location            = data.azurerm_resource_group.this.location
   tags                = local.common_tags
+}
+
+###############################################################################
+# Compute — Azure Container Apps (Consumption, scale-to-zero) for the API.
+# Provisioned now with a placeholder image so the resource exists, ingress is
+# wired, and the UAMI can be registered in Azure SQL via the manual T-SQL
+# step in the runbook. pg-devops-cicd will publish the real backend image to
+# GHCR and flip `container_app_image` (or update the running revision out of
+# band — `image` is in `ignore_changes`).
+###############################################################################
+
+module "compute" {
+  source = "../modules/compute"
+
+  container_app_environment_name = local.cae_name
+  container_app_name             = local.ca_name
+  resource_group_name            = data.azurerm_resource_group.this.name
+  location                       = data.azurerm_resource_group.this.location
+  log_analytics_workspace_id     = module.observability.log_analytics_workspace_id
+
+  image       = var.container_app_image
+  target_port = var.container_app_target_port
+
+  key_vault_id       = module.keyvault.vault_id
+  storage_account_id = module.storage.storage_account_id
+
+  # Wire each KV-backed secret as both an ACA secret and an env var the API
+  # consumes. `__` (double underscore) maps to `:` in ASP.NET Core config.
+  kv_secret_ids = {
+    "sql-conn"             = module.keyvault.secret_versionless_ids["Sql--ConnectionString"]
+    "auth-jwt-signingkey"  = module.keyvault.secret_versionless_ids["Auth--Jwt--SigningKey"]
+    "auth-google-clientid" = module.keyvault.secret_versionless_ids["Auth--Google--ClientId"]
+    "auth-google-secret"   = module.keyvault.secret_versionless_ids["Auth--Google--ClientSecret"]
+    "acs-conn"             = module.keyvault.secret_versionless_ids["Acs--ConnectionString"]
+  }
+
+  kv_env_mapping = {
+    "sql-conn"             = "ConnectionStrings__DefaultConnection"
+    "auth-jwt-signingkey"  = "Auth__Jwt__SigningKey"
+    "auth-google-clientid" = "Auth__Google__ClientId"
+    "auth-google-secret"   = "Auth__Google__ClientSecret"
+    "acs-conn"             = "Acs__ConnectionString"
+  }
+
+  extra_env = {
+    "Storage__Type"                 = "Azure"
+    "Storage__Azure__AccountName"   = module.storage.storage_account_name
+    "Storage__Azure__BlobEndpoint"  = module.storage.blob_endpoint
+    "Storage__Azure__ContainerName" = module.storage.container_name
+    "KeyVault__Uri"                 = module.keyvault.vault_uri
+  }
+
+  app_insights_connection_string = module.observability.app_insights_connection_string
+
+  tags = local.common_tags
 }
 

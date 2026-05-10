@@ -63,11 +63,30 @@ variable "cors_allowed_origins" {
 }
 
 variable "sql_sku_name" {
-  type    = string
-  default = "S0" # 10 DTU, ~$15/mo
+  description = "Azure SQL DB SKU. Default Basic (5 DTU, 2 GB) ~$5/mo. Bump to S0 (~$15/mo) when dev data outgrows 2 GB."
+  type        = string
+  default     = "Basic"
 }
 
 variable "sql_max_size_gb" {
-  type    = number
-  default = 10
+  description = "Max DB size in GB. Basic SKU caps at 2."
+  type        = number
+  default     = 2
+}
+
+variable "container_app_image" {
+  description = <<-EOT
+    Image for the API container. Defaults to the Container Apps placeholder
+    image so the resource exists before pg-devops-cicd publishes the real
+    PhotoGallery backend image. Override with e.g.
+      ghcr.io/armyguy255a/photogallery-backend:<tag>
+  EOT
+  type        = string
+  default     = "mcr.microsoft.com/k8se/quickstart:latest"
+}
+
+variable "container_app_target_port" {
+  description = "Port the API listens on inside the container. Default 8080 — passed to ASPNETCORE_URLS."
+  type        = number
+  default     = 8080
 }

@@ -9,8 +9,10 @@ keys live on disk.**
 
 We need to validate `IStorageProvider`, EF Core migrations, and the
 Key-Vault-backed config provider against the real Azure data plane *before*
-shipping to App Service / AKS. Running the app locally + Azure data plane is
-the cheapest way to do that (~$17/mo, see cost section).
+shipping to production. Running the app locally against the Azure data
+plane — and now optionally hitting a (mostly idle) Container Apps deployment
+of the API — is the cheapest way to do that (~$6–7/mo idle, see cost
+section).
 
 ## 0. One-time install
 
@@ -84,12 +86,20 @@ terraform plan  -out=dev.tfplan
 terraform apply dev.tfplan
 ```
 
-Apply takes ~5 min (SQL Server is the slow one). When it's done, capture
-outputs:
+Apply takes ~8-10 min (SQL Server + Container Apps Environment are the slow
+ones). When it's done, capture outputs:
 
 ```powershell
 terraform output
 ```
+
+> **First-apply note (Container Apps + KV references).** The container app's
+> user-assigned MI is granted `Key Vault Secrets User` during this apply, and
+> we wait 60 s (`time_sleep`) for AAD propagation before deploying the first
+> revision. Most of the time this Just Works. If the very first apply fails
+> with a 403 resolving a KV secret on the container app revision, simply
+> re-run `terraform apply` — the role is already in place by then and the
+> second apply succeeds cleanly.
 
 ## 3. Replace the placeholder secrets in Key Vault
 
@@ -114,6 +124,38 @@ az keyvault secret set --vault-name $kv --name "Acs--ConnectionString" --value "
 
 The Terraform module ignores changes to secret `value`, so re-applying TF
 won't clobber these.
+
+## 3a. Register the Container App's UAMI in Azure SQL (one-time, manual)
+
+The Container App is provisioned with a **user-assigned managed identity**
+(`<container_app_uami_name>` from `terraform output`). Terraform can't run
+T-SQL cleanly, so you have to grant the UAMI access to the database
+manually — once per fresh DB.
+
+You sign into the SQL server as the AAD admin (your dev user) and add the
+UAMI as an EXTERNAL PROVIDER user:
+
+```powershell
+$server  = (terraform output -raw sql_server_fqdn)
+$db      = (terraform output -raw sql_database_name)
+$uami    = (terraform output -raw container_app_uami_name)
+
+# Use sqlcmd with AAD interactive auth (or 'ActiveDirectoryDefault' if signed in via az)
+sqlcmd -S $server -d $db -G -U "$env:DEV_UPN" -Q @"
+CREATE USER [$uami] FROM EXTERNAL PROVIDER;
+ALTER ROLE db_datareader ADD MEMBER [$uami];
+ALTER ROLE db_datawriter ADD MEMBER [$uami];
+ALTER ROLE db_ddladmin   ADD MEMBER [$uami];  -- needed for EF Core migrations
+"@
+```
+
+The `db_ddladmin` role is what lets `Database.Migrate()` issue DDL on
+startup. Without it, the very first request after a fresh DB will fail with
+"CREATE TABLE permission denied."
+
+If you destroy and re-create the SQL DB later, redo this step — the UAMI
+itself survives `terraform destroy` (it's tied to the container app, not the
+DB), but the SQL-side `CREATE USER` does not.
 
 ## 4. Wire the local app
 
@@ -217,17 +259,37 @@ to rerun the bootstrap to re-provision.
 | `403 AuthorizationPermissionMismatch` on blob | Role assignment hasn't propagated (~1–5 min). Wait, then retry. |
 | `KeyVaultErrorException: Forbidden` | Same — wait for RBAC propagation. |
 | App boots but can't see secrets | `KeyVault:Uri` not set, or secret name uses `:` instead of `--`. |
-| EF Core migration hangs | First-time S0 cold start can take 60s. If >2 min, check the firewall rule. |
+| EF Core migration hangs | First-time SQL Basic cold start can take 30-60s. If >2 min, check the firewall rule. |
+| Container app revision stuck in "Activation Failed" with KV 403 | Role propagation race on first apply. Re-run `terraform apply` — second apply succeeds because the UAMI's `Key Vault Secrets User` role is already in place. |
+| `Login failed for user '<uami-name>'` from the container app | You skipped step 3a. Run the `CREATE USER ... FROM EXTERNAL PROVIDER` block. |
+| `CREATE TABLE permission denied` from EF migrations in the container app | UAMI isn't in `db_ddladmin`. Re-run the role grants in step 3a. |
 
 ## Cost guard
 
 | Resource | SKU | Approx. $/mo |
 |----------|-----|--------------|
 | Storage Account | Standard_LRS, Hot | <$1 (a few GB) |
-| Azure SQL Database | S0 (10 DTU, 250 GB cap) | ~$15 |
+| Azure SQL Database | **Basic** (5 DTU, 2 GB cap) | **~$5** |
 | Key Vault | Standard | <$1 |
+| Container Apps Environment + API app | **Consumption, scale-to-zero (min=0, max=1, 0.5 vCPU/1 GiB)** | **~$0** idle (pay per request) |
 | Log Analytics + App Insights | first 5 GB free | $0 |
-| **Total dev footprint** | | **~$17/mo** |
+| **Total dev footprint, idle** | | **~$6–7/mo** |
+
+Notes:
+
+- **SQL Basic** is the cheapest tier that supports AAD-only auth and EF
+  Core migrations. The 2 GB / 5 DTU caps are fine for MVP metadata. When
+  you outgrow it, set `sql_sku_name = "S0"` (~$15/mo, 250 GB) in
+  `terraform.tfvars`. See DESIGN_DECISIONS.md D013.
+- **Container Apps Consumption** with `min_replicas = 0` truly scales to
+  zero between requests. You pay per-request CPU/memory seconds (sub-cent
+  at MVP traffic). Cold-start ~1-3 s.
+- **No registry cost.** Placeholder image lives on MCR (anonymous);
+  PhotoGallery's real image will live on **ghcr.io** as a public package
+  (free). ACR Basic ($5/mo) deferred until private images are required.
+- **Frontend hosting** is out of scope for this Terraform pass. Cheapest
+  path will be **Azure Static Web Apps Free tier**. Tracked as a follow-up.
 
 If you stop dev'ing for a few weeks, run `terraform destroy` and recreate
-later — the apply is ~5 min.
+later — the apply is ~8-10 min. (Idle ACA costs nothing, so keeping it up
+between sessions is also fine.)

@@ -34,3 +34,25 @@ output "app_insights_connection_string" {
   value     = module.observability.app_insights_connection_string
   sensitive = true
 }
+
+###############################################################################
+# Container Apps (API compute)
+###############################################################################
+
+output "container_app_name" {
+  value = module.compute.container_app_name
+}
+
+output "container_app_url" {
+  description = "External HTTPS URL of the API container app."
+  value       = module.compute.container_app_url
+}
+
+output "container_app_uami_name" {
+  description = "Name of the API's user-assigned MI. Use verbatim in the SQL CREATE USER ... FROM EXTERNAL PROVIDER post-apply step."
+  value       = module.compute.uami_name
+}
+
+output "container_app_uami_principal_id" {
+  value = module.compute.uami_principal_id
+}

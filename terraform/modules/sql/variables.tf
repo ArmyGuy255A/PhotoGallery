@@ -4,14 +4,20 @@ variable "resource_group_name" { type = string }
 variable "location" { type = string }
 
 variable "sku_name" {
-  description = "Azure SQL DB SKU. S0 is 10 DTU / 250 GB, ~$15/mo. Bump to S1 if you outgrow."
+  description = <<-EOT
+    Azure SQL DB SKU. Default Basic = 5 DTU, 2 GB cap, ~$5/mo flat — the
+    cheapest tier that still supports AAD-only auth and EF Core migrations.
+    Bump to S0 (~$15/mo, 250 GB) when dev data outgrows 2 GB, or to
+    GP_S_Gen5_1 (serverless w/ auto-pause) if usage becomes very bursty.
+  EOT
   type        = string
-  default     = "S0"
+  default     = "Basic"
 }
 
 variable "max_size_gb" {
-  type    = number
-  default = 10
+  description = "Max DB size in GB. Basic SKU caps at 2."
+  type        = number
+  default     = 2
 }
 
 variable "aad_admin_login" {

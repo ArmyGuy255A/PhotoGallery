@@ -2,9 +2,10 @@
 # SQL module — Azure SQL Server + Database for PhotoGallery dev
 #
 # Design decisions (see DESIGN_DECISIONS.md):
-#   * Single Azure SQL Database, Standard S0 (10 DTU, 250 GB) ~ $15/mo.
-#     Basic was rejected: 2 GB cap is too tight, and AAD-only auth is more
-#     ergonomic on Standard tier.
+#   * Single Azure SQL Database, **Basic** (5 DTU, 2 GB) ~ $5/mo flat — the
+#     cheapest tier that still supports AAD-only auth and EF Core
+#     migration-on-startup (per D013). Bump to S0 (~$15/mo) when dev data
+#     outgrows 2 GB, or to GP_S_Gen5_1 serverless if usage becomes very bursty.
 #   * AAD-only authentication. SQL auth disabled. Dev signs in via
 #     `Authentication=Active Directory Default` which DefaultAzureCredential
 #     resolves from `az login`.
@@ -35,7 +36,7 @@ resource "azurerm_mssql_server" "this" {
 resource "azurerm_mssql_database" "this" {
   name           = var.database_name
   server_id      = azurerm_mssql_server.this.id
-  sku_name       = var.sku_name # default S0
+  sku_name       = var.sku_name # default Basic (5 DTU, 2 GB)
   max_size_gb    = var.max_size_gb
   collation      = "SQL_Latin1_General_CP1_CI_AS"
   zone_redundant = false

@@ -18,3 +18,14 @@ aad_admin_login         = "you@example.com"
 
 # curl -s https://api.ipify.org
 dev_public_ip           = "203.0.113.42"
+
+# --- Container Apps (optional overrides) ---------------------------------
+# Default image is the ACA placeholder so the resource exists before the
+# real backend is published. Once pg-devops-cicd publishes the real image
+# to GHCR, set:
+#   container_app_image = "ghcr.io/armyguy255a/photogallery-backend:latest"
+# (Note: image is in ignore_changes, so updating this var only affects new
+#  apply runs that recreate the container app — for routine image bumps,
+#  let the CI/CD revision-update path handle it instead.)
+# container_app_image       = "mcr.microsoft.com/k8se/quickstart:latest"
+# container_app_target_port = 8080
