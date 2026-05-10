@@ -65,7 +65,11 @@ interface CodeValidation {
             <span *ngIf="saving">Saving...</span>
             <span *ngIf="saved" class="saved-feedback">✓ Saved</span>
           </button>
-          <button class="cart-button" (click)="cartOpen = true" [class.has-items]="cartCount > 0">
+          <button class="cart-button"
+                  *ngIf="!isAuthenticated"
+                  (click)="cartOpen = true"
+                  [class.has-items]="cartCount > 0"
+                  data-testid="gallery-cart-button">
             🛒 Cart
             <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
           </button>

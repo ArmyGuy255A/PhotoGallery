@@ -69,6 +69,18 @@ describe('NavbarComponent', () => {
     expect(fixture.debugElement.query(By.css('button.login-icon'))).toBeNull();
   });
 
+  it('renders the global cart button in the right zone when authenticated', async () => {
+    await setup(true);
+    const right = fixture.debugElement.query(By.css('.navbar-right'));
+    expect(right).toBeTruthy();
+    expect(right.query(By.css('app-cart-button'))).toBeTruthy();
+  });
+
+  it('does not render the cart button when unauthenticated', async () => {
+    await setup(false);
+    expect(fixture.debugElement.query(By.css('app-cart-button'))).toBeNull();
+  });
+
   it('navigates to /login when the login icon is clicked', async () => {
     await setup(false);
     const btn = fixture.debugElement.query(By.css('button.login-icon'));

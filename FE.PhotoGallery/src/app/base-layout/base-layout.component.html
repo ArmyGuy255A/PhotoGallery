@@ -3,5 +3,9 @@
   <!-- Child routes render through <router-outlet/> inside <app-sidenav>'s mat-sidenav-content slot. -->
   <app-sidenav></app-sidenav>
   <app-footer></app-footer>
+  <!-- Single global mount for the authenticated cart drawer.
+       Mounted at the layout level (not per route) so it doesn't re-mount
+       on navigation; visibility is brokered via CartService.cartDrawerOpen$. -->
+  <app-cart-drawer></app-cart-drawer>
 </div>
 

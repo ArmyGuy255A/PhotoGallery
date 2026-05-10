@@ -1,6 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
@@ -8,6 +9,7 @@ import { AccessCodeFormComponent } from './access-code-form.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { Subject, interval, Observable } from 'rxjs';
 import { takeUntil, switchMap } from 'rxjs/operators';
+import { CartService, CartQuality } from '../../services/cart.service';
 
 interface Photo {
   id: string;
@@ -38,7 +40,7 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent],
+  imports: [CommonModule, FormsModule, RouterLink, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
@@ -73,8 +75,10 @@ interface Album {
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
               <div *ngFor="let photo of photos; let i = index" class="photo-card" data-testid="photo-card"
                    [attr.data-photo-id]="photo.id"
-                   (click)="openModal(i)" role="button" tabindex="0"
-                   (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)">
+                   role="button" tabindex="0">
+                <div class="photo-thumb-clickable"
+                     (click)="openModal(i)"
+                     (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)">
                 <div class="photo-status-badge" [ngClass]="getStatusClass(photo)" data-testid="photo-status-badge">
                   <span *ngIf="photo.processingStatus === 'Complete'">✓</span>
                   <span *ngIf="photo.processingStatus === 'Processing'">⟳</span>
@@ -91,8 +95,30 @@ interface Album {
                     <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
                   </svg>
                 </div>
+                </div>
                 <h3 data-testid="photo-card-filename">{{ photo.fileName }}</h3>
                 <p class="photo-meta">Uploaded {{ (photo.uploadDate | date: 'short') }}</p>
+                <div class="photo-cart-actions" (click)="$event.stopPropagation()">
+                  <select
+                    [ngModel]="selectedQuality[photo.id] || 'Medium'"
+                    (ngModelChange)="onQualityChange(photo.id, $event)"
+                    class="quality-select"
+                    data-testid="album-photo-quality-select"
+                    aria-label="Quality">
+                    <option value="Low">Low</option>
+                    <option value="Medium">Medium</option>
+                    <option value="High">High</option>
+                    <option value="Original">Original</option>
+                  </select>
+                  <button
+                    type="button"
+                    class="add-cart-btn"
+                    (click)="onAddToCart(photo)"
+                    [disabled]="isInCart(photo)"
+                    data-testid="album-photo-add-to-cart">
+                    {{ isInCart(photo) ? '✓ Added' : '+ Add to Cart' }}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -179,8 +205,10 @@ interface Album {
         [photos]="modalPhotos"
         [(currentIndex)]="modalIndex"
         [isOpen]="modalOpen"
-        [showCartButton]="false"
-        (closed)="modalOpen = false">
+        [showCartButton]="true"
+        [isInCart]="isModalPhotoInCart"
+        (closed)="modalOpen = false"
+        (cartAction)="onModalCartAction($event)">
       </app-photo-modal>
     </div>
   `,
@@ -534,6 +562,40 @@ interface Album {
       margin-top: 20px;
       border-left: 4px solid #c62828;
     }
+
+    .photo-cart-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      padding: 6px 8px 10px;
+    }
+    .photo-cart-actions .quality-select {
+      flex: 0 0 auto;
+      padding: 4px 6px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .photo-cart-actions .add-cart-btn {
+      flex: 1;
+      background: white;
+      border: 1px solid #0066cc;
+      color: #0066cc;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .photo-cart-actions .add-cart-btn:hover:not(:disabled) {
+      background: #e3f2fd;
+    }
+    .photo-cart-actions .add-cart-btn:disabled {
+      background: #c8e6c9;
+      border-color: #2e7d32;
+      color: #2e7d32;
+      cursor: default;
+    }
   `]
 })
 export class AlbumDetailComponent implements OnInit, OnDestroy {
@@ -552,11 +614,15 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   modalOpen = false;
   modalIndex = 0;
 
+  /** Per-photo quality selection (defaults to Medium when unset). */
+  selectedQuality: Record<string, CartQuality> = {};
+
   private destroy$ = new Subject<void>();
 
   constructor(
     private route: ActivatedRoute,
-    private http: HttpClient
+    private http: HttpClient,
+    private cart: CartService
   ) {}
 
   ngOnInit(): void {
@@ -705,6 +771,64 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
     this.loadPhotos();
   }
 
+  // ---------------------------------------------------------------------------
+  // Cart integration (issue #58)
+  // ---------------------------------------------------------------------------
+
+  /** Photos transformed for the PhotoModalComponent. */
+  get modalPhotos(): ModalPhoto[] {
+    return this.photos.map(p => ({
+      photoId: p.id,
+      fileName: p.fileName,
+      thumbnailUrl: p.thumbnailUrl,
+      displayUrl: p.mediumUrl ?? p.thumbnailUrl
+    }));
+  }
+
+  get isModalPhotoInCart(): boolean {
+    const modalPhoto = this.modalPhotos[this.modalIndex];
+    if (!modalPhoto) return false;
+    const quality = this.selectedQuality[modalPhoto.photoId] || 'Medium';
+    return this.cart.contains(modalPhoto.photoId, quality);
+  }
+
+  openModal(index: number): void {
+    this.modalIndex = index;
+    this.modalOpen = true;
+  }
+
+  onQualityChange(photoId: string, q: CartQuality): void {
+    this.selectedQuality[photoId] = q;
+  }
+
+  isInCart(photo: Photo): boolean {
+    const quality = this.selectedQuality[photo.id] || 'Medium';
+    return this.cart.contains(photo.id, quality);
+  }
+
+  onAddToCart(photo: Photo): void {
+    const quality: CartQuality = this.selectedQuality[photo.id] || 'Medium';
+    this.cart.addItem({
+      photoId: photo.id,
+      fileName: photo.fileName,
+      thumbnailUrl: photo.thumbnailUrl,
+      quality,
+      sourceAlbumId: this.albumId,
+      sourceAlbumTitle: this.album?.title
+    });
+  }
+
+  onModalCartAction(modalPhoto: ModalPhoto): void {
+    const photo = this.photos.find(p => p.id === modalPhoto.photoId);
+    if (!photo) return;
+    const quality = this.selectedQuality[photo.id] || 'Medium';
+    if (this.cart.contains(photo.id, quality)) {
+      this.cart.removeItem(photo.id, quality);
+    } else {
+      this.onAddToCart(photo);
+    }
+  }
+
   getStatusClass(photo: Photo): string {
     if (!photo.processingStatus) return 'pending';
     
@@ -769,18 +893,5 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
     photo.thumbnailUrl = undefined;
   }
 
-  /** Photos transformed for the PhotoModalComponent — uses mediumUrl as displayUrl. */
-  get modalPhotos(): ModalPhoto[] {
-    return this.photos.map(p => ({
-      photoId: p.id,
-      fileName: p.fileName,
-      thumbnailUrl: p.thumbnailUrl,
-      displayUrl: p.mediumUrl ?? p.thumbnailUrl
-    }));
-  }
-
-  openModal(index: number): void {
-    this.modalIndex = index;
-    this.modalOpen = true;
-  }
+  /** Photos transformed for the PhotoModalComponent. (single definition — see Cart integration block) */
 }
