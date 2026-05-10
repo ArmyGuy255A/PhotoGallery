@@ -75,6 +75,7 @@ describe('app.routes', () => {
     expect(adminSettings.canActivate).toContain(adminGuard);
   });
 
+
   it('redirects empty child path to dashboard', () => {
     const empty = findChild('');
     expect(empty.redirectTo).toBe('dashboard');

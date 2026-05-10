@@ -79,6 +79,18 @@ describe('CodeGalleryComponent', () => {
     expect(link).toBeNull();
   });
 
+  it('hides the gallery cart button when authenticated (global navbar takes over)', async () => {
+    const fixture = await createComponent(true);
+    const btn = fixture.debugElement.query(By.css('[data-testid="gallery-cart-button"]'));
+    expect(btn).toBeNull();
+  });
+
+  it('shows the gallery cart button when unauthenticated (per-code flow)', async () => {
+    const fixture = await createComponent(false);
+    const btn = fixture.debugElement.query(By.css('[data-testid="gallery-cart-button"]'));
+    expect(btn).toBeTruthy();
+  });
+
   describe('toolbar / per-photo quality interaction', () => {
     let fixture: ComponentFixture<CodeGalleryComponent>;
     let component: CodeGalleryComponent;
