@@ -78,7 +78,7 @@ public class AccessCodeController : ControllerBase
         {
             AlbumId = album.Id.ToString(),
             AlbumTitle = album.Title,
-            AlbumDescription = album.Description,
+            AlbumDescription = album.Description ?? string.Empty,
             IsValid = true,
             ExpirationDate = accessCode.ExpirationDate
         });

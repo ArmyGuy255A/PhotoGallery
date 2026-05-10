@@ -112,11 +112,9 @@ jobs:
           path: FE.PhotoGallery/dist/
 
   lint-backend:
-    name: Backend warning audit (informational)
+    name: Backend warning audit
     runs-on: ubuntu-latest
-    # Informational only — does NOT block PRs. Promote to required check once
-    # the warning baseline is clean.
-    continue-on-error: true
+    # Now that the warning baseline is clean, this is a required check.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4

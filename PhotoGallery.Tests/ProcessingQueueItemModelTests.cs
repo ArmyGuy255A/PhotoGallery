@@ -123,7 +123,7 @@ public class ProcessingQueueItemModelTests
         Assert.Equal(1, item.RetryCount);
         Assert.NotNull(item.NextRetryTime);
         // Should be approximately 2 seconds from now (allow ±500ms for test execution)
-        var timeDiff1 = (firstRetryTime.Value - DateTime.UtcNow).TotalSeconds;
+        var timeDiff1 = (firstRetryTime!.Value - DateTime.UtcNow).TotalSeconds;
         Assert.True(timeDiff1 > 1.5 && timeDiff1 < 2.5, $"First retry backoff should be ~2 seconds, got {timeDiff1}s");
 
         // Act - Second retry: 2^2 = 4 seconds
