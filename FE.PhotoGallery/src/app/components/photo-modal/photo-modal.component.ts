@@ -65,10 +65,16 @@ export interface ModalPhoto {
           </div>
 
           <button
-            *ngIf="showCartButton && currentPhoto"
-            class="cart-btn"
-            (click)="onAddToCart(); $event.stopPropagation()">
+            *ngIf="showCartButton && currentPhoto && !isInCart"
+            class="cart-btn cart-btn-add"
+            (click)="onCartAction(); $event.stopPropagation()">
             + Add to Cart
+          </button>
+          <button
+            *ngIf="showCartButton && currentPhoto && isInCart"
+            class="cart-btn cart-btn-remove"
+            (click)="onCartAction(); $event.stopPropagation()">
+            − Remove from Cart
           </button>
         </footer>
       </div>
@@ -207,7 +213,6 @@ export interface ModalPhoto {
     }
 
     .cart-btn {
-      background: #0066cc;
       color: white;
       border: none;
       padding: 10px 18px;
@@ -216,10 +221,23 @@ export interface ModalPhoto {
       font-size: 14px;
       font-weight: 500;
       flex-shrink: 0;
+      transition: background 0.15s;
     }
 
-    .cart-btn:hover {
-      background: #0052a3;
+    .cart-btn-add {
+      background: #2e7d32;
+    }
+
+    .cart-btn-add:hover {
+      background: #1b5e20;
+    }
+
+    .cart-btn-remove {
+      background: #c62828;
+    }
+
+    .cart-btn-remove:hover {
+      background: #8e0000;
     }
   `]
 })
@@ -228,9 +246,20 @@ export class PhotoModalComponent implements OnInit, OnDestroy {
   @Input() currentIndex = 0;
   @Input() isOpen = false;
   @Input() showCartButton = false;
+  /**
+   * Whether the currently displayed photo is in the cart.
+   * Drives the Add (green) vs. Remove (red) button branch in the footer.
+   * Parent decides add vs. remove on the (cartAction) emission based on
+   * the same flag — no separate output needed.
+   */
+  @Input() isInCart = false;
 
   @Output() closed = new EventEmitter<void>();
   @Output() currentIndexChange = new EventEmitter<number>();
+  /**
+   * Emitted when the user clicks the cart button. Parent uses its own
+   * `isInCart` knowledge (the same flag passed in) to decide add vs. remove.
+   */
   @Output() cartAction = new EventEmitter<ModalPhoto>();
 
   ngOnInit(): void {
@@ -279,7 +308,12 @@ export class PhotoModalComponent implements OnInit, OnDestroy {
     this.close();
   }
 
-  onAddToCart(): void {
+  /**
+   * Click handler for the unified Add / Remove cart button. Emits the current
+   * photo; the parent decides whether this is an add or a remove by looking
+   * at the same `isInCart` flag it passes in.
+   */
+  onCartAction(): void {
     const photo = this.currentPhoto;
     if (photo) {
       this.cartAction.emit(photo);
