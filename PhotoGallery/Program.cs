@@ -23,6 +23,22 @@ using Serilog;
 var builder = WebApplication.CreateBuilder(args);
 
 // -----------------------------------------------------------------------------
+// Local-only, gitignored overlays. Loaded after appsettings.{Environment}.json
+// so they override committed defaults, and before Key Vault so KV still wins
+// for production secrets when configured.
+//   1. appsettings.Local.json              — env-agnostic (e.g. Google OAuth)
+//   2. appsettings.{Environment}.Local.json — env-specific (e.g. KV URI)
+// -----------------------------------------------------------------------------
+builder.Configuration.AddJsonFile(
+    "appsettings.Local.json",
+    optional: true,
+    reloadOnChange: true);
+builder.Configuration.AddJsonFile(
+    $"appsettings.{builder.Environment.EnvironmentName}.Local.json",
+    optional: true,
+    reloadOnChange: true);
+
+// -----------------------------------------------------------------------------
 // Azure Key Vault as a configuration source (opt-in).
 //
 // Activated only when KeyVault:Uri is non-empty so the all-local stack, xUnit
