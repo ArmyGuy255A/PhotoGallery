@@ -1,5 +1,6 @@
 using Authentication;
 using Authentication.Services;
+using Azure.Identity;
 using Configuration;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -20,6 +21,31 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// -----------------------------------------------------------------------------
+// Azure Key Vault as a configuration source (opt-in).
+//
+// Activated only when KeyVault:Uri is non-empty so the all-local stack, xUnit
+// tests, and CI never reach Azure. DefaultAzureCredential transparently picks
+// up `az login` credentials locally and Managed Identity when running in Azure.
+//
+// Configuration precedence (highest wins):
+//   1. Environment variables          (e.g. ConnectionStrings__DefaultConnection)
+//   2. appsettings.{Environment}.json (e.g. appsettings.DevelopmentAzure.json)
+//   3. Azure Key Vault                (when KeyVault:Uri is set)
+//   4. appsettings.json
+//
+// Key Vault secret naming: use double-dash to nest, e.g.
+//   "ConnectionStrings--DefaultConnection" → ConnectionStrings:DefaultConnection.
+// Coordinated with the platform engineer (see Documentation/Runbooks/local-azure-dev.md).
+// -----------------------------------------------------------------------------
+var keyVaultUri = builder.Configuration["KeyVault:Uri"];
+if (!string.IsNullOrWhiteSpace(keyVaultUri))
+{
+    builder.Configuration.AddAzureKeyVault(
+        new Uri(keyVaultUri),
+        new DefaultAzureCredential());
+}
+
 // Bind strongly-typed configuration first so downstream registrations can use it.
 // Reference: clean-architecture-guide skill — "Cross-Cutting Concerns Live in Sub-Projects"
 builder.Services.AddConfigurationServices(builder.Configuration, out var settings);
@@ -32,17 +58,10 @@ builder.Host.UseSerilog((context, configuration) =>
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
 builder.WebHost.UseUrls(urls);
 
-// Add services to the container.
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ??
-                       throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+// Database provider switch — Sqlite (all-local default) | SqlServer (Azure-backed dev).
+// See PhotoGallery/Data/DatabaseProviderSelector.cs for behavior + open items.
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-{
-    options.UseSqlite(connectionString, sqliteOptions =>
-    {
-        sqliteOptions.CommandTimeout(5);
-    });
-    options.UseQueryTrackingBehavior(QueryTrackingBehavior.TrackAll);
-});
+    DatabaseProviderSelector.Apply(options, builder.Configuration));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 // Configure CORS — AllowFrontendDev is scoped to the SPA origin from
