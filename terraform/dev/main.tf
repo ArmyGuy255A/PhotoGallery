@@ -153,10 +153,8 @@ module "keyvault" {
   tenant_id               = data.azurerm_client_config.current.tenant_id
   dev_principal_object_id = var.dev_principal_object_id
 
-  sql_connection_string  = module.sql.aad_connection_string
-  storage_account_name   = module.storage.storage_account_name
-  storage_blob_endpoint  = module.storage.blob_endpoint
-  storage_container_name = module.storage.container_name
+  sql_connection_string = module.sql.aad_connection_string
+  storage_blob_endpoint = module.storage.blob_endpoint
 
   tags = local.common_tags
 }
@@ -196,29 +194,42 @@ module "compute" {
   storage_account_id = module.storage.storage_account_id
 
   # Wire each KV-backed secret as both an ACA secret and an env var the API
-  # consumes. `__` (double underscore) maps to `:` in ASP.NET Core config.
+  # consumes. ACA secret aliases (the keys below) are lowercase-with-dashes
+  # per ACA naming rules; the env-var names use `__` (double underscore)
+  # which .NET binds as `:` in config. KV secret names use `--` per the
+  # KV config provider's translation rules. All three forms map to the
+  # same canonical .NET config path. See the "Key Vault secret contract"
+  # table in `Documentation/Runbooks/local-azure-dev.md` and
+  # `PhotoGallery/ConfigurationCanonicalAliases.cs`.
   kv_secret_ids = {
-    "sql-conn"             = module.keyvault.secret_versionless_ids["Sql--ConnectionString"]
-    "auth-jwt-signingkey"  = module.keyvault.secret_versionless_ids["Auth--Jwt--SigningKey"]
-    "auth-google-clientid" = module.keyvault.secret_versionless_ids["Auth--Google--ClientId"]
-    "auth-google-secret"   = module.keyvault.secret_versionless_ids["Auth--Google--ClientSecret"]
-    "acs-conn"             = module.keyvault.secret_versionless_ids["Acs--ConnectionString"]
+    "connectionstrings-defaultconnection" = module.keyvault.secret_versionless_ids["ConnectionStrings--DefaultConnection"]
+    "authentication-jwt-key"              = module.keyvault.secret_versionless_ids["Authentication--Jwt--Key"]
+    "authentication-google-clientid"      = module.keyvault.secret_versionless_ids["Authentication--Google--ClientId"]
+    "authentication-google-clientsecret"  = module.keyvault.secret_versionless_ids["Authentication--Google--ClientSecret"]
+    "email-acs-connectionstring"          = module.keyvault.secret_versionless_ids["Email--AzureCommunicationServices--ConnectionString"]
   }
 
   kv_env_mapping = {
-    "sql-conn"             = "ConnectionStrings__DefaultConnection"
-    "auth-jwt-signingkey"  = "Auth__Jwt__SigningKey"
-    "auth-google-clientid" = "Auth__Google__ClientId"
-    "auth-google-secret"   = "Auth__Google__ClientSecret"
-    "acs-conn"             = "Acs__ConnectionString"
+    "connectionstrings-defaultconnection" = "ConnectionStrings__DefaultConnection"
+    "authentication-jwt-key"              = "Authentication__Jwt__Key"
+    "authentication-google-clientid"      = "Authentication__Google__ClientId"
+    "authentication-google-clientsecret"  = "Authentication__Google__ClientSecret"
+    "email-acs-connectionstring"          = "Email__AzureCommunicationServices__ConnectionString"
   }
 
   extra_env = {
-    "Storage__Type"                 = "Azure"
-    "Storage__Azure__AccountName"   = module.storage.storage_account_name
-    "Storage__Azure__BlobEndpoint"  = module.storage.blob_endpoint
-    "Storage__Azure__ContainerName" = module.storage.container_name
-    "KeyVault__Uri"                 = module.keyvault.vault_uri
+    # Provider selectors
+    "Storage__Provider"  = "AzureBlob"
+    "Database__Provider" = "SqlServer"
+
+    # Storage (non-secret config) — AccountUrl is also seeded in KV for
+    # rotatability, but resolving it from a plain env var is the default
+    # path. KV wins only if the same key is bound through the KV provider.
+    "Storage__AzureBlob__AccountUrl"    = module.storage.blob_endpoint
+    "Storage__AzureBlob__ContainerName" = module.storage.container_name
+
+    # Key Vault URI — bootstraps the KV config provider in Program.cs.
+    "KeyVault__Uri" = module.keyvault.vault_uri
   }
 
   app_insights_connection_string = module.observability.app_insights_connection_string

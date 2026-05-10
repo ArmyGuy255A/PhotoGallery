@@ -15,9 +15,8 @@ variable "sql_connection_string" {
 }
 
 # Wired from the storage module — used by the app to construct the blob client
-variable "storage_account_name" { type = string }
+# and seeded into KV as `Storage--AzureBlob--AccountUrl`.
 variable "storage_blob_endpoint" { type = string }
-variable "storage_container_name" { type = string }
 
 variable "tags" {
   type    = map(string)

@@ -103,27 +103,51 @@ terraform output
 
 ## 3. Replace the placeholder secrets in Key Vault
 
-The TF run seeded Key Vault with real values for SQL connection string and
-Storage account name, but **dummy placeholders** for Google OAuth, JWT signing
-key, and ACS. Set those manually:
+The TF run seeded Key Vault with real values for the SQL connection string
+and the storage AccountUrl, but **`<TO-BE-SET>` placeholders** for Google
+OAuth, JWT signing key, and ACS. Set those manually:
 
 ```powershell
 $kv = terraform output -raw key_vault_name
 
 # Google OAuth (from https://console.cloud.google.com)
-az keyvault secret set --vault-name $kv --name "Auth--Google--ClientId"     --value "<...>"
-az keyvault secret set --vault-name $kv --name "Auth--Google--ClientSecret" --value "<...>"
+az keyvault secret set --vault-name $kv --name "Authentication--Google--ClientId"     --value "<...>"
+az keyvault secret set --vault-name $kv --name "Authentication--Google--ClientSecret" --value "<...>"
 
 # JWT signing key — generate a strong one
 $jwtKey = [Convert]::ToBase64String((1..64 | ForEach-Object { [byte](Get-Random -Max 256) }))
-az keyvault secret set --vault-name $kv --name "Auth--Jwt--SigningKey" --value $jwtKey
+az keyvault secret set --vault-name $kv --name "Authentication--Jwt--Key" --value $jwtKey
 
 # Azure Communication Services connection string (when you wire email)
-az keyvault secret set --vault-name $kv --name "Acs--ConnectionString" --value "<...>"
+az keyvault secret set --vault-name $kv --name "Email--AzureCommunicationServices--ConnectionString" --value "<...>"
 ```
 
 The Terraform module ignores changes to secret `value`, so re-applying TF
 won't clobber these.
+
+### Key Vault secret contract
+
+Backend dev (`pg-aspnet-backend-dev`) owns the canonical secret-name contract.
+Terraform creates exactly these names; the .NET Key Vault config provider
+translates `--` → `:` so each lines up with an ASP.NET Core config path. Do
+not deviate from this table — see `PhotoGallery/ConfigurationCanonicalAliases.cs`
+for the .NET-side source of truth.
+
+| KV secret name | .NET config path (after `--`→`:`) | Seeded by TF |
+|---|---|---|
+| `ConnectionStrings--DefaultConnection` | `ConnectionStrings:DefaultConnection` | real value (composed from SQL output) |
+| `Storage--AzureBlob--AccountUrl` | `Storage:AzureBlob:AccountUrl` (optional in KV; also in appsettings) | real value (blob endpoint) |
+| `Authentication--Google--ClientId` | `Authentication:Google:ClientId` | `<TO-BE-SET>` placeholder |
+| `Authentication--Google--ClientSecret` | `Authentication:Google:ClientSecret` | `<TO-BE-SET>` placeholder |
+| `Authentication--Jwt--Key` | `Authentication:Jwt:Key` | `<TO-BE-SET>` placeholder |
+| `Email--AzureCommunicationServices--ConnectionString` | `Email:AzureCommunicationServices:ConnectionString` | `<TO-BE-SET>` placeholder |
+
+ACA bridges these into the container as env vars named with `__` (double
+underscore), which .NET also binds to `:`. E.g. KV secret
+`ConnectionStrings--DefaultConnection` → ACA secret alias
+`connectionstrings-defaultconnection` → container env var
+`ConnectionStrings__DefaultConnection`. The three forms (`--` in KV, `-` in
+ACA alias, `__` in env) all collapse to the same .NET config path at runtime.
 
 ## 3a. Register the Container App's UAMI in Azure SQL (one-time, manual)
 
@@ -204,8 +228,10 @@ if (!string.IsNullOrEmpty(kvUri))
 }
 ```
 
-The provider maps `Sql--ConnectionString` → `Sql:ConnectionString`,
-`Auth--Google--ClientSecret` → `Auth:Google:ClientSecret`, etc.
+The provider maps `ConnectionStrings--DefaultConnection` →
+`ConnectionStrings:DefaultConnection`, `Authentication--Google--ClientSecret` →
+`Authentication:Google:ClientSecret`, etc. See the "Key Vault secret contract"
+table above for the full list.
 
 ### 4c. Sign in once per session
 

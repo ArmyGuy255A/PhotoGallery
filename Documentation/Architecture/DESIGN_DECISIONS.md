@@ -1311,6 +1311,22 @@ functionality for the MVP scope.
 - `terraform/dev/variables.tf` — `container_app_image` (defaults to MCR placeholder), `container_app_target_port` (8080)
 - `Documentation/Runbooks/local-azure-dev.md` — step 3a (SQL UAMI registration), updated cost table, ACA troubleshooting
 
+### Addendum (2026-05-13) — Key Vault secret naming contract
+
+The KV secret names follow the .NET `:`-config-path convention with `--`
+substituted for `:` (the ASP.NET Core Key Vault config provider's translation
+rule). ACA bridges each secret to a container env var that uses `__` (double
+underscore) for the same separator. All three forms — `--` in KV, `-` in ACA
+secret alias, `__` in container env var — collapse to a single canonical .NET
+config path at runtime.
+
+The locked table (canonical names + .NET paths) lives in
+`Documentation/Runbooks/local-azure-dev.md` ("Key Vault secret contract"),
+and `PhotoGallery/ConfigurationCanonicalAliases.cs` is the .NET-side source
+of truth. Terraform's `azurerm_key_vault_secret` resources and ACA env-var
+mappings in `terraform/modules/keyvault/main.tf` and `terraform/dev/main.tf`
+must match that table exactly.
+
 ---
 
 ## How to Add New Design Decisions
