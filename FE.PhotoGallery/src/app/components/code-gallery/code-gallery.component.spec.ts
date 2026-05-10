@@ -185,6 +185,19 @@ describe('CodeGalleryComponent', () => {
       const btn2 = fixture.debugElement.query(By.css('.select-all-btn')).nativeElement as HTMLButtonElement;
       expect(btn2.textContent?.trim()).toBe('Remove All from Cart');
     });
+
+    it('persisted defaultQuality "Original" is restored on reload (issue #62)', () => {
+      // Simulate a prior session that stored Original.
+      localStorage.setItem('defaultQuality:RELOADCODE', 'Original');
+      try {
+        // Drive the private loader directly — same code path used by ngOnInit.
+        component.code = 'RELOADCODE';
+        (component as unknown as { loadDefaultQuality(): void }).loadDefaultQuality();
+        expect(component.defaultQuality).toBe('Original');
+      } finally {
+        localStorage.removeItem('defaultQuality:RELOADCODE');
+      }
+    });
   });
 });
 

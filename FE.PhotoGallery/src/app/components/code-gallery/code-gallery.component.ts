@@ -720,7 +720,10 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
     if (!this.code) return;
     try {
       const stored = localStorage.getItem(this.defaultQualityStorageKey(this.code));
-      if (stored === 'Low' || stored === 'Medium' || stored === 'High') {
+      // Issue #62: 'Original' was missing from the accept-list, so a user who
+      // picked Original last visit was silently demoted back to Medium on
+      // reload. The toolbar select offers all four — accept all four.
+      if (stored === 'Low' || stored === 'Medium' || stored === 'High' || stored === 'Original') {
         this.defaultQuality = stored;
       }
     } catch {
