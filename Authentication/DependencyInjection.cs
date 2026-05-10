@@ -3,6 +3,7 @@ using Authentication.Services;
 using Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Authentication;
@@ -67,6 +68,52 @@ public static class DependencyInjection
                     ValidAudience = jwtConfig.Audience,
                     IssuerSigningKey = new SymmetricSecurityKey(
                         Encoding.UTF8.GetBytes(jwtConfig.Key))
+                };
+
+                // Surface JWT bearer authentication failures in the application log
+                // so 401s on protected endpoints are diagnosable without attaching a
+                // debugger. Without these handlers, the framework silently returns
+                // 401 with no indication of *why* validation failed (issuer mismatch,
+                // signature failure, expired, missing token, etc.).
+                options.Events = new JwtBearerEvents
+                {
+                    OnAuthenticationFailed = ctx =>
+                    {
+                        var logger = ctx.HttpContext.RequestServices
+                            .GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("JwtBearer");
+                        logger.LogWarning(ctx.Exception,
+                            "JwtBearer auth FAILED for {Method} {Path}: {ExceptionType}: {Message}",
+                            ctx.Request.Method, ctx.Request.Path,
+                            ctx.Exception.GetType().Name, ctx.Exception.Message);
+                        return Task.CompletedTask;
+                    },
+                    OnChallenge = ctx =>
+                    {
+                        var logger = ctx.HttpContext.RequestServices
+                            .GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("JwtBearer");
+                        logger.LogWarning(
+                            "JwtBearer CHALLENGE for {Method} {Path}: error='{Error}' description='{Description}' authHeaderPresent={HasAuth}",
+                            ctx.Request.Method, ctx.Request.Path,
+                            ctx.Error ?? string.Empty,
+                            ctx.ErrorDescription ?? string.Empty,
+                            ctx.Request.Headers.ContainsKey("Authorization"));
+                        return Task.CompletedTask;
+                    },
+                    OnTokenValidated = ctx =>
+                    {
+                        var logger = ctx.HttpContext.RequestServices
+                            .GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("JwtBearer");
+                        logger.LogInformation(
+                            "JwtBearer token VALIDATED for {Method} {Path}: sub={Sub}",
+                            ctx.Request.Method, ctx.Request.Path,
+                            ctx.Principal?.FindFirst("sub")?.Value
+                                ?? ctx.Principal?.Identity?.Name
+                                ?? "(unknown)");
+                        return Task.CompletedTask;
+                    }
                 };
             });
 
