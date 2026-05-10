@@ -147,4 +147,41 @@ public class WatermarkBackfillTests
 
         _storage.Verify(s => s.UploadAsync(watermarkedKey, It.IsAny<Stream>(), "image/jpeg"), Times.Once);
     }
+
+    [Fact]
+    public async Task GenerateShortLivedUrlAsync_NeverWatermarksOriginalQuality_DefenseInDepth()
+    {
+        // PR-B is adding QualityType.Original. Even though we don't have access to that enum
+        // value here, we cover the same defense-in-depth concern for High quality which
+        // should also never be watermarked. The contract: only Thumbnail + Medium can be
+        // watermarked. For any other quality, watermarked: true is silently ignored and the
+        // service returns the unwatermarked URL.
+        //
+        // This test will keep working when PR-B's QualityType.Original lands, because the
+        // High path exercises the same `quality != Medium && quality != Thumbnail` branch.
+        var photoId = Guid.NewGuid();
+        var albumId = Guid.NewGuid();
+        var photo = new Photo { Id = photoId, AlbumId = albumId, FileName = "p.jpg", UploadedBy = "Tester" };
+
+        var unwatermarkedKey = $"photogallery/{albumId}/{photoId}/high.jpg";
+        var watermarkedKeyThatMustNotBeAccessed = $"photogallery/{albumId}/{photoId}/high-watermarked.jpg";
+
+        _photoRepo.Setup(r => r.GetByIdAsync(photoId)).ReturnsAsync(photo);
+        _storage.Setup(s => s.ExistsAsync(unwatermarkedKey)).ReturnsAsync(true);
+        _storage.Setup(s => s.GetUrlAsync(unwatermarkedKey, It.IsAny<int>()))
+            .ReturnsAsync($"http://minio/{unwatermarkedKey}?sig=fresh");
+
+        var url = await _service.GenerateShortLivedUrlAsync(
+            photoId, QualityType.High, ttlMinutes: 15, watermarked: true);
+
+        Assert.NotNull(url);
+        Assert.Contains("high.jpg", url);
+        Assert.DoesNotContain("watermarked", url);
+
+        // Crucially: no watermark generation attempted, no upload to a watermarked key,
+        // even though the caller asked for watermarked: true.
+        _storage.Verify(s => s.ExistsAsync(watermarkedKeyThatMustNotBeAccessed), Times.Never);
+        _storage.Verify(s => s.DownloadAsync(It.IsAny<string>()), Times.Never);
+        _storage.Verify(s => s.UploadAsync(It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<string>()), Times.Never);
+    }
 }
