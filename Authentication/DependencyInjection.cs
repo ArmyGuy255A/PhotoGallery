@@ -55,7 +55,13 @@ public static class DependencyInjection
                     ValidateIssuer = true,
                     ValidateAudience = true,
                     ValidateLifetime = true,
-                    ClockSkew = TimeSpan.Zero,
+                    // Allow up to 5 min of skew between the issuer's clock and the
+                    // validating server's clock so freshly-issued JWTs are not
+                    // rejected with 401 due to sub-second drift on iat/nbf. Mirrors
+                    // Microsoft.IdentityModel's documented default. Symptom of
+                    // ClockSkew=Zero: GET /api/* returns 401 immediately after a
+                    // successful login that just minted the same JWT.
+                    ClockSkew = TimeSpan.FromMinutes(5),
                     ValidateIssuerSigningKey = true,
                     ValidIssuer = jwtConfig.Issuer,
                     ValidAudience = jwtConfig.Audience,

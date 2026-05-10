@@ -50,12 +50,13 @@ public class GoogleTokenValidator : IExternalTokenValidator
         if (string.IsNullOrEmpty(payload.Email))
         {
             userInfo.Error = "Invalid email";
+            return userInfo;
         }
 
-        if (string.IsNullOrEmpty(payload.Name))
-        {
-            userInfo.Error = "Invalid name";
-        }
+        // Name is optional — some Google accounts (e.g. service / minimal-scope
+        // sign-ins) don't return a populated name claim. Accept the token as
+        // long as the email is present; the web layer can fall back to the
+        // email's local-part for display purposes.
 
         userInfo.Email = payload.Email;
         userInfo.Name = payload.Name;
