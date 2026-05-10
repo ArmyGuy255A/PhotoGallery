@@ -9,6 +9,7 @@ import { CartService, CartQuality } from '../../services/cart.service';
 import { AuthService } from '../../services/auth.service';
 import { CartPanelComponent } from './cart-panel.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
+import { UserDropdownComponent } from '../user-dropdown/user-dropdown.component';
 import { environment } from '../../../environments/environment';
 
 interface PublicPhoto {
@@ -41,7 +42,7 @@ interface CodeValidation {
 @Component({
   selector: 'app-code-gallery',
   standalone: true,
-  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent],
+  imports: [CommonModule, FormsModule, CartPanelComponent, PhotoModalComponent, UserDropdownComponent],
   template: `
     <div class="code-gallery">
       <header class="gallery-header">
@@ -61,6 +62,7 @@ interface CodeValidation {
             🛒 Cart
             <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
           </button>
+          <app-user-dropdown *ngIf="isAuthenticated"></app-user-dropdown>
         </div>
       </header>
 
