@@ -340,6 +340,13 @@ For production deployment, ensure:
 - Check MinIO is running: `docker-compose ps minio`
 - Verify bucket exists in MinIO console
 
+**Cart download fails with CORS error in browser console**
+- The cart download flow streams blobs directly from MinIO via `fetch()`,
+  which requires bucket-level CORS to allow the SPA origin.
+- Run `.\scripts\setup-minio-cors.ps1` once after `docker compose up`.
+- For Azure Storage in production, see the equivalent `az storage cors add`
+  step in `Documentation/Architecture/STORAGE_LAYER.md`.
+
 **"DbContext disposal error"**
 - This is fixed in Phase 5 via singleton registration
 - ImageProcessingService creates new scopes per iteration

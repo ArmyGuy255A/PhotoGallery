@@ -1,9 +1,9 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
+import { Subscription } from 'rxjs';
 import { CartService, CartItem, CartQuality } from '../../services/cart.service';
-import { environment } from '../../../environments/environment';
+import { CartDownloadService, CartDownloadProgress } from '../../services/cart-download.service';
 
 /**
  * Slide-out cart drawer. Shows current cart contents, allows quality changes,
@@ -55,10 +55,31 @@ import { environment } from '../../../environments/environment';
 
       <footer class="cart-footer" *ngIf="items.length > 0">
         <div class="error-banner" *ngIf="errorMessage">{{ errorMessage }}</div>
+
+        <div class="progress-block" *ngIf="isDownloading">
+          <div class="progress-label">{{ progressLabel }}</div>
+          <div class="progress-bar"><div class="progress-fill" [style.width.%]="progressPercent"></div></div>
+        </div>
+
+        <div class="partial-failure" *ngIf="!isDownloading && partialFailures.length > 0">
+          <strong>{{ completedCount }} of {{ totalCount }} downloaded;</strong>
+          {{ partialFailures.length }} failed:
+          <span class="failed-files">{{ failedFileNames }}</span>
+        </div>
+
         <div class="footer-actions">
           <button class="clear-btn" (click)="onClear()" [disabled]="isDownloading">Clear</button>
-          <button class="download-btn" (click)="onDownload()" [disabled]="isDownloading">
-            {{ isDownloading ? 'Preparing...' : 'Download (' + items.length + ')' }}
+          <button
+            *ngIf="!isDownloading"
+            class="download-btn"
+            (click)="onDownload()">
+            Download ({{ items.length }})
+          </button>
+          <button
+            *ngIf="isDownloading"
+            class="cancel-btn"
+            (click)="onCancel()">
+            Cancel
           </button>
         </div>
       </footer>
@@ -275,9 +296,63 @@ import { environment } from '../../../environments/environment';
       opacity: 0.6;
       cursor: not-allowed;
     }
+
+    .cancel-btn {
+      flex: 2;
+      background: #c33;
+      color: white;
+      padding: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+    }
+
+    .cancel-btn:hover { background: #a22; }
+
+    .progress-block {
+      margin-bottom: 12px;
+    }
+
+    .progress-label {
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+
+    .progress-bar {
+      height: 6px;
+      background: #eee;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #0066cc;
+      transition: width 0.15s ease-out;
+    }
+
+    .partial-failure {
+      background: #fff7e6;
+      border: 1px solid #ffd591;
+      color: #8a5b00;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+
+    .partial-failure .failed-files {
+      display: block;
+      margin-top: 4px;
+      color: #5b3a00;
+      font-style: italic;
+    }
   `]
 })
-export class CartPanelComponent {
+export class CartPanelComponent implements OnDestroy {
   @Input() isOpen = false;
   @Input() code = '';
   @Output() closed = new EventEmitter<void>();
@@ -286,10 +361,26 @@ export class CartPanelComponent {
   isDownloading = false;
   errorMessage = '';
 
-  constructor(private cart: CartService, private http: HttpClient) {
+  /** Latest progress event from CartDownloadService. */
+  private progress: CartDownloadProgress | null = null;
+  private downloadSub: Subscription | null = null;
+
+  /** Used by the partial-failure banner after a download finishes with errors. */
+  partialFailures: ReadonlyArray<{ fileName: string; reason: string }> = [];
+  completedCount = 0;
+  totalCount = 0;
+
+  constructor(
+    private cart: CartService,
+    private cartDownload: CartDownloadService
+  ) {
     this.cart.cart$.subscribe(items => {
       this.items = items;
     });
+  }
+
+  ngOnDestroy(): void {
+    this.downloadSub?.unsubscribe();
   }
 
   close(): void {
@@ -314,53 +405,83 @@ export class CartPanelComponent {
     }
   }
 
-  async onDownload(): Promise<void> {
+  onDownload(): void {
     if (this.items.length === 0 || this.isDownloading) return;
     this.isDownloading = true;
     this.errorMessage = '';
+    this.partialFailures = [];
+    this.completedCount = 0;
+    this.totalCount = 0;
+    this.progress = null;
 
-    const apiUrl = environment.apiUrl || '';
-    const url = `${apiUrl}/api/code/${this.code}/cart/download`;
-    const body = {
-      items: this.items.map(i => ({ photoId: i.photoId, quality: i.quality }))
-    };
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        credentials: 'include'
+    this.downloadSub = this.cartDownload
+      .downloadCart(this.code, this.items)
+      .subscribe({
+        next: (p) => {
+          this.progress = p;
+          if (p.phase === 'error') {
+            this.errorMessage = p.message;
+          }
+          if (p.phase === 'done') {
+            this.partialFailures = p.failed;
+            this.completedCount = p.completed;
+            this.totalCount = p.total;
+          }
+        },
+        error: (err) => {
+          this.errorMessage = err?.message ?? 'Download failed.';
+          this.isDownloading = false;
+        },
+        complete: () => {
+          this.isDownloading = false;
+        }
       });
+  }
 
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new Error(errorText || `Download failed (HTTP ${response.status})`);
-      }
+  onCancel(): void {
+    this.downloadSub?.unsubscribe();
+    this.downloadSub = null;
+    this.isDownloading = false;
+    this.progress = null;
+  }
 
-      const blob = await response.blob();
-      const filename = this.extractFilename(response) ?? `photos-${Date.now()}.zip`;
-
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objectUrl);
-    } catch (err: any) {
-      this.errorMessage = err?.message || 'Download failed. Please try again.';
-      console.error('Cart download error:', err);
-    } finally {
-      this.isDownloading = false;
+  /** Human-readable label for the current progress phase. */
+  get progressLabel(): string {
+    if (!this.progress) return 'Preparing...';
+    switch (this.progress.phase) {
+      case 'manifest':
+        return 'Preparing manifest...';
+      case 'downloading':
+        return `Downloading ${this.progress.completed} of ${this.progress.total}`;
+      case 'zipping':
+        return 'Building ZIP...';
+      case 'saving':
+        return 'Saving file...';
+      case 'done':
+        return `Saved ${this.progress.completed} of ${this.progress.total}`;
+      case 'error':
+        return 'Download failed';
     }
   }
 
-  private extractFilename(response: Response): string | null {
-    const dispo = response.headers.get('Content-Disposition');
-    if (!dispo) return null;
-    const match = /filename="?([^"]+)"?/i.exec(dispo);
-    return match ? match[1] : null;
+  /** 0–100 progress for the progress bar. */
+  get progressPercent(): number {
+    if (!this.progress) return 0;
+    switch (this.progress.phase) {
+      case 'manifest': return 5;
+      case 'downloading':
+        return this.progress.total === 0
+          ? 100
+          : Math.min(95, 5 + (this.progress.completed / this.progress.total) * 85);
+      case 'zipping': return 92;
+      case 'saving': return 97;
+      case 'done': return 100;
+      default: return 0;
+    }
+  }
+
+  /** Comma-separated list of failed filenames for the partial-failure banner. */
+  get failedFileNames(): string {
+    return this.partialFailures.map(f => f.fileName).join(', ');
   }
 }
