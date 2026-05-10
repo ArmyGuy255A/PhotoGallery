@@ -7,6 +7,7 @@ import { NEVER, of } from 'rxjs';
 
 import { AlbumDetailComponent } from './album-detail.component';
 import { CartService } from '../../services/cart.service';
+import { AuthService } from '../../services/auth.service';
 import { environment } from '../../../environments/environment';
 
 interface Photo {
@@ -23,6 +24,12 @@ class CartServiceStub {
   addItem = jasmine.createSpy('addItem').and.returnValue(true);
   contains = jasmine.createSpy('contains').and.returnValue(false);
   removeItem = jasmine.createSpy('removeItem');
+}
+
+class AuthServiceStub {
+  admin = true;
+  isAdmin(): boolean { return this.admin; }
+  getUser() { return this.admin ? { id: 'admin-1', email: 'a@b', roles: ['Admin'] } : null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +50,7 @@ describe('AlbumDetailComponent — cart integration (#58)', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: CartService, useValue: cart },
+        { provide: AuthService, useClass: AuthServiceStub },
         { provide: ActivatedRoute, useValue: { params: of({ id: 'A1' }) } }
       ]
     }).compileComponents();
@@ -122,6 +130,46 @@ describe('AlbumDetailComponent — cart integration (#58)', () => {
     expect(arg.sourceAlbumId).toBe('A1');
     expect(arg.sourceAlbumTitle).toBe('My Album');
   });
+
+  describe('per-photo delete (issue #113)', () => {
+    function deleteBtn() {
+      return fixture.debugElement.query(By.css('[data-testid="photo-delete-btn"]'));
+    }
+
+    it('renders the ✕ delete button for admins', () => {
+      expect(deleteBtn()).toBeTruthy();
+    });
+
+    it('does NOT issue DELETE when the user cancels the confirm', () => {
+      spyOn(window, 'confirm').and.returnValue(false);
+      deleteBtn().triggerEventHandler('click', new Event('click'));
+      httpMock.expectNone(`${environment.apiUrl}/api/photos/p1`);
+      expect(fixture.componentInstance.photos.length).toBe(1);
+    });
+
+    it('issues DELETE and removes the photo from the local list on success', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      deleteBtn().triggerEventHandler('click', new Event('click'));
+
+      const req = httpMock.expectOne(`${environment.apiUrl}/api/photos/p1`);
+      expect(req.request.method).toBe('DELETE');
+      req.flush(null, { status: 204, statusText: 'No Content' });
+
+      expect(fixture.componentInstance.photos.find(p => p.id === 'p1')).toBeUndefined();
+    });
+
+    it('keeps the photo in the list when the server returns an error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      deleteBtn().triggerEventHandler('click', new Event('click'));
+
+      const req = httpMock.expectOne(`${environment.apiUrl}/api/photos/p1`);
+      req.flush('boom', { status: 500, statusText: 'Server Error' });
+
+      expect(fixture.componentInstance.photos.length).toBe(1);
+      expect(window.alert).toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -136,6 +184,8 @@ describe('AlbumDetailComponent', () => {
     await TestBed.configureTestingModule({
       imports: [AlbumDetailComponent, HttpClientTestingModule],
       providers: [
+        provideRouter([]),
+        { provide: AuthService, useClass: AuthServiceStub },
         // params: NEVER so ngOnInit's subscribe never fires and we can set state by hand.
         { provide: ActivatedRoute, useValue: { params: NEVER } }
       ]

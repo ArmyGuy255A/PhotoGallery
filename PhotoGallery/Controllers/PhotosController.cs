@@ -307,6 +307,74 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
+    /// Delete a single photo (owner or admin only).
+    /// Removes every storage object under <c>photogallery/{albumId}/{photoId}/</c>
+    /// (originals, every quality variant, watermarked variants) and then deletes
+    /// the <see cref="Photo"/> row. EF Core cascades clean up the related
+    /// <c>PhotoVersion</c>, <c>PhotoFile</c>, <c>PhotoVersionUrl</c>,
+    /// <c>ProcessingQueueItem</c>, <c>Download</c>, and <c>UserCartItem</c>
+    /// rows (configured in <c>PhotoConfiguration</c> / <c>DownloadConfiguration</c> /
+    /// <c>UserCartItemConfiguration</c>).
+    ///
+    /// Reference: issue #113.
+    /// </summary>
+    [Authorize]
+    [HttpDelete("{photoId:guid}")]
+    public async Task<IActionResult> DeletePhoto(Guid photoId)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var photo = await _photoRepository.GetByIdAsync(photoId);
+        if (photo == null)
+            return NotFound();
+
+        var album = await _albumRepository.GetByIdAsync(photo.AlbumId);
+        if (album == null)
+            return NotFound();
+
+        // Owner or Admin only. Saved-access-code holders cannot delete.
+        var isAdmin = User.IsInRole("Admin");
+        if (!isAdmin && album.OwnerId != userId)
+            return Forbid();
+
+        // Best-effort storage cleanup. We collect failures but never block the
+        // DB delete on them — orphan blobs are picked up by
+        // StorageConsistencyService on its next sweep.
+        var prefix = $"photogallery/{photo.AlbumId}/{photoId}/";
+        try
+        {
+            var keys = await _storageProvider.ListAsync(prefix);
+            foreach (var key in keys)
+            {
+                try { await _storageProvider.DeleteAsync(key); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to delete storage object {Key} while deleting photo {PhotoId} (continuing)",
+                        key, photoId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to list storage objects under {Prefix} while deleting photo {PhotoId} (continuing — orphans will be picked up by the consistency sweep)",
+                prefix, photoId);
+        }
+
+        await _photoRepository.DeleteAsync(photo);
+        await _photoRepository.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "User {UserId} (admin={IsAdmin}) deleted photo {PhotoId} from album {AlbumId}",
+            userId, isAdmin, photoId, photo.AlbumId);
+
+        return NoContent();
+    }
+
+    /// <summary>
     /// Admin-only: synchronously trigger a storage/DB consistency reconciliation cycle (D007).
     /// Returns the per-cycle summary report once reconciliation completes.
     ///

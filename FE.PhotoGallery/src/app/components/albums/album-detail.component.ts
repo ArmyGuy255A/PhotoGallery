@@ -10,6 +10,7 @@ import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.comp
 import { Subject, interval, Observable } from 'rxjs';
 import { takeUntil, switchMap } from 'rxjs/operators';
 import { CartService, CartQuality } from '../../services/cart.service';
+import { AuthService } from '../../services/auth.service';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 
 interface Photo {
@@ -77,6 +78,16 @@ interface Album {
               <div *ngFor="let photo of photos; let i = index" class="photo-card" data-testid="photo-card"
                    [attr.data-photo-id]="photo.id"
                    role="button" tabindex="0">
+                <!-- Issue #113: per-photo delete (✕) in the top-right, gated to
+                     album owners + admins. Confirmation handled in
+                     onDeletePhoto so the click handler is a one-liner. -->
+                <button
+                  *ngIf="canDeletePhotos"
+                  type="button"
+                  class="photo-delete-btn"
+                  (click)="onDeletePhoto(photo); $event.stopPropagation()"
+                  [attr.aria-label]="'Delete ' + photo.fileName"
+                  data-testid="photo-delete-btn">✕</button>
                 <div class="photo-thumb-clickable"
                      (click)="openModal(i)"
                      (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)">
@@ -316,8 +327,9 @@ interface Album {
 
     .photos-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 15px;
+      /* Issue #113: bump from 150px → 220px so cards aren't cramped. */
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
     }
 
     .photo-card {
@@ -337,8 +349,10 @@ interface Album {
 
     .photo-status-badge {
       position: absolute;
+      /* Issue #113: moved to top-left so it doesn't collide with the new
+         delete (✕) button at top-right. */
       top: 5px;
-      right: 5px;
+      left: 5px;
       width: 24px;
       height: 24px;
       border-radius: 50%;
@@ -565,30 +579,43 @@ interface Album {
 
     .photo-cart-actions {
       display: flex;
-      gap: 6px;
-      align-items: center;
-      padding: 6px 8px 10px;
+      gap: 8px;
+      align-items: stretch;
+      padding: 8px 10px 12px;
     }
     .photo-cart-actions .quality-select {
-      flex: 0 0 auto;
-      padding: 4px 6px;
+      flex: 0 0 88px;
+      min-width: 0;
+      padding: 6px 8px;
       border: 1px solid #ccc;
-      border-radius: 4px;
+      border-radius: 6px;
       font-size: 12px;
-    }
-    .photo-cart-actions .add-cart-btn {
-      flex: 1;
       background: white;
+      color: #333;
+    }
+    /* Issue #113: deliberate button shape — fills the rest of the row,
+       consistent rounded rectangle, fixed min-height so the action looks
+       intentional next to the quality picker. */
+    .photo-cart-actions .add-cart-btn {
+      flex: 1 1 auto;
+      min-height: 30px;
+      background: #0066cc;
       border: 1px solid #0066cc;
-      color: #0066cc;
-      padding: 4px 8px;
-      border-radius: 4px;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
       cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
     }
     .photo-cart-actions .add-cart-btn:hover {
-      background: #e3f2fd;
+      background: #0052a3;
+      border-color: #0052a3;
     }
     /* Issue #108: in-cart state shows a Remove affordance (red) so the user
        can undo from the card itself instead of being stuck with a disabled
@@ -600,6 +627,36 @@ interface Album {
     }
     .photo-cart-actions .add-cart-btn.in-cart:hover {
       background: #fdecea;
+    }
+
+    /* Issue #113: per-photo delete (✕) in the top-right of every card. */
+    .photo-delete-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0, 0, 0, 0.55);
+      color: white;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s;
+      z-index: 20;
+    }
+    .photo-card:hover .photo-delete-btn,
+    .photo-delete-btn:focus-visible {
+      opacity: 1;
+      outline: none;
+    }
+    .photo-delete-btn:hover {
+      background: #c62828;
     }
   `]
 })
@@ -627,7 +684,8 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private http: HttpClient,
-    private cart: CartService
+    private cart: CartService,
+    private auth: AuthService
   ) {}
 
   ngOnInit(): void {
@@ -643,6 +701,52 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  /**
+   * Issue #113: per-photo delete is available to album owners and admins.
+   * The current FE doesn't fetch the owner id alongside the album payload
+   * for every viewer, but the backend re-authorises the delete request, so
+   * surfacing the affordance to all signed-in viewers of /albums/:id is
+   * safe: a non-owner click would surface a friendly error toast (see
+   * onDeletePhoto's error branch). For now we gate it on Admin OR album
+   * ownership (when the album payload includes ownerId).
+   */
+  get canDeletePhotos(): boolean {
+    if (this.auth.isAdmin()) return true;
+    const userId = this.auth.getUser()?.id;
+    return !!userId && !!this.album && this.album.ownerId === userId;
+  }
+
+  /**
+   * Issue #113: delete a single photo. Prompts the user before issuing
+   * <c>DELETE /api/photos/{id}</c>. On success splices the photo out of
+   * the local list (no full reload). On failure surfaces a friendly error
+   * via window.alert — same pattern as onSaveToAccount.
+   */
+  onDeletePhoto(photo: Photo): void {
+    if (!photo?.id) return;
+    if (typeof confirm === 'function' &&
+        !confirm(`Delete "${photo.fileName}"? This cannot be undone.`)) {
+      return;
+    }
+    const apiUrl = environment.apiUrl || '';
+    this.http.delete(`${apiUrl}/api/photos/${photo.id}`)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: () => {
+          this.photos = this.photos.filter(p => p.id !== photo.id);
+        },
+        error: (err) => {
+          console.error('Failed to delete photo', err);
+          const msg = err?.status === 403
+            ? 'You do not have permission to delete this photo.'
+            : err?.status === 404
+              ? 'Photo not found. It may have already been deleted.'
+              : 'Failed to delete photo. Please try again.';
+          if (typeof alert === 'function') alert(msg);
+        }
+      });
   }
 
   private startPhotoStatusPolling(): void {

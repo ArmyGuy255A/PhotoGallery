@@ -32,9 +32,14 @@ export class GlobalStateService {
   private readonly _mobileQueryListener: () => void;
 
   constructor() {
+    // Issue #112: do NOT propagate `prefers-color-scheme: dark` to the
+    // document — the app's visual design is light-mode only, and surfacing
+    // the dark UA palette to native form controls clashes with the white
+    // cards. `styles.scss` pins `:root { color-scheme: light }`. If we ever
+    // ship a real dark theme this can become a feature flag instead.
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     this.darkMode = prefersDark;
-    document.documentElement.style.colorScheme = prefersDark ? 'dark' : 'light';
+    document.documentElement.style.colorScheme = 'light';
 
     // Check if the user is on a mobile device
     const media = inject(MediaMatcher);

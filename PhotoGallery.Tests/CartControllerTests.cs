@@ -525,6 +525,11 @@ public class CartControllerTests
         var headerVal = controller.Response.Headers["X-Skipped-Photo-Ids"].ToString();
         Assert.Contains(otherPhoto.Id.ToString(), headerVal);
         Assert.DoesNotContain(ownedPhoto.Id.ToString(), headerVal);
+
+        // Issue #111: after a successful stream the controller must clear
+        // every row it considered — streamed + skipped — so the next
+        // download cycle doesn't re-ship the same items.
+        Assert.Empty(db.UserCartItems);
     }
 
     [Fact]
@@ -554,6 +559,10 @@ public class CartControllerTests
         cartZip.Verify(s => s.StreamCartZipAsync(
             It.IsAny<IReadOnlyList<CartZipItem>>(), It.IsAny<Stream>(),
             It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
+
+        // Issue #111: the 403 path must NOT clear the cart — every item
+        // should remain so the user can retry once authorisation is restored.
+        Assert.Single(db.UserCartItems);
     }
 
     [Fact]

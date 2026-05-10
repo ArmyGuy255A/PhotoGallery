@@ -1,8 +1,19 @@
 /* Bootstrap and Angular Styles */
 @import 'bootstrap/dist/css/bootstrap.min.css';
 
-html, body { 
-  height: 100%; 
+/*
+ * Issue #112: pin the document to the light UA palette regardless of the OS
+ * preference. The app's visual design only supports a light theme — leaving
+ * `color-scheme` unset (or letting GlobalStateService set it to `dark`) makes
+ * browsers paint native form controls (inputs, selects, textareas, date
+ * pickers) with the dark UA palette, which clashes with the white cards.
+ */
+:root {
+  color-scheme: light;
+}
+
+html, body {
+  height: 100%;
   margin: 0;
   padding: 0;
 }
@@ -16,6 +27,24 @@ body {
 /* Global styles */
 * {
   box-sizing: border-box;
+}
+
+/*
+ * Issue #112: explicit light palette on native form controls so the dark UA
+ * default never bleeds through, even on browsers that ignore `color-scheme`.
+ */
+input,
+select,
+textarea {
+  background-color: #fff;
+  color: #333;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background-color: #f5f5f5;
+  color: #888;
 }
 
 button {
