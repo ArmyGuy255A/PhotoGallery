@@ -8,18 +8,29 @@ namespace PhotoGallery.Enums;
 /// - Low: 800x800 (mobile viewing)
 /// - Medium: 1920x1920 (web/email)
 /// - High: 3840x3840 (high resolution, print-ready)
+/// - Original: untouched source resolution (paid checkout / archival download)
+///
+/// Numeric values are kept in lock-step with <see cref="PhotoGallery.Models.PhotoFileQuality"/>
+/// so the two enums can be cast back and forth without drift.
 /// </summary>
 public enum QualityType
 {
     /// <summary>Thumbnail size: 200x200px, for UI previews</summary>
     Thumbnail = 0,
-    
+
     /// <summary>Low quality: 800x800px, for mobile viewing</summary>
     Low = 1,
-    
+
     /// <summary>Medium quality: 1920x1920px, for web and email</summary>
     Medium = 2,
-    
+
     /// <summary>High quality: 3840x3840px, for print and high-resolution downloads</summary>
-    High = 3
+    High = 3,
+
+    /// <summary>
+    /// Original (untouched source) resolution. Used by paid-checkout / archival
+    /// download flows. Storage key: <c>{albumId}/{photoId}/original.jpg</c>
+    /// (the same object the upload pipeline writes). Never watermarked.
+    /// </summary>
+    Original = 4
 }
