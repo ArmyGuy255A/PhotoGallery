@@ -830,5 +830,5 @@ album.AddPhoto(photo);  // Domain event raised internally
 - `scratch-discipline` — layering experiments / probes in `.copilot/scratch/<task-id>/`.
 - `secret-hygiene` — no secrets in any layer.
 - `commit-conventions` — canonical commit-message format.
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable layering decisions.

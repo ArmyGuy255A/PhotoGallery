@@ -1226,5 +1226,5 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `scratch-discipline` — auth probes / OIDC test apps in .copilot/scratch/<task-id>/.
 - `secret-hygiene` — never commit signing keys, client secrets, or tokens. The `secret-scan` hook pre-checks writes.
 - `commit-conventions` — canonical commit-message format.
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable auth decisions (IDP set, claim shape, lifetimes).

@@ -601,9 +601,9 @@ name: E2E Tests
 
 on:
   push:
-    branches: [main, develop]
+    branches: [trial, main]
   pull_request:
-    branches: [main]
+    branches: [trial, main]
 
 jobs:
   test:
@@ -711,7 +711,7 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `scratch-discipline` — QA probes / repro scripts in .copilot/scratch/<task-id>/.
 - `secret-hygiene` — never hardcode test passwords / tokens in committed e2e specs.
 - `commit-conventions` — canonical commit-message format.
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable QA-policy decisions (browser matrix, release criteria).
 
 

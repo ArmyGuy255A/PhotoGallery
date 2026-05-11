@@ -1622,3 +1622,125 @@ deduplicates, and feeds `WithOrigins(...)` so multi-origin support is real
   `List<string> AllowedOrigins`
 - `PhotoGallery/Program.cs` — multi-origin union for `AllowFrontendDev`
 - `Documentation/Runbooks/local-azure-dev.md` — "Frontend hosting" section
+
+
+---
+
+## D016: Release-Driven Deployment — `trial` → `main` cuts the next `A.B.C.D` Release
+
+**Status:** ✅ Accepted (2026-05-10)
+**Decision owner:** pg-devops-cicd
+**Related:** D013 (compute), D014 (ACR), D015 (OIDC), D015-SWA (frontend hosting)
+
+### Context
+
+Through D015 we had every merge into `main` automatically build + push images to ACR and roll a new ACA revision; the Angular SPA deployed to SWA on every FE-touching merge to `main`. That's "main = production". It worked, but it collapsed two ideas that should be separate:
+
+1. **"Code is merged"** — reviewed, tested, integrated.
+2. **"Code is released"** — a deliberate, versioned, deployable snapshot.
+
+With the API exposed at the cloud edge and a real DB behind it, conflating those two means every speculative merge ships to prod. There's no labelled artifact to anchor rollback to, no versioned changelog, and no breathing room between integration and exposure.
+
+### Decision
+
+Split the lifecycle:
+
+```
+feature branch  ─PR─▶  trial  ──PR (only allowed source)──▶  main  ──tag + release──▶  deploy
+   (u/<actor>/<type>/<scope>)        (default work)                  (release-only)         (ACR + ACA + SWA)
+```
+
+- **`trial`** is the integration branch. All feature branches PR into it. CI (build + test + lint + vuln scan) runs on push + PR. **No publish, no deploy.**
+- **`main`** is release-only and protected: the *only* allowed source for an incoming PR is `trial`. No direct pushes. Every merge into `main` auto-cuts a release.
+- Releases are versioned `A.B.C.D` (first release: `1.0.0.0`), where the segment to bump is picked from the merging PR's labels:
+  - `release:major`    → bumps **A** (resets B/C/D)
+  - `release:minor`    → bumps **B** (resets C/D)
+  - `release:revision` → bumps **C** (resets D)
+  - `release:patch`    → bumps **D** (also the default if no `release:*` label is present)
+- The `release: published` event on the GitHub Release drives the actual build + deploy. ACR images get **three** tags per push: `:<version>`, `:<sha>`, `:latest`. ACA points at the version tag so rollback is `az containerapp update --image ...:vA.B.C.D` against a prior version.
+
+### Workflow architecture
+
+| Workflow file | Trigger | What it does |
+|---|---|---|
+| `.github/workflows/build.yml` | push/PR `trial` + `main` | Backend tests, frontend tests, warning audit, vuln scan. **No** image build, **no** deploy. |
+| `.github/workflows/cut-release.yml` | push `main` | Reads merging PR's `release:*` label → bumps `A.B.C.D` → annotated tag + `gh release create --generate-notes`. |
+| `.github/workflows/release.yml` | `release: { types: [published] }` | Checkout release tag → build & push backend + frontend ACR images with 3 tags each → `az containerapp update` to the version tag → deploy SPA bundle to SWA. |
+| `.github/workflows/validate-pr-base.yml` | `pull_request: { branches: [main] }` | Fails the check unless `head.ref == 'trial'`. Required status check on `main`. |
+| `.github/workflows/deploy-frontend.yml` | — | **Deleted.** Folded into `release.yml`. |
+
+### Branch protection on `main`
+
+Required status checks (set via `gh api PUT repos/.../branches/main/protection`):
+
+- `Backend build + tests`
+- `Frontend build + tests`
+- `Backend warning audit`
+- `Validate PR base`
+
+Plus: `allow_force_pushes = false`, `allow_deletions = false`, `restrictions = null` (no user pinning), `enforce_admins = false` (so the human can emergency-merge), no required reviews (solo repo).
+
+### Rationale
+
+- **Decouples merged from deployed.** A passing PR into `trial` is not a deploy; releases are a deliberate act with a versioned anchor.
+- **Versioned rollback.** Every deployed ACA revision is bound to an immutable `:vA.B.C.D` image tag. Rollback is a one-liner.
+- **No new long-lived credentials.** Reuses the GitHub OIDC SP from D015 (already holds AcrPush + Contributor on the Container App).
+- **Single-source release notes.** `gh release create --generate-notes` collates merged PR titles since the last tag.
+- **Cheap to walk back.** If we hate this in a month, deleting `cut-release.yml` + `release.yml` and pointing the deploy bits back at `build.yml` restores the old flow in one PR.
+
+### Versioning convention
+
+`A.B.C.D` (not stock SemVer) because PhotoGallery treats "feature" (B) and "refactor of an existing feature" (C) as different shapes of change. The label-driven model lets the human encode intent at PR time without rewriting commit messages or threading semver hints through git history.
+
+Default = `patch` (D). If a PR ships without any `release:*` label, we still produce a release — a bug-fix-sized one. This is the most common case, so labelling is opt-in for anything other than patch.
+
+### One-time setup runbook (post-merge)
+
+```bash
+# 1. Create the trial branch off main (if it doesn't exist yet).
+git checkout main && git pull
+git checkout -b trial && git push -u origin trial
+
+# 2. Create the four release labels (idempotent).
+gh label create release:major    --color B60205 --description "Bump A in A.B.C.D"     || true
+gh label create release:minor    --color D93F0B --description "Bump B in A.B.C.D"     || true
+gh label create release:revision --color FBCA04 --description "Bump C in A.B.C.D"     || true
+gh label create release:patch    --color 0E8A16 --description "Bump D in A.B.C.D"     || true
+
+# 3. Lock down main. PRs must come from trial, status checks required, no force-push.
+gh api -X PUT repos/ArmyGuy255A/PhotoGallery/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Backend build + tests",
+      "Frontend build + tests",
+      "Backend warning audit",
+      "Source branch must be 'trial'"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": { "required_approving_review_count": 0 },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+```
+
+### Alternatives considered
+
+- **Conventional Commits drive the bump** (`feat!`/`BREAKING CHANGE` → major, `feat` → minor, `fix` → patch). Rejected — A.B.C.D's 4-segment scheme doesn't map cleanly to 3-segment SemVer rules, and "revision of an existing feature" is a category we want to track distinctly.
+- **release-drafter draft-then-publish.** Rejected for now — adds a step before deploy, more moving parts. `--generate-notes` is good enough; can swap in release-drafter later for richer templates.
+- **Manual `gh release create` on every release.** Rejected — easy to forget, and the value of the trial → main merge being the release boundary is exactly that it's automatic.
+- **Tag-then-publish on `main` directly, skipping `trial`.** Rejected — the protective value of `trial` is the integration buffer. Without it, the "merged ≠ deployed" idea is enforced only by convention, not by branch policy.
+
+### Implementation
+
+- `.github/workflows/build.yml` — triggers updated to `[trial, main]`; `build-docker` and `deploy-backend` jobs removed (they moved to `release.yml`).
+- `.github/workflows/cut-release.yml` — new.
+- `.github/workflows/release.yml` — new; replaces `deploy-frontend.yml`.
+- `.github/workflows/validate-pr-base.yml` — new.
+- `.github/workflows/deploy-frontend.yml` — deleted.
+- Skill updates (`skills/*/SKILL.md`) — `branch-strategy-u-prefix` mentions now target `trial`, not `main`.

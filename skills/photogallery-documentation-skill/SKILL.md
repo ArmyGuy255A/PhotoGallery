@@ -244,6 +244,6 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `scratch-discipline` — doc drafts / outlines in .copilot/scratch/<task-id>/ until ready.
 - `secret-hygiene` — no secrets, internal URLs, or PII in committed docs.
 - `commit-conventions` — canonical commit-message format (esp. `docs:` prefix).
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable doc-policy decisions.
 - `markdown-doc-formatter` — applies to every Markdown file in the repo.

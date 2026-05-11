@@ -1171,5 +1171,5 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `scratch-discipline` — temp/debug files MUST go in `.copilot/scratch/<task-id>/`.
 - `secret-hygiene` — never commit secrets or tokens. The `secret-scan` hook pre-checks writes.
 - `commit-conventions` — follow the canonical commit-message format.
-- `branch-strategy-u-prefix` — all work on `u/<actor>/<type>/<scope>` branches; never commit to `main`/`master`/`develop`.
+- `branch-strategy-u-prefix` — all work on `u/<actor>/<type>/<scope>` branches; **target `trial`**, never `main`/`master`. The only PR allowed into `main` is from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016 (release-driven deployment).
 - `copilot-memory-update` — when a durable cross-session decision is made, update GitHub Copilot personal memory.

@@ -2,9 +2,9 @@ name: Build & Test
 
 on:
   push:
-    branches: [main, develop]
+    branches: [trial, main]
   pull_request:
-    branches: [main, develop]
+    branches: [trial, main]
 
 jobs:
   backend:
@@ -124,100 +124,6 @@ jobs:
         run: dotnet restore PhotoGallery.sln
       - name: Build with warnings as errors
         run: dotnet build PhotoGallery.sln --no-restore /p:TreatWarningsAsErrors=true
-
-  build-docker:
-    name: Docker images
-    needs: [backend, frontend]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # OIDC token issuance for azure/login@v2 — see DESIGN_DECISIONS.md D015.
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Workload-Identity-Federation login. AZURE_CLIENT_ID / AZURE_TENANT_ID /
-      # AZURE_SUBSCRIPTION_ID are repository variables produced by
-      # `terraform output` after the github_oidc module applies.
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # `az acr login` exchanges the AAD token for an ACR refresh token and
-      # writes it to the local docker config, which docker/build-push-action
-      # then picks up. No registry username/password ever materialises.
-      - name: ACR login
-        run: az acr login --name "${ACR_LOGIN_SERVER%%.*}"
-
-      # Build context is the repo root because Dockerfile.backend now copies
-      # multiple sub-projects (Authentication/, Configuration/, PhotoGallery/).
-      - name: Build & push backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.backend
-          push: true
-          tags: |
-            ${{ env.ACR_LOGIN_SERVER }}/photogallery-backend:latest
-            ${{ env.ACR_LOGIN_SERVER }}/photogallery-backend:${{ github.sha }}
-
-      - name: Build & push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./FE.PhotoGallery
-          file: ./FE.PhotoGallery/Dockerfile
-          push: true
-          tags: |
-            ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:latest
-            ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:${{ github.sha }}
-
-  deploy-backend:
-    name: Deploy backend (ACA)
-    needs: [build-docker]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # OIDC token issuance for azure/login@v2 — see DESIGN_DECISIONS.md D015.
-    # The github-actions SP holds Contributor on the Container App resource
-    # (scoped narrowly via terraform/dev/main.tf), which is the minimum
-    # required to update its image and roll a new revision.
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # Pin the immutable SHA tag (not :latest) so each revision is
-      # reproducible and rollback is just `az containerapp revision set-active`
-      # against a prior revision name.
-      - name: Update Container App image
-        run: |
-          az containerapp update \
-            --name "${{ vars.ACA_BACKEND_NAME }}" \
-            --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
-            --image "${{ vars.ACR_LOGIN_SERVER }}/photogallery-backend:${{ github.sha }}"
-
-      # Surface the active revision so the run summary tells us what's live.
-      - name: Show active revision
-        run: |
-          az containerapp revision list \
-            --name "${{ vars.ACA_BACKEND_NAME }}" \
-            --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
-            --query "[?properties.active].{name:name, image:properties.template.containers[0].image, traffic:properties.trafficWeight, health:properties.healthState}" \
-            --output table
 
   security-scan:
     name: NuGet vulnerability scan (informational)

@@ -1,0 +1,131 @@
+name: Cut Release
+
+# When a PR merges trial → main, compute the next A.B.C.D version from the
+# merging PR's labels and create a tagged GitHub Release. The `release:
+# published` event then drives the actual build+deploy (see release.yml).
+#
+# See DESIGN_DECISIONS.md D016 (release-driven deployment) for rationale.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write       # create tag, push tag, create release
+  pull-requests: read   # read labels of the merging PR
+
+jobs:
+  cut-release:
+    name: Cut release
+    runs-on: ubuntu-latest
+    # Skip if the head commit message indicates an empty/no-op merge. We don't
+    # gate on the merge commit's first parent — that would silently skip
+    # commits pushed by an admin override. Better to release every push to
+    # main and let `gh release create` decide if the tag already exists.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # need full tag history for the bump calculation
+
+      # Resolve the just-merged PR (if any) via the commit SHA. squash-merges,
+      # merge-commits, and rebase-merges all expose the PR via the search API
+      # so this is robust to the repo's merge strategy.
+      - name: Find merging PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `gh pr list --search` returns merged PRs whose head/merge SHA matches.
+          pr_json=$(gh pr list --state merged --search "${{ github.sha }}" \
+            --json number,labels,title,headRefName --limit 1)
+          echo "raw=$pr_json"
+          pr_number=$(echo "$pr_json" | jq -r '.[0].number // empty')
+          labels=$(echo "$pr_json" | jq -r '.[0].labels[]?.name // empty' | tr '\n' ',' | sed 's/,$//')
+          head_ref=$(echo "$pr_json" | jq -r '.[0].headRefName // empty')
+          title=$(echo "$pr_json" | jq -r '.[0].title // empty')
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      # Decide which version segment to bump. The mapping:
+      #   release:major     → A (resets B, C, D)
+      #   release:minor     → B (resets C, D)
+      #   release:revision  → C (resets D)
+      #   release:patch     → D            ← default if no release:* label
+      - name: Compute next version
+        id: version
+        env:
+          LABELS: ${{ steps.pr.outputs.labels }}
+        run: |
+          set -euo pipefail
+
+          # Find the most recent semver-shaped tag. First release seeds at 1.0.0.0.
+          latest=$(git tag --list 'v*.*.*.*' --sort=-v:refname | head -n 1)
+          if [ -z "$latest" ]; then
+            echo "No prior tag — first release seeds at v1.0.0.0"
+            echo "version=1.0.0.0" >> "$GITHUB_OUTPUT"
+            echo "tag=v1.0.0.0"    >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Strip the leading 'v' and split into A B C D.
+          IFS='.' read -r A B C D <<< "${latest#v}"
+
+          # Pick the bump segment from the PR labels. Most specific wins
+          # (major > minor > revision > patch) so a PR labelled with two by
+          # mistake gets the bigger bump rather than a silent default.
+          bump="patch"
+          case ",$LABELS," in
+            *,release:major,*)    bump="major" ;;
+            *,release:minor,*)    bump="minor" ;;
+            *,release:revision,*) bump="revision" ;;
+            *,release:patch,*)    bump="patch" ;;
+          esac
+          echo "Bump segment: $bump  (labels: '$LABELS')"
+
+          case "$bump" in
+            major)    A=$((A+1)); B=0;        C=0;        D=0 ;;
+            minor)    B=$((B+1)); C=0;        D=0 ;;
+            revision) C=$((C+1)); D=0 ;;
+            patch)    D=$((D+1)) ;;
+          esac
+
+          new="${A}.${B}.${C}.${D}"
+          echo "version=$new"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$new"     >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag and create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.version.outputs.tag }}
+          PR_NUM:   ${{ steps.pr.outputs.pr_number }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+        run: |
+          set -euo pipefail
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::warning ::Tag $TAG already exists — skipping release creation."
+            exit 0
+          fi
+
+          # Annotated tag points at the merge commit so the release page links
+          # back to the trial → main merge that triggered it.
+          msg="Release $TAG"
+          if [ -n "$PR_NUM" ]; then msg="$msg (from PR #$PR_NUM: $PR_TITLE)"; fi
+          git tag -a "$TAG" -m "$msg" "${{ github.sha }}"
+          git push origin "$TAG"
+
+          # --generate-notes builds release notes from PRs merged since the
+          # last tag. Sufficient for now; swap in release-drafter later if we
+          # want richer templates.
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "$TAG" \
+            --generate-notes

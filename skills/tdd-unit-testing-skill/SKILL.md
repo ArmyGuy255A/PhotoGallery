@@ -577,5 +577,5 @@ These copilot-dev-team meta-skills apply regardless of phase:
 - `scratch-discipline` — probe/spike code in .copilot/scratch/<task-id>/, not committed test files.
 - `secret-hygiene` — no secrets in test fixtures or appsettings.Test.json.
 - `commit-conventions` — canonical commit-message format.
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable test-policy decisions.
