@@ -1,9 +1,9 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
-import { Subject } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 import { CartService, CartQuality, CartItem } from '../../services/cart.service';
 import { AuthService } from '../../services/auth.service';
@@ -11,6 +11,7 @@ import { CartPanelComponent } from './cart-panel.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 import { environment } from '../../../environments/environment';
+import { PhotoPage, PhotoPageLoader } from '../../services/photo-page-loader';
 
 interface PublicPhoto {
   photoId: string;
@@ -116,8 +117,23 @@ interface CodeValidation {
           {{ toastMessage }}
         </div>
 
-        <div *ngIf="photos.length === 0" class="empty-message">
+        <div *ngIf="loader.isEmpty()" class="empty-message" data-testid="code-empty-photos">
           <p>No photos in this album yet.</p>
+        </div>
+
+        <!--
+          Phase 6 skeleton: 8 pulsing tiles while the first page is in flight,
+          so visitors hitting /code/:code on a slow connection don't briefly
+          see the "no photos" copy that drove the original bug report.
+        -->
+        <div *ngIf="loader.isLoading() && photos.length === 0" class="photo-grid skeleton-grid" data-testid="code-photos-skeleton">
+          <article *ngFor="let _ of skeletonSlots" class="photo-card skeleton-card" aria-hidden="true">
+            <div class="photo-thumb skeleton-thumb"></div>
+            <div class="photo-meta">
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line short"></div>
+            </div>
+          </article>
         </div>
 
         <div *ngIf="photos.length > 0" class="photo-grid">
@@ -151,6 +167,13 @@ interface CodeValidation {
             </div>
           </article>
         </div>
+
+        <!--
+          Phase 6 sentinel: an empty div the IntersectionObserver watches.
+          When it scrolls into view the next page is fetched. Rendered only
+          while the server still has more to send.
+        -->
+        <div #sentinel class="photo-grid-sentinel" *ngIf="loader.hasMore()" aria-hidden="true" data-testid="code-photos-sentinel"></div>
       </main>
 
       <app-photo-modal
@@ -469,12 +492,54 @@ interface CodeValidation {
       margin-bottom: 16px;
       font-size: 14px;
     }
+
+    /* Phase 6: skeleton + sentinel for the progressive grid. */
+    .skeleton-grid {
+      opacity: 0.7;
+    }
+    .skeleton-card {
+      cursor: default;
+      pointer-events: none;
+    }
+    .skeleton-thumb {
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+      background-size: 200% 100%;
+      animation: code-skeleton-pulse 1.4s ease-in-out infinite;
+    }
+    .skeleton-line {
+      height: 12px;
+      margin: 8px 0;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+      background-size: 200% 100%;
+      animation: code-skeleton-pulse 1.4s ease-in-out infinite;
+    }
+    .skeleton-line.short { width: 60%; }
+    @keyframes code-skeleton-pulse {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .photo-grid-sentinel {
+      width: 100%;
+      height: 1px;
+      margin-top: 24px;
+    }
   `]
 })
-export class CodeGalleryComponent implements OnInit, OnDestroy {
+export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   code = '';
   album: CodeValidation | null = null;
-  photos: PublicPhoto[] = [];
+  /**
+   * Phase 6: progressive photo loader. The grid renders straight off
+   * `loader.photos()` and grows as the IntersectionObserver sentinel fires.
+   */
+  loader = new PhotoPageLoader<PublicPhoto>(
+    (page, pageSize) => this.fetchPhotoPage(page, pageSize),
+    20,
+    (newItems) => this.seedQualitiesFor(newItems)
+  );
+  /** Skeleton-grid placeholder count (8 tiles while page 1 is in flight). */
+  readonly skeletonSlots: ReadonlyArray<unknown> = new Array(8);
   selectedQuality: Record<string, CartQuality> = {};
   /**
    * PhotoIds whose quality has been explicitly chosen by the user via the
@@ -502,6 +567,20 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   // Modal state
   modalOpen = false;
   modalIndex = 0;
+
+  @ViewChild('sentinel', { read: ElementRef }) sentinelRef?: ElementRef<HTMLElement>;
+  private intersectionObserver: IntersectionObserver | null = null;
+
+  /**
+   * Photos accumulated by the loader. Plain getter/setter so existing
+   * template + spec bindings keep working without churn.
+   */
+  get photos(): PublicPhoto[] {
+    return this.loader.photos();
+  }
+  set photos(value: PublicPhoto[]) {
+    this.loader.photos.set(value);
+  }
 
   private destroy$ = new Subject<void>();
   /** Snapshot of cart photoIds (across all qualities) — drives modal isInCart and Select-All toggle state. */
@@ -540,10 +619,41 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.intersectionObserver?.disconnect();
+    this.intersectionObserver = null;
+    this.loader.destroy();
     this.destroy$.next();
     this.destroy$.complete();
     if (this.toastTimer !== null) {
       clearTimeout(this.toastTimer);
+    }
+  }
+
+  ngAfterViewInit(): void {
+    this.setupSentinelObserver();
+  }
+
+  /**
+   * Wires the IntersectionObserver to the bottom-of-grid sentinel. Observer
+   * setup is best-effort: callers in jsdom-style test environments without
+   * IntersectionObserver fall through to a noop and rely on direct
+   * `loader.loadNext()` calls in the specs.
+   */
+  private setupSentinelObserver(): void {
+    if (typeof IntersectionObserver === 'undefined') return;
+    this.intersectionObserver = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        if (e.isIntersecting && this.code) {
+          this.loader.loadNext();
+        }
+      }
+    }, { rootMargin: '200px' });
+    this.observeSentinelIfPresent();
+  }
+
+  private observeSentinelIfPresent(): void {
+    if (this.intersectionObserver && this.sentinelRef?.nativeElement) {
+      this.intersectionObserver.observe(this.sentinelRef.nativeElement);
     }
   }
 
@@ -784,26 +894,32 @@ export class CodeGalleryComponent implements OnInit, OnDestroy {
   }
 
   private loadPhotos(): void {
+    this.loader.reset();
+    this.loader.loadNext();
+    queueMicrotask(() => this.observeSentinelIfPresent());
+  }
+
+  /**
+   * Seed selectedQuality from the current defaultQuality for any photo the
+   * user has not explicitly overridden. Called by the loader after each page
+   * lands so streaming pages keep the dropdowns in sync.
+   */
+  private seedQualitiesFor(newItems: PublicPhoto[]): void {
+    for (const p of newItems) {
+      if (!this.qualityOverrides.has(p.photoId)) {
+        this.selectedQuality[p.photoId] = this.defaultQuality;
+      }
+    }
+  }
+
+  /**
+   * Phase 6: per-page HTTP fetcher used by the {@link PhotoPageLoader}. Hits
+   * the public access-code endpoint, which returns short-lived (15-min)
+   * pre-signed thumbnail URLs scoped to the items on this page.
+   */
+  private fetchPhotoPage(page: number, pageSize: number): Observable<PhotoPage<PublicPhoto>> {
     const apiUrl = environment.apiUrl || '';
-    this.http.get<{ photos: PublicPhoto[]; totalCount: number; page: number; pageSize: number; hasMore: boolean }>(
-      `${apiUrl}/api/code/${this.code}/photos`
-    )
-      .pipe(takeUntil(this.destroy$))
-      .subscribe({
-        next: (data) => {
-          this.photos = data?.photos ?? [];
-          // Seed per-photo selectedQuality from the current defaultQuality for any
-          // photo that has NOT been individually overridden. Ensures the visible
-          // <select> value matches what onAddToCart will use.
-          for (const p of this.photos) {
-            if (!this.qualityOverrides.has(p.photoId)) {
-              this.selectedQuality[p.photoId] = this.defaultQuality;
-            }
-          }
-        },
-        error: (err) => {
-          console.error('Error loading photos:', err);
-        }
-      });
+    const url = `${apiUrl}/api/code/${this.code}/photos?page=${page}&pageSize=${pageSize}`;
+    return this.http.get<PhotoPage<PublicPhoto>>(url);
   }
 }

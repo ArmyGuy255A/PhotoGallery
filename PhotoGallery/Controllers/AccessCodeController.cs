@@ -117,8 +117,9 @@ public class AccessCodeController : ControllerBase
         // Use scoped query (not full table scan)
         var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(accessCode.AlbumId);
 
-        // Sort: newest first
-        var ordered = albumPhotos.OrderByDescending(p => p.UploadDate).ToList();
+        // Sort: FileName ASC so DSC_8000.JPG precedes DSC_8001.JPG. Stable order is
+        // required for progressive paging — see AlbumsController for the same rationale.
+        var ordered = albumPhotos.OrderBy(p => p.FileName, StringComparer.OrdinalIgnoreCase).ToList();
         var totalCount = ordered.Count;
 
         var (effectivePage, effectivePageSize) = NormalizePagination(page, pageSize, totalCount);
@@ -162,7 +163,7 @@ public class AccessCodeController : ControllerBase
 
         return Ok(new PaginatedPublicPhotosResponse
         {
-            Photos = result,
+            Items = result,
             TotalCount = totalCount,
             Page = effectivePage,
             PageSize = effectivePageSize,
@@ -172,16 +173,13 @@ public class AccessCodeController : ControllerBase
 
     /// <summary>
     /// Clamp pagination params. Same algorithm as AlbumsController.NormalizePagination.
+    /// Phase 6: when neither param is supplied callers still get a single default-sized
+    /// page (20) with a truthful <c>hasMore</c>, not the full album.
     /// </summary>
     private static (int page, int pageSize) NormalizePagination(int? page, int? pageSize, int totalCount)
     {
         const int defaultPageSize = 20;
         const int maxPageSize = 100;
-
-        if (!page.HasValue && !pageSize.HasValue)
-        {
-            return (1, Math.Max(totalCount, 1));
-        }
 
         var p = page.GetValueOrDefault(1);
         var s = pageSize.GetValueOrDefault(defaultPageSize);
@@ -423,7 +421,9 @@ public class PublicPhotoListDto
 /// </summary>
 public class PaginatedPublicPhotosResponse
 {
-    public List<PublicPhotoListDto> Photos { get; set; } = new();
+    /// <summary>The current page of photos. Serialized as <c>items</c> per Phase 6 contract.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("items")]
+    public List<PublicPhotoListDto> Items { get; set; } = new();
     public int TotalCount { get; set; }
     public int Page { get; set; }
     public int PageSize { get; set; }

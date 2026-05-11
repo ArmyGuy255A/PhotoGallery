@@ -122,8 +122,8 @@ describe('CodeGalleryComponent', () => {
         isValid: true
       });
       // Photos
-      httpMock.expectOne(`${apiBase}/api/code/TESTCODE/photos`).flush({
-        photos: [
+      httpMock.expectOne(req => req.url.startsWith(`${apiBase}/api/code/TESTCODE/photos`)).flush({
+        items: [
           { photoId: 'p1', fileName: 'a.jpg', uploadDate: '2025-01-01' },
           { photoId: 'p2', fileName: 'b.jpg', uploadDate: '2025-01-01' }
         ],

@@ -225,8 +225,10 @@ public class AlbumsController : ControllerBase
         // Album-scoped query (replaces full table scan)
         var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(albumGuid);
 
-        // Sort: newest first
-        var ordered = albumPhotos.OrderByDescending(p => p.UploadDate).ToList();
+        // Sort: FileName ASC so DSC_8000.JPG precedes DSC_8001.JPG. The server-side
+        // pin keeps page boundaries stable as the user scrolls. Client-side sort
+        // would scramble the streaming order across page fetches.
+        var ordered = albumPhotos.OrderBy(p => p.FileName, StringComparer.OrdinalIgnoreCase).ToList();
         var totalCount = ordered.Count;
 
         // Apply pagination if requested
@@ -264,7 +266,7 @@ public class AlbumsController : ControllerBase
 
         return Ok(new PaginatedPhotosResponse
         {
-            Photos = result,
+            Items = result,
             TotalCount = totalCount,
             Page = effectivePage,
             PageSize = effectivePageSize,
@@ -274,17 +276,16 @@ public class AlbumsController : ControllerBase
 
     /// <summary>
     /// Clamp pagination params to safe defaults. Used by both album and (future) other endpoints.
+    /// When neither <paramref name="page"/> nor <paramref name="pageSize"/> is supplied the
+    /// caller still receives a single default-sized page (20). This is deliberate — Phase 6
+    /// makes the photo grid progressive, so the full-list response is no longer the
+    /// implicit contract; older clients that omit pagination see the first 20 items and a
+    /// truthful <c>hasMore</c> rather than a silent full-table dump.
     /// </summary>
     private static (int page, int pageSize) NormalizePagination(int? page, int? pageSize, int totalCount)
     {
         const int defaultPageSize = 20;
         const int maxPageSize = 100;
-
-        // If neither provided, return everything (backward compat: page=1, size=totalCount)
-        if (!page.HasValue && !pageSize.HasValue)
-        {
-            return (1, Math.Max(totalCount, 1));
-        }
 
         var p = page.GetValueOrDefault(1);
         var s = pageSize.GetValueOrDefault(defaultPageSize);
@@ -541,7 +542,9 @@ public class PhotoListDto
 /// </summary>
 public class PaginatedPhotosResponse
 {
-    public List<PhotoListDto> Photos { get; set; } = new();
+    /// <summary>The current page of photos. Serialized as <c>items</c> per Phase 6 contract.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("items")]
+    public List<PhotoListDto> Items { get; set; } = new();
     public int TotalCount { get; set; }
     public int Page { get; set; }
     public int PageSize { get; set; }
