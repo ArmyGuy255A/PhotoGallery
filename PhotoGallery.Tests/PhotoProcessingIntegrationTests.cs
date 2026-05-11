@@ -204,9 +204,10 @@ public class PhotoProcessingIntegrationTests
     }
 
     [Fact]
-    public async Task Max_Retries_Should_Mark_Item_As_Failed()
+    public async Task IncrementRetry_Should_Track_RetryCount_And_Cap_Backoff()
     {
-        // Arrange
+        // Phase 4 §1: there is no max-retry dead-letter; we just want to confirm the
+        // RetryCount accumulates and the bounded-exponential backoff caps at 1024s.
         using var context = CreateInMemoryContext();
         await context.Database.EnsureCreatedAsync();
 
@@ -225,8 +226,8 @@ public class PhotoProcessingIntegrationTests
 
         var itemRepo = new ProcessingQueueItemRepository(context);
 
-        // Act: Retry 3 times (max retries = 3)
-        for (int i = 0; i < 3; i++)
+        // Drive way past any historical "3 attempt" cap to prove there isn't one any more.
+        for (int i = 0; i < 20; i++)
         {
             item.Status = ProcessingStatus.Pending;
             item.IncrementRetry($"Retry {i + 1}");
@@ -236,10 +237,13 @@ public class PhotoProcessingIntegrationTests
         await itemRepo.SaveChangesAsync();
 
         var reloadedItem = await itemRepo.GetByIdAsync(item.Id);
-        var canRetry = reloadedItem!.RetryCount < reloadedItem.MaxRetries;
+        Assert.NotNull(reloadedItem);
+        Assert.Equal(20, reloadedItem!.RetryCount);
+        Assert.True(reloadedItem.CanRetry, "Every item must remain retryable under Phase 4");
+        Assert.NotNull(reloadedItem.NextRetryTime);
 
-        // Assert
-        Assert.Equal(3, reloadedItem.RetryCount);
-        Assert.False(canRetry, "Should not retry after max retries reached");
+        // Backoff should be capped at 1024s — proves we don't wait days between attempts.
+        var backoff = (reloadedItem.NextRetryTime!.Value - DateTime.UtcNow).TotalSeconds;
+        Assert.True(backoff <= 1024 + 5, $"Backoff should cap at ~1024s, got {backoff}s");
     }
 }

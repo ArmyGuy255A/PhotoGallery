@@ -109,46 +109,57 @@ public class ProcessingQueueItem
     /// <summary>Status of this specific quality processing (Pending → Processing → Complete → Error)</summary>
     public ProcessingStatus Status { get; set; } = ProcessingStatus.Pending;
     
-    /// <summary>How many times this item has been retried after failure</summary>
+    /// <summary>How many times this item has been retried after failure (observability + backoff curve)</summary>
     public int RetryCount { get; set; } = 0;
-    
-    /// <summary>Maximum number of retries allowed (default 3)</summary>
-    public int MaxRetries { get; set; } = 3;
-    
+
     /// <summary>Error message from the last failed attempt</summary>
     public string? LastError { get; set; }
-    
+
     /// <summary>Total number of processing attempts (includes retries)</summary>
     public int Attempts { get; set; } = 0;
-    
+
     /// <summary>When this item should be retried next (if failed)</summary>
     public DateTime? NextRetryTime { get; set; }
-    
+
+    /// <summary>
+    /// Until when a worker has claimed this item. NULL = unclaimed. A row is eligible
+    /// for pickup when <c>LeaseExpiresAt IS NULL OR LeaseExpiresAt &lt; GETUTCDATE()</c>.
+    /// Used to prevent two concurrent workers (in-instance via parallelism or
+    /// cross-instance once ACA replicas scale out) from picking the same row.
+    /// Reference: Phase 4 scope §4 (DB-level lease).
+    /// </summary>
+    public DateTime? LeaseExpiresAt { get; set; }
+
     /// <summary>When this item was created</summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    
+
     /// <summary>When this item was completed successfully</summary>
     public DateTime? CompletedAt { get; set; }
-    
+
     /// <summary>When this item was last updated</summary>
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
-    
-    /// <summary>Can this item be retried, or have we exceeded max retries?</summary>
-    public bool CanRetry => RetryCount < MaxRetries;
-    
-    /// <summary>Increment retry count and calculate exponential backoff for next retry</summary>
+
+    /// <summary>
+    /// Legacy compatibility getter: every quality must eventually succeed under the
+    /// Phase 4 resilient-retry model. Always returns <c>true</c>. Reference: Phase 4 scope §1.
+    /// </summary>
+    public bool CanRetry => true;
+
+    /// <summary>
+    /// Increment retry count and calculate the next exponential-backoff retry time.
+    /// Curve: <c>min(2^retryCount, 1024)</c> seconds. Caps at ~17 min so a permanently
+    /// broken item retries on roughly an hour boundary forever instead of clogging the worker.
+    /// Reference: Phase 4 scope §1 (backoff cap).
+    /// </summary>
     /// <param name="errorMessage">The error message from the failed attempt</param>
     public void IncrementRetry(string errorMessage)
     {
         LastError = errorMessage;
         RetryCount++;
-        
-        // Calculate exponential backoff: 2^retryCount seconds
-        // Retry 1: 2 seconds (2^1)
-        // Retry 2: 4 seconds (2^2)
-        // Retry 3: 8 seconds (2^3)
-        // This is calculated BEFORE we check CanRetry, so we know when to retry next even if we've hit max retries
-        var secondsToWait = Math.Pow(2, RetryCount);
+
+        // Bounded exponential backoff. Math.Pow blows up past ~retryCount=30 (Infinity),
+        // so the inner Math.Min capping the seconds keeps the result finite + DB-safe.
+        var secondsToWait = Math.Min(Math.Pow(2, RetryCount), 1024);
         NextRetryTime = DateTime.UtcNow.AddSeconds(secondsToWait);
     }
 }

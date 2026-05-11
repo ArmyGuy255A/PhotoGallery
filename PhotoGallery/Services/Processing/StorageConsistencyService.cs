@@ -232,14 +232,9 @@ public class StorageConsistencyService
             return;
         }
 
-        // Items at MaxRetries are dead-lettered — leave alone so we don't loop forever.
-        if (item.Status == ProcessingStatus.Error && !item.CanRetry)
-        {
-            _logger.LogInformation(
-                "Photo {PhotoId} quality {Quality} is at max retries ({Retries}/{Max}); leaving alone",
-                photo.Id, quality, item.RetryCount, item.MaxRetries);
-            return;
-        }
+        // Phase 4 §1: there is no max-retry dead-letter any more. Every Error item is
+        // a retry candidate forever (subject to the bounded-exponential backoff curve).
+        // Falls through to the present/missing branches below.
 
         if (present)
         {
@@ -317,6 +312,7 @@ public class StorageConsistencyService
         item.LastError = null;
         item.NextRetryTime = null;
         item.Attempts = 0;
+        item.LeaseExpiresAt = null;
         item.UpdatedAt = DateTime.UtcNow;
     }
 

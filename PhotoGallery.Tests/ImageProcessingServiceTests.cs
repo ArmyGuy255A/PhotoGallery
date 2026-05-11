@@ -20,8 +20,9 @@ public class ImageProcessingServiceTests
         var mockServiceProvider = new Mock<IServiceProvider>();
         var mockStorage = new Mock<IStorageProvider>();
         var mockLogger = new Mock<ILogger<ImageProcessingService>>();
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
 
-        var service = new ImageProcessingService(mockServiceProvider.Object, mockStorage.Object, mockLogger.Object);
+        var service = new ImageProcessingService(mockServiceProvider.Object, mockStorage.Object, mockLogger.Object, configuration);
 
         // Act
         var profiles = service.GetCompressionProfiles();

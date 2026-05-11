@@ -32,5 +32,15 @@ public enum QualityType
     /// download flows. Storage key: <c>{albumId}/{photoId}/original.jpg</c>
     /// (the same object the upload pipeline writes). Never watermarked.
     /// </summary>
-    Original = 4
+    Original = 4,
+
+    /// <summary>
+    /// Watermark-rendering pseudo-quality. Not a resize step. When a ProcessingQueueItem
+    /// with this Quality is processed, the worker renders watermarked variants of the
+    /// Thumbnail + Medium qualities into storage (<c>thumbnail-watermarked.jpg</c>,
+    /// <c>medium-watermarked.jpg</c>). Enqueued exactly once per photo, after all four
+    /// base qualities (Thumbnail/Low/Medium/High) finish. Reference: Phase 4 scope §2
+    /// (watermark gets its own queue item) + D009 (Watermark Pipeline).
+    /// </summary>
+    Watermark = 5
 }
