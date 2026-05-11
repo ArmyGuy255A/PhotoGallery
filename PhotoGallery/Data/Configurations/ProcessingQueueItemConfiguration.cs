@@ -58,11 +58,16 @@ public class ProcessingQueueItemConfiguration : IEntityTypeConfiguration<Process
             .HasDefaultValueSql("GETUTCDATE()")
             .IsRequired();
 
-        // Foreign keys
+        // SqlServer rejects multi-cascade paths to ProcessingQueueItems
+        // (Photos → Items via PhotoId, plus ProcessingQueues → Items via
+        // ProcessingQueueId, both reachable from User on a delete). Restrict
+        // the Photo path; app code already clears queue items when purging
+        // a Photo. The ProcessingQueue → Items cascade stays so destroying
+        // a queue takes its items with it.
         builder.HasOne(item => item.Photo)
             .WithMany()
             .HasForeignKey(item => item.PhotoId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(item => item.ProcessingQueue)
             .WithMany(pq => pq.Items)

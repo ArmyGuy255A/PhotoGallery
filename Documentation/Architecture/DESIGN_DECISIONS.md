@@ -1652,6 +1652,7 @@ feature branch  ─PR─▶  trial  ──PR (only allowed source)──▶  mai
 
 - **`trial`** is the integration branch. All feature branches PR into it. CI (build + test + lint + vuln scan) runs on push + PR. **No publish, no deploy.**
 - **`main`** is release-only and protected: the *only* allowed source for an incoming PR is `trial`. No direct pushes. Every merge into `main` auto-cuts a release.
+- The **`Trial`** local-dev profile (`ASPNETCORE_ENVIRONMENT=Trial`, set via the `Trial` launch profile in `Properties/launchSettings.json`) mirrors what the `trial` branch and the deployed ACA revision actually run: Azure SQL, Key Vault, Azure Blob, real Google OAuth + JWT. Concrete URIs go in the gitignored `appsettings.Trial.Local.json`; secrets stay in Key Vault and are pulled in by `Program.cs`'s `AddAzureKeyVault` provider via `DefaultAzureCredential`. Same env name end-to-end so config behaviour is identical between `dotnet run --launch-profile Trial` locally and the cloud container.
 - Releases are versioned `A.B.C.D` (first release: `1.0.0.0`), where the segment to bump is picked from the merging PR's labels:
   - `release:major`    → bumps **A** (resets B/C/D)
   - `release:minor`    → bumps **B** (resets C/D)

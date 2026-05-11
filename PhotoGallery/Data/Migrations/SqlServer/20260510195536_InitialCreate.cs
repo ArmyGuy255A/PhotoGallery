@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -434,7 +434,7 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                         column: x => x.PhotoId,
                         principalTable: "Photos",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -468,7 +468,7 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                         column: x => x.PhotoId,
                         principalTable: "Photos",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -497,7 +497,7 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                         column: x => x.PhotoId,
                         principalTable: "Photos",
                         principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_ProcessingQueueItems_ProcessingQueues_ProcessingQueueId",
                         column: x => x.ProcessingQueueId,
@@ -708,7 +708,7 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                 name: "IX_ProcessingQueues_Status",
                 table: "ProcessingQueues",
                 column: "Status",
-                filter: "[Status] = 0 OR [Status] = 1");
+                filter: "[Status] < 2");
 
             migrationBuilder.CreateIndex(
                 name: "IX_SavedAccessCodes_AccessCodeId",

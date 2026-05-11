@@ -49,7 +49,7 @@ builder.Configuration.AddJsonFile(
 //
 // Configuration precedence (highest wins):
 //   1. Environment variables          (e.g. ConnectionStrings__DefaultConnection)
-//   2. appsettings.{Environment}.json (e.g. appsettings.DevelopmentAzure.json)
+//   2. appsettings.{Environment}.json (e.g. appsettings.Trial.json)
 //   3. Azure Key Vault                (when KeyVault:Uri is set)
 //   4. appsettings.json
 //
@@ -83,7 +83,7 @@ builder.Services.AddConfigurationServices(builder.Configuration, out var setting
 // all sinks, which is what blinded us when the ACA-deployed image stopped
 // emitting logs. Console always wins (ACA's log collector tails stdout) and
 // Application Insights is added when its connection string env var is set
-// (DevelopmentAzure / production via ACA).
+// (Trial / production via ACA).
 //
 // Serilog.Sinks.File was intentionally dropped: the previous JSON config
 // pointed at a relative `PhotoGallery/Logs/photogallery-.log` that doesn't

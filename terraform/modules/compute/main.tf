@@ -134,7 +134,7 @@ resource "azurerm_container_app" "this" {
 
       env {
         name  = "ASPNETCORE_ENVIRONMENT"
-        value = "DevelopmentAzure"
+        value = "Trial"
       }
 
       # Hint to DefaultAzureCredential to use the UAMI we attached, not a

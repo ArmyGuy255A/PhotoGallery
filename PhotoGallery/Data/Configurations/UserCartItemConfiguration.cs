@@ -25,10 +25,17 @@ public class UserCartItemConfiguration : IEntityTypeConfiguration<UserCartItem>
             .HasForeignKey(c => c.UserId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // SqlServer rejects multiple cascade paths into UserCartItems.
+        // User → Photos cascade plus User → UserCartItems direct cascade
+        // both reach this table on a single User delete. Restrict the Photo
+        // path; app code clears cart rows before deleting a Photo (same
+        // pattern as DownloadConfiguration). See SqlException:
+        //   "Introducing FOREIGN KEY constraint 'FK_UserCartItems_Photos_PhotoId'
+        //    on table 'UserCartItems' may cause cycles or multiple cascade paths."
         builder.HasOne(c => c.Photo)
             .WithMany()
             .HasForeignKey(c => c.PhotoId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
 
         // Soft FK to Album — never blocks album delete; row's SourceAlbumId is set NULL.
         builder.HasOne(c => c.SourceAlbum)

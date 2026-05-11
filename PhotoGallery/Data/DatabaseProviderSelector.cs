@@ -32,7 +32,7 @@ public static class DatabaseProviderSelector
         {
             throw new InvalidOperationException(
                 "Connection string 'DefaultConnection' not found. " +
-                "For DevelopmentAzure, ensure Key Vault contains the secret " +
+                "For Trial, ensure Key Vault contains the secret " +
                 "'ConnectionStrings--DefaultConnection' and KeyVault:Uri is set.");
         }
 
