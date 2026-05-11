@@ -765,7 +765,7 @@ EFFORT: Simple (30 min)
 - `scratch-discipline` — architecture probe / decision drafts in `.copilot/scratch/<task-id>/`.
 - `secret-hygiene` — no secrets in design docs, diagrams, or decision records.
 - `commit-conventions` — canonical commit-message format.
-- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only.
+- `branch-strategy-u-prefix` — `u/<actor>/<type>/<scope>` branches only, **targeting `trial`**. PRs into `main` come only from `trial`. See `Documentation/Architecture/DESIGN_DECISIONS.md` D016.
 - `copilot-memory-update` — record durable cross-session architecture decisions.
 - `markdown-doc-formatter` — formatting standard for any doc this skill produces.
 

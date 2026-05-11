@@ -1,0 +1,31 @@
+name: Validate PR Base
+
+# Enforces the branching contract: the only allowed source for a PR into
+# `main` is the `trial` branch. Anything else fails the check, which the
+# branch protection rule on `main` lists as required so the merge button
+# stays disabled.
+#
+# See DESIGN_DECISIONS.md D016 (release-driven deployment) for rationale.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  enforce-trial-source:
+    name: Source branch must be 'trial'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR head branch
+        run: |
+          head="${{ github.head_ref }}"
+          if [ "$head" != "trial" ]; then
+            echo "::error ::PRs into 'main' must originate from 'trial' (got '$head')."
+            echo
+            echo "PhotoGallery's branching contract:"
+            echo "  feature branch ─PR─▶ trial ─PR─▶ main (release)"
+            echo
+            echo "Open your PR against 'trial' instead, and let the trial → main"
+            echo "PR cut the next release."
+            exit 1
+          fi
+          echo "Source branch '$head' is allowed."
