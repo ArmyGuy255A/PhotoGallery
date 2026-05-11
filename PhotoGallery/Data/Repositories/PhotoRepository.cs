@@ -12,8 +12,13 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
 
     public async Task<List<Photo>> GetAlbumPhotosAsync(Guid albumId)
     {
+        // Filter out photos still in Uploading state — the SPA has a write SAS
+        // but hasn't yet called /upload-complete, so the blob may not exist
+        // and the photo has no processing artifacts. Showing these to the
+        // user produces ghost rows. Reference: Phase 2 plan,
+        // PhotoProcessingStatus.Uploading.
         return await _dbSet
-            .Where(p => p.AlbumId == albumId)
+            .Where(p => p.AlbumId == albumId && p.ProcessingStatus != PhotoProcessingStatus.Uploading)
             .OrderByDescending(p => p.UploadDate)
             .ToListAsync();
     }

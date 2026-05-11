@@ -147,4 +147,18 @@ public class AzureStorageProvider : IStorageProvider
             return Enumerable.Empty<string>();
         }
     }
+
+    /// <summary>
+    /// Account-key SAS variant of write-only single-blob URL. Used only by the
+    /// legacy <c>Storage:Provider=Azure</c> alias; the AAD-only profile uses
+    /// <see cref="AzureBlobStorageProvider.GenerateWriteSasUrlAsync"/>.
+    /// </summary>
+    public Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl)
+    {
+        var blobClient = _containerClient.GetBlobClient(key);
+        var sasUri = blobClient.GenerateSasUri(
+            BlobSasPermissions.Write | BlobSasPermissions.Create,
+            DateTimeOffset.UtcNow.Add(ttl));
+        return Task.FromResult(sasUri.ToString());
+    }
 }

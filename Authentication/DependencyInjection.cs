@@ -80,17 +80,30 @@ public static class DependencyInjection
                     // Allow JWTs to be supplied via ``?access_token=...`` query string
                     // in addition to the Authorization header. Required for browser
                     // requests that can't carry headers — img src, anchor downloads,
-                    // <video src>. Standard pattern documented for SignalR + protected
-                    // file URLs. Header takes precedence; query string is fallback.
+                    // <video src>, and the SignalR WebSocket upgrade (Phase 3 hub at
+                    // /hubs/photo-progress). Standard pattern documented for SignalR.
+                    // Header takes precedence in general; for /hubs paths we
+                    // explicitly accept the query token even when no header was set,
+                    // which is the only auth surface available on a WS upgrade.
                     OnMessageReceived = ctx =>
                     {
+                        var path = ctx.HttpContext.Request.Path;
+                        var qs = ctx.Request.Query["access_token"].ToString();
+                        var isHubRequest = path.StartsWithSegments("/hubs");
+
                         if (string.IsNullOrEmpty(ctx.Token))
                         {
-                            var qs = ctx.Request.Query["access_token"].ToString();
                             if (!string.IsNullOrEmpty(qs))
                             {
                                 ctx.Token = qs;
                             }
+                        }
+                        else if (isHubRequest && !string.IsNullOrEmpty(qs))
+                        {
+                            // Defensive: if some upstream handler already set the
+                            // token, the query-string carrier still wins on /hubs
+                            // so the SPA's well-known SignalR JS contract holds.
+                            ctx.Token = qs;
                         }
                         return Task.CompletedTask;
                     },

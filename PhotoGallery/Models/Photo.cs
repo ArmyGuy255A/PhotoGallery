@@ -5,7 +5,19 @@ public enum PhotoProcessingStatus
     Pending = 0,
     Processing = 1,
     Complete = 2,
-    Failed = 3
+    Failed = 3,
+    // Phase 2 — direct-to-blob upload.
+    //
+    // A Photo row is inserted in Uploading state when /upload-tickets mints
+    // a write SAS, then transitions to Pending in /upload-complete once the
+    // SPA confirms the PUT landed. Rows in Uploading are invisible to album
+    // listings (PhotoRepository.GetAlbumPhotosAsync filters them out) so the
+    // user never sees a ghost row while the browser is mid-PUT.
+    //
+    // Value 4 is chosen to sit after the existing 0..3 contiguous block so
+    // no existing persisted state shifts. The column is mapped as int by
+    // PhotoConfiguration so no migration is required.
+    Uploading = 4
 }
 
 public class Photo

@@ -187,6 +187,30 @@ public class MinioStorageProvider : IStorageProvider
         }
     }
 
+    public async Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl)
+    {
+        try
+        {
+            var request = new GetPreSignedUrlRequest
+            {
+                BucketName = _bucketName,
+                Key = key,
+                Expires = DateTime.UtcNow.Add(ttl),
+                Verb = HttpVerb.PUT,
+                Protocol = _presignProtocol
+            };
+
+            var url = _s3Client.GetPreSignedURL(request);
+            _logger.LogInformation("Pre-signed PUT URL generated for Minio: {Key}", key);
+            return await Task.FromResult(url);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating pre-signed PUT URL for Minio: {Key}", key);
+            throw;
+        }
+    }
+
     private async Task EnsureBucketExistsAsync()
     {
         try

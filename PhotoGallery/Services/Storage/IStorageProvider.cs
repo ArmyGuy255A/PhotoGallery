@@ -50,4 +50,24 @@ public interface IStorageProvider
     /// <param name="prefix">Prefix to filter files (e.g., "photos/2024/")</param>
     /// <returns>List of file keys matching the prefix</returns>
     Task<IEnumerable<string>> ListAsync(string prefix);
+
+    /// <summary>
+    /// Generate a write-only, single-blob pre-signed URL that lets the caller
+    /// PUT a single object directly to storage without proxying bytes through
+    /// the API. Used by the direct-to-blob upload flow (Phase 2):
+    /// the SPA receives this URL from <c>POST /api/photos/albums/{id}/upload-tickets</c>
+    /// and PUTs the file contents to it, then notifies the server via
+    /// <c>POST /api/photos/{photoId}/upload-complete</c>.
+    ///
+    /// Implementations:
+    /// <list type="bullet">
+    ///   <item>Azure: user-delegation SAS with <c>Write|Create</c>, single-blob
+    ///         scope (Resource=b), HTTPS-only.</item>
+    ///   <item>MinIO: S3 pre-signed PUT URL.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="key">Blob key the upload will land at (e.g. <c>photogallery/{albumId}/{photoId}/original.jpg</c>)</param>
+    /// <param name="ttl">Lifetime of the URL — recommend 30 min for direct-to-blob uploads.</param>
+    /// <returns>Absolute URL the client can PUT to.</returns>
+    Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl);
 }

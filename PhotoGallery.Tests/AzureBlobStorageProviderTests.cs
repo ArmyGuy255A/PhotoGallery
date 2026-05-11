@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Web;
 using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using PhotoGallery.Services.Storage;
 
 namespace PhotoGallery.Tests;
@@ -140,5 +141,82 @@ public class AzureBlobStorageProviderTests
 
         // Assert
         Assert.Equal(1, fetchCount);
+    }
+
+    [Fact]
+    public void BuildBlobSasUri_WithWritePermissions_ProducesWriteSas()
+    {
+        // Arrange — same shape as the Read test but ask for Write|Create,
+        // which is what AzureBlobStorageProvider.GenerateWriteSasUrlAsync
+        // passes through (Phase 2).
+        var udk = FakeUserDelegationKey();
+        var expiresOn = DateTimeOffset.UtcNow.AddMinutes(30);
+
+        // Act
+        var uri = AzureBlobStorageProvider.BuildBlobSasUri(
+            accountName: "demoacct",
+            containerName: "photogallery",
+            blobName: "albums/2026/photo-1.jpg",
+            userDelegationKey: udk,
+            expiresOn: expiresOn,
+            blobEndpoint: new Uri("https://demoacct.blob.core.windows.net/"),
+            permissions: Azure.Storage.Sas.BlobSasPermissions.Write
+                       | Azure.Storage.Sas.BlobSasPermissions.Create);
+
+        // Assert: Write|Create encoded as `cw` (alphabetical) in the SAS sp.
+        var query = HttpUtility.ParseQueryString(uri.Query);
+        var sp = query["sp"];
+        Assert.False(string.IsNullOrEmpty(sp));
+        Assert.Contains('w', sp!);
+        Assert.Contains('c', sp!);
+        // Read MUST NOT leak in — write-only SAS must not be useful for reads.
+        Assert.DoesNotContain('r', sp!);
+        // Single-blob scope preserved.
+        Assert.Equal("b", query["sr"]);
+        // HTTPS lock preserved.
+        Assert.Equal("https", query["spr"]);
+        // User-delegation markers still present.
+        Assert.False(string.IsNullOrEmpty(query["skoid"]));
+        Assert.False(string.IsNullOrEmpty(query["sktid"]));
+    }
+
+    [Fact]
+    public async Task GenerateWriteSasUrlAsync_MintsWriteOnlyUserDelegationSas()
+    {
+        // Arrange — feed the provider a deterministic UDK via a mock
+        // IUserDelegationKeyProvider and a fake BlobServiceClient pointed at
+        // a synthetic account URI. We don't touch the network: the SAS
+        // signature is computed locally by the SDK from the key bytes.
+        var udk = FakeUserDelegationKey();
+        var udkProvider = new Mock<IUserDelegationKeyProvider>();
+        udkProvider.Setup(p => p.GetAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(udk);
+
+        var serviceClient = new Azure.Storage.Blobs.BlobServiceClient(
+            new Uri("https://demoacct.blob.core.windows.net/"));
+
+        var provider = new AzureBlobStorageProvider(
+            serviceClient,
+            udkProvider.Object,
+            containerName: "photogallery",
+            logger: NullLogger<AzureBlobStorageProvider>.Instance);
+
+        // Act
+        var url = await provider.GenerateWriteSasUrlAsync(
+            "photogallery/album-1/photo-1/original.jpg",
+            TimeSpan.FromMinutes(30));
+
+        // Assert
+        Assert.False(string.IsNullOrWhiteSpace(url));
+        var uri = new Uri(url);
+        Assert.Equal("https", uri.Scheme);
+        var query = HttpUtility.ParseQueryString(uri.Query);
+        Assert.Equal("b", query["sr"]);
+        Assert.Contains('w', query["sp"]!);
+        Assert.Contains('c', query["sp"]!);
+        Assert.DoesNotContain('r', query["sp"]!);
+        Assert.False(string.IsNullOrEmpty(query["sig"]));
+        Assert.False(string.IsNullOrEmpty(query["skoid"]));
+        udkProvider.Verify(p => p.GetAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }
