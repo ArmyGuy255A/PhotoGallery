@@ -245,6 +245,17 @@ resource "azurerm_role_assignment" "github_actions_acr_push" {
   principal_id         = module.github_oidc.service_principal_object_id
 }
 
+# Contributor on the Container App so the GitHub Actions SP can issue
+# `az containerapp update --image ...` and create new revisions when the
+# pipeline publishes a new image tag. Scoped to the single container app
+# resource — NOT the RG — so the CI identity can't touch storage, KV, SQL,
+# or the registry itself beyond AcrPush.
+resource "azurerm_role_assignment" "github_actions_aca_contributor" {
+  scope                = module.compute.container_app_id
+  role_definition_name = "Contributor"
+  principal_id         = module.github_oidc.service_principal_object_id
+}
+
 ###############################################################################
 # Compute — Azure Container Apps (Consumption, scale-to-zero) for the API.
 # Provisioned now with a placeholder image so the resource exists, ingress is
