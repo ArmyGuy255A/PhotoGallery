@@ -1,31 +1,99 @@
 name: Validate PR Base
 
 # Enforces the branching contract: the only allowed source for a PR into
-# `main` is the `trial` branch. Anything else fails the check, which the
-# branch protection rule on `main` lists as required so the merge button
-# stays disabled.
+# `main` is the `trial` branch.
 #
-# See DESIGN_DECISIONS.md D016 (release-driven deployment) for rationale.
+# Emergency override: if the PR carries the `hotfix:emergency` label AND has
+# at least one APPROVED review from a non-bot reviewer, the source-branch
+# check is waived. This is the documented escape hatch when something is
+# breaking production hard enough that trial → main is too slow.
+#
+# Re-runs on label changes and review submissions so adding the label or
+# getting a review flips the check from failing to passing without needing
+# to push a new commit.
+#
+# See DESIGN_DECISIONS.md D016 (release-driven deployment) → "Hotfix
+# override" subsection for rationale.
 on:
   pull_request:
     branches: [main]
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   enforce-trial-source:
     name: Source branch must be 'trial'
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR head branch
+      - name: Check PR base policy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          head="${{ github.head_ref }}"
-          if [ "$head" != "trial" ]; then
-            echo "::error ::PRs into 'main' must originate from 'trial' (got '$head')."
-            echo
-            echo "PhotoGallery's branching contract:"
-            echo "  feature branch ─PR─▶ trial ─PR─▶ main (release)"
-            echo
-            echo "Open your PR against 'trial' instead, and let the trial → main"
-            echo "PR cut the next release."
+          set -euo pipefail
+
+          # pull_request_review events nest the PR under .pull_request as well,
+          # so we can use a single resolution. Fall back to the PR number for
+          # safety.
+          pr_number="${{ github.event.pull_request.number }}"
+          if [ -z "$pr_number" ]; then
+            echo "::error ::Could not resolve PR number from event payload."
             exit 1
           fi
-          echo "Source branch '$head' is allowed."
+
+          pr_json=$(gh pr view "$pr_number" --repo "${{ github.repository }}" \
+            --json headRefName,labels,reviews,baseRefName,number,title)
+
+          head_ref=$(echo "$pr_json" | jq -r '.headRefName')
+          base_ref=$(echo "$pr_json" | jq -r '.baseRefName')
+          labels=$(echo "$pr_json" | jq -r '[.labels[].name] | join(",")')
+          # `reviews` returns the full review history. A PR is considered
+          # approved if its most recent non-dismissed review per reviewer
+          # is APPROVED. We compute that here: group by author, keep the
+          # latest, count APPROVED.
+          approved_count=$(echo "$pr_json" | jq '[.reviews[]
+              | select(.state != "DISMISSED")
+              | select(.state != "COMMENTED")
+              | select(.state != "PENDING")
+              | select(.author.login | test("\\[bot\\]$") | not)
+            ]
+            | group_by(.author.login)
+            | map(max_by(.submittedAt))
+            | map(select(.state == "APPROVED"))
+            | length')
+
+          echo "PR #$pr_number  $head_ref -> $base_ref"
+          echo "labels=$labels"
+          echo "non-bot APPROVED reviews=$approved_count"
+
+          if [ "$head_ref" = "trial" ]; then
+            echo "::notice ::Source branch is 'trial' — policy satisfied."
+            exit 0
+          fi
+
+          # Emergency override path.
+          if echo ",$labels," | grep -q ",hotfix:emergency,"; then
+            if [ "$approved_count" -ge 1 ]; then
+              echo "::notice ::hotfix:emergency override accepted ($approved_count approving review(s))."
+              exit 0
+            fi
+            echo "::error ::PR is labelled 'hotfix:emergency' but has no approving non-bot review yet."
+            echo "         Request a review and have one human approve to unblock."
+            exit 1
+          fi
+
+          echo "::error ::PRs into 'main' must originate from 'trial' (got '$head_ref')."
+          echo
+          echo "PhotoGallery's branching contract:"
+          echo "  feature branch ─PR─▶ trial ─PR─▶ main (release)"
+          echo
+          echo "Open your PR against 'trial' instead, and let the trial → main"
+          echo "PR cut the next release."
+          echo
+          echo "Emergency override: label this PR 'hotfix:emergency' and get one"
+          echo "human approving review. The check will re-run automatically."
+          exit 1

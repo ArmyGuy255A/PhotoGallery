@@ -1680,6 +1680,31 @@ Required status checks (set via `gh api PUT repos/.../branches/main/protection`)
 
 Plus: `allow_force_pushes = false`, `allow_deletions = false`, `restrictions = null` (no user pinning), `enforce_admins = false` (so the human can emergency-merge), no required reviews (solo repo).
 
+### Hotfix override (emergency escape hatch)
+
+The `trial → main` policy is enforced by the **workflow** `validate-pr-base.yml`, not by branch protection's "restrict source branches" feature, because the workflow can encode a conditional override that GitHub's protection rules can't.
+
+A PR into `main` from any branch **other than** `trial` is allowed if **both** of these are true:
+
+1. The PR carries the label **`hotfix:emergency`**.
+2. At least one **APPROVED** review has been submitted by a non-bot reviewer.
+
+If either condition is missing, the check fails with an explanatory message; the merge button stays disabled because `Validate PR base` is a required status check.
+
+The workflow re-runs on `pull_request_review: submitted/dismissed` and `pull_request: labeled/unlabeled`, so adding the label or getting the review flips the check to passing without needing a fresh push.
+
+**When to use it:**
+
+- Production is down and waiting on the next `trial → main` PR is too slow.
+- The fix needs to ship under a fresh release tag immediately (the `release:*` label still drives the version bump as normal).
+
+**What it does NOT bypass:**
+
+- Status checks (backend/frontend tests, warning audit).
+- The human-review requirement (it's the whole point).
+- Force-push / branch-deletion protections.
+- The release pipeline (a successful merge still goes through `cut-release.yml` + `release.yml`).
+
 ### Rationale
 
 - **Decouples merged from deployed.** A passing PR into `trial` is not a deploy; releases are a deliberate act with a versioned anchor.
@@ -1687,6 +1712,7 @@ Plus: `allow_force_pushes = false`, `allow_deletions = false`, `restrictions = n
 - **No new long-lived credentials.** Reuses the GitHub OIDC SP from D015 (already holds AcrPush + Contributor on the Container App).
 - **Single-source release notes.** `gh release create --generate-notes` collates merged PR titles since the last tag.
 - **Cheap to walk back.** If we hate this in a month, deleting `cut-release.yml` + `release.yml` and pointing the deploy bits back at `build.yml` restores the old flow in one PR.
+- **Emergency escape hatch with teeth.** The `hotfix:emergency` override bypasses the `trial` source requirement but not the human-review gate. This avoids the common pattern where an "emergency" override silently bypasses *all* safety checks.
 
 ### Versioning convention
 
@@ -1702,10 +1728,11 @@ git checkout main && git pull
 git checkout -b trial && git push -u origin trial
 
 # 2. Create the four release labels (idempotent).
-gh label create release:major    --color B60205 --description "Bump A in A.B.C.D"     || true
-gh label create release:minor    --color D93F0B --description "Bump B in A.B.C.D"     || true
-gh label create release:revision --color FBCA04 --description "Bump C in A.B.C.D"     || true
-gh label create release:patch    --color 0E8A16 --description "Bump D in A.B.C.D"     || true
+gh label create release:major    --color B60205 --description "Bump A in A.B.C.D" || true
+gh label create release:minor    --color D93F0B --description "Bump B in A.B.C.D" || true
+gh label create release:revision --color FBCA04 --description "Bump C in A.B.C.D" || true
+gh label create release:patch    --color 0E8A16 --description "Bump D in A.B.C.D" || true
+gh label create hotfix:emergency --color 5319E7 --description "Bypass trial-source check (still requires 1 approving review)" || true
 
 # 3. Lock down main. PRs must come from trial, status checks required, no force-push.
 gh api -X PUT repos/ArmyGuy255A/PhotoGallery/branches/main/protection \
