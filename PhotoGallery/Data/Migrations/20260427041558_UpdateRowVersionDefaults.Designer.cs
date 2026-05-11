@@ -584,7 +584,7 @@ namespace PhotoGallery.Data.Migrations
                     b.HasOne("PhotoGallery.Models.Photo", "Photo")
                         .WithMany()
                         .HasForeignKey("PhotoId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Photo");

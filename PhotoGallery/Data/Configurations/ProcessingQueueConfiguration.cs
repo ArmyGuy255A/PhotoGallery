@@ -35,10 +35,18 @@ public class ProcessingQueueConfiguration : IEntityTypeConfiguration<ProcessingQ
             .HasMaxLength(500)
             .IsRequired(false);
 
+        // SqlServer rejects this cascade chain because:
+        //   Photo → ProcessingQueue (cascade) → ProcessingQueueItems (cascade)
+        //   ProcessingQueueItem.PhotoId references Photo too (now Restrict)
+        // The schema-level cycle (Photo ↔ ProcessingQueue ↔ Items) is enough
+        // for SqlServer's conservative check to fail. Restrict the Photo edge
+        // so a Photo can't be deleted while a queue references it — the
+        // image-processing service is responsible for clearing the queue
+        // before purging.
         builder.HasOne(pq => pq.Photo)
             .WithMany()
             .HasForeignKey(pq => pq.PhotoId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasMany(pq => pq.Items)
             .WithOne(item => item.ProcessingQueue)
@@ -50,6 +58,8 @@ public class ProcessingQueueConfiguration : IEntityTypeConfiguration<ProcessingQ
         builder.HasIndex(pq => pq.PhotoId).IsUnique();
         builder.HasIndex(pq => pq.CreatedAt);
         builder.HasIndex(pq => pq.Status)
-            .HasFilter("[Status] = 0 OR [Status] = 1"); // Index for Pending or Processing
+            // SqlServer filtered indexes don't support OR; use a range
+            // comparison instead. Status enum: Pending=0, Processing=1.
+            .HasFilter("[Status] < 2"); // Pending or Processing
     }
 }

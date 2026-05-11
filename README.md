@@ -154,14 +154,14 @@ dotnet run --project PhotoGallery    # backend on :5105
 cd FE.PhotoGallery; npm start        # frontend on :4300
 ```
 
-#### Mode B: Azure-backed local (`DevelopmentAzure`)
+#### Mode B: Azure-backed local (`Trial`)
 
 Backend runs on your laptop but reads secrets from **Azure Key Vault** and talks to **real Azure Blob Storage** + **Azure SQL Database**. Used to validate the production wire without deploying. Real Google OAuth + JWT stay on (no `DISABLE_AUTH`).
 
 - **Storage:** Azure Blob (`Storage:Provider=AzureBlob`, `Storage:AzureBlob:AccountUrl=https://<acct>.blob.core.windows.net/`)
 - **Database:** Azure SQL (`Database:Provider=SqlServer`, connection string resolved from Key Vault)
 - **Secrets:** Key Vault, accessed via `DefaultAzureCredential` — `az login` locally, Managed Identity in Azure
-- **Launch profile:** `AzureDev` (sets `ASPNETCORE_ENVIRONMENT=DevelopmentAzure`, which auto-loads `appsettings.DevelopmentAzure.json`)
+- **Launch profile:** `Trial` (sets `ASPNETCORE_ENVIRONMENT=Trial`, which auto-loads `appsettings.Trial.json`)
 
 **Prerequisites**
 
@@ -169,13 +169,13 @@ Backend runs on your laptop but reads secrets from **Azure Key Vault** and talks
 2. RBAC role on the dev Key Vault: **Key Vault Secrets User** (read) at minimum.
 3. RBAC role on the dev Storage Account: **Storage Blob Data Contributor**.
 4. RBAC role on the dev Azure SQL: depends on auth mode (typically AAD-authenticated DB user).
-5. Fill in `<TO-BE-FILLED>` placeholders in `PhotoGallery/appsettings.DevelopmentAzure.json` with values supplied by the platform engineer.
+5. Fill in `<TO-BE-FILLED>` placeholders in `PhotoGallery/appsettings.Trial.json` with values supplied by the platform engineer.
 
 **Run it**
 
 ```powershell
 az login
-dotnet run --project PhotoGallery --launch-profile AzureDev
+dotnet run --project PhotoGallery --launch-profile Trial
 ```
 
 **Configuration precedence** (highest wins, applies to both modes):

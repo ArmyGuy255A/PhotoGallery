@@ -534,7 +534,7 @@ namespace PhotoGallery.Data.Migrations
                         .IsUnique();
 
                     b.HasIndex("Status")
-                        .HasFilter("[Status] = 0 OR [Status] = 1");
+                        .HasFilter("[Status] < 2");
 
                     b.ToTable("ProcessingQueues");
                 });
@@ -937,7 +937,7 @@ namespace PhotoGallery.Data.Migrations
                     b.HasOne("PhotoGallery.Models.Photo", "Photo")
                         .WithMany()
                         .HasForeignKey("PhotoId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Photo");
@@ -948,7 +948,7 @@ namespace PhotoGallery.Data.Migrations
                     b.HasOne("PhotoGallery.Models.Photo", "Photo")
                         .WithMany()
                         .HasForeignKey("PhotoId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.HasOne("PhotoGallery.Models.ProcessingQueue", "ProcessingQueue")
@@ -1004,7 +1004,7 @@ namespace PhotoGallery.Data.Migrations
                     b.HasOne("PhotoGallery.Models.Photo", "Photo")
                         .WithMany()
                         .HasForeignKey("PhotoId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.HasOne("PhotoGallery.Models.Album", "SourceAlbum")

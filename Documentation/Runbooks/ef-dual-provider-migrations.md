@@ -72,7 +72,7 @@ provisioned by Terraform (`u/copilot/feat/azure-dev-baseline`). Until that's
 applied, you can verify the SqlServer migration locally against LocalDB:
 
 ```pwsh
-$env:ASPNETCORE_ENVIRONMENT = "DevelopmentAzure"
+$env:ASPNETCORE_ENVIRONMENT = "Trial"
 $env:Database__Provider = "SqlServer"
 $env:ConnectionStrings__DefaultConnection = "Server=(localdb)\\mssqllocaldb;Database=PhotoGallery;Trusted_Connection=true;"
 # Bypass Key Vault for the smoke test:
@@ -97,10 +97,10 @@ After the platform engineer runs `terraform apply`:
 1. KeyVault secret `ConnectionStrings--DefaultConnection` is provisioned with
    the Azure SQL connection string.
 2. Developer authenticates: `az login` with the dev access role.
-3. Run with the AzureDev launch profile:
+3. Run with the Trial launch profile:
 
    ```pwsh
-   dotnet run --project PhotoGallery --launch-profile AzureDev
+   dotnet run --project PhotoGallery --launch-profile Trial
    ```
 
 4. The app pulls the connection string from Key Vault, picks

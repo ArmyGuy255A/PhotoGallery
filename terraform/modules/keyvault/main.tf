@@ -61,7 +61,7 @@ locals {
     "ConnectionStrings--DefaultConnection" = var.sql_connection_string
 
     # Real value (blob primary endpoint). Optional in KV — `Storage:AzureBlob:AccountUrl`
-    # also lives in `appsettings.DevelopmentAzure.json`. Seeded here so KV is
+    # also lives in `appsettings.Trial.json`. Seeded here so KV is
     # the single rotatable source if the storage account is ever swapped.
     "Storage--AzureBlob--AccountUrl" = var.storage_blob_endpoint
 

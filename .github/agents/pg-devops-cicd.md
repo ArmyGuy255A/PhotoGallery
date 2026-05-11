@@ -12,11 +12,15 @@ Anything that touches Azure infrastructure — Terraform modules, AppService / A
 ## PhotoGallery context
 
 - **Existing workflows:**
-  - `.github/workflows/build.yml` — BE (ASP.NET 9, `dotnet restore/build/test/publish`) + FE (Angular 19.2, `npm ci/build/test`) + Docker image build (gated on main-branch push) + lint + security scan.
-  - `.github/workflows/e2e.yml` — Playwright e2e with `postgres:16-alpine` + `minio/minio` services. Starts BE + FE dev server, runs `npm run e2e`, uploads test results / videos.
+  - `.github/workflows/build.yml` — BE (ASP.NET 9, `dotnet restore/build/test/publish`) + FE (Angular 19.2, `npm ci/build/test`) + lint + security scan. Triggers on push/PR for `trial` and `main`. **CI only** — no image build, no deploy.
+  - `.github/workflows/cut-release.yml` — Triggers on push to `main` (i.e. trial → main merges). Resolves the merging PR's `release:major|minor|revision|patch` label (default `patch`), bumps the latest `vA.B.C.D` tag, and creates a GitHub Release.
+  - `.github/workflows/release.yml` — Triggers on `release: published` (and `workflow_dispatch` for retries). Builds + pushes ACR images tagged `<version>` / `<sha>` / `latest`, rolls the ACA backend revision, and deploys the Angular SPA to Azure Static Web Apps.
+  - `.github/workflows/validate-pr-base.yml` — Required status check on PRs into `main`. Passes only if the source branch is `trial`, **or** the PR carries the `hotfix:emergency` label with at least one approving non-bot review.
+- **Branching contract:** `feature → trial → main → release → deploy`. See `Documentation/Architecture/DESIGN_DECISIONS.md` **D016**.
+- **Versioning:** `A.B.C.D` (major.minor.revision.patch). Bump driven by PR labels.
 - **Stack:** ASP.NET 9 backend, Angular 19.2 frontend, Playwright e2e, GitHub-hosted runners (`ubuntu-latest`). Self-hosted runner option for cost/speed.
-- **Secret management:** GitHub repo secrets (`${{ secrets.X }}`). KeyVault integration (if any) is handled by `pg-platform-engineer` via OIDC/Workload Identity — you only consume the token at workflow time.
-- **Docker:** `PhotoGallery/Dockerfile.backend` + `FE.PhotoGallery/Dockerfile`. Images tagged with `${{ github.sha }}` + `latest` (main branch only).
+- **Secret management:** GitHub repo variables (`vars.X`) for non-sensitive identifiers (`AZURE_CLIENT_ID`, `ACA_BACKEND_NAME`, etc.); GitHub repo secrets (`secrets.X`) only when there's no alternative. Azure auth uses OIDC + Workload Identity Federation (no long-lived credentials); the OIDC SP is provisioned by Terraform (see D015).
+- **Docker:** `PhotoGallery/Dockerfile.backend` + `FE.PhotoGallery/Dockerfile`. Images pushed to `acrpgdeva4pi.azurecr.io` with three tags per push (`<version>`, `<sha>`, `latest`).
 
 ## Default operating principles
 
