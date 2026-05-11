@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/staticwebapp.config.json",
+
+  "//": [
+    "Azure Static Web Apps routing config for the PhotoGallery Angular SPA.",
+    "",
+    "Angular 19 owns client-side routing. Without `navigationFallback`, SWA",
+    "serves a 404 for any URL that isn't a literal file in the bundle —",
+    "which means /login, /code/:code, /albums/:id, etc., all break on hard",
+    "refresh, on direct navigation, and after logout. The fallback rewrites",
+    "any non-file URL to index.html so the Angular Router can pick up the",
+    "real route client-side.",
+    "",
+    "The `exclude` list keeps static-asset requests from being rewritten,",
+    "so a missing image still 404s correctly instead of returning the SPA",
+    "HTML."
+  ],
+
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/assets/*",
+      "/api/*",
+      "*.{css,scss,js,mjs,map,json,xml,txt,ico,png,jpg,jpeg,gif,svg,webp,avif,woff,woff2,ttf,eot,otf,wasm}"
+    ]
+  },
+
+  "responseOverrides": {
+    "404": {
+      "rewrite": "/index.html",
+      "statusCode": 200
+    }
+  },
+
+  "mimeTypes": {
+    ".json": "application/json"
+  }
+}
