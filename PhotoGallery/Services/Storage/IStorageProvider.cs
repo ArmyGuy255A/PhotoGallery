@@ -50,4 +50,36 @@ public interface IStorageProvider
     /// <param name="prefix">Prefix to filter files (e.g., "photos/2024/")</param>
     /// <returns>List of file keys matching the prefix</returns>
     Task<IEnumerable<string>> ListAsync(string prefix);
+
+    /// <summary>
+    /// List immediate child "virtual directories" under <paramref name="prefix"/>
+    /// using <c>/</c> as a hierarchy delimiter. Returns sub-prefixes only (each
+    /// ending in <c>/</c>) — leaf blobs at this level are not returned. Used by
+    /// the orphaned-blob reaper (Phase 5) to enumerate albumGuid/ and
+    /// photoGuid/ levels without iterating every variant blob.
+    /// </summary>
+    /// <param name="prefix">Parent prefix (must end with <c>/</c> or be empty).</param>
+    Task<IEnumerable<string>> ListSubPrefixesAsync(string prefix);
+
+    /// <summary>
+    /// List all blobs under <paramref name="prefix"/> with size and
+    /// last-modified metadata. The orphaned-blob reaper uses this to apply the
+    /// grace-period filter (skip blobs younger than N minutes to protect
+    /// in-flight direct uploads) and to report bytes reclaimed.
+    /// </summary>
+    Task<IEnumerable<BlobInfo>> ListWithMetadataAsync(string prefix);
+
+    /// <summary>
+    /// Delete many blobs in one logical operation. Implementations may batch
+    /// internally (Azure supports 256 blobs per request); callers should not
+    /// rely on atomicity. Returns the number of blobs successfully deleted.
+    /// Already-deleted blobs are treated as success (idempotent — race-safe
+    /// across multiple reaper replicas).
+    /// </summary>
+    Task<int> DeleteManyAsync(IEnumerable<string> keys);
 }
+
+/// <summary>
+/// Lightweight metadata record returned by <see cref="IStorageProvider.ListWithMetadataAsync"/>.
+/// </summary>
+public sealed record BlobInfo(string Key, long Size, DateTimeOffset LastModified);
