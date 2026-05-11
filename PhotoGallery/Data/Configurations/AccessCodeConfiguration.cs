@@ -14,8 +14,16 @@ public class AccessCodeConfiguration : IEntityTypeConfiguration<AccessCode>
             .HasMaxLength(50)
             .IsRequired();
 
+        // Must match AspNetUsers.Id (nvarchar(450), the IdentityUser<string>
+        // default) because UserConfiguration declares
+        // `HasMany(u => u.AccessCodes).WithOne().HasForeignKey(ac => ac.CreatedBy)`.
+        // SqlServer enforces "FK column length == principal key length"; a
+        // mismatched 256 vs 450 fails the InitialCreate migration on its
+        // first run with "Column 'AspNetUsers.Id' is not the same length or
+        // scale as referencing column 'AccessCodes.CreatedBy' in foreign
+        // key 'FK_AccessCodes_AspNetUsers_CreatedBy'."
         builder.Property(ac => ac.CreatedBy)
-            .HasMaxLength(256)
+            .HasMaxLength(450)
             .IsRequired();
 
         builder.Property(ac => ac.RowVersion)
