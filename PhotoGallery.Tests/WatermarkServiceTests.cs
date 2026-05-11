@@ -118,6 +118,46 @@ public class WatermarkServiceTests
             service.ApplyWatermarkAsync(input, null!, "test"));
     }
 
+    /// <summary>
+    /// Regression test for the production crash where every photo upload emitted
+    /// <c>System.InvalidOperationException: Sequence contains no elements</c>
+    /// because the runtime image shipped without any fonts. With fonts-dejavu-core
+    /// baked into Dockerfile.backend (Phase 1), watermarking a tiny in-memory JPEG
+    /// must succeed end-to-end.
+    ///
+    /// Cleanly skipped (early-return) when <see cref="SystemFonts.Families"/> is
+    /// empty so the test never fails spuriously on a CI runner that has no fonts
+    /// installed. xUnit 2.x has no conditional Skip; the early return is the
+    /// pragmatic equivalent and is documented here.
+    /// </summary>
+    [Fact]
+    public async Task ApplyWatermarkAsync_SmallInMemoryJpeg_Succeeds()
+    {
+        if (!SixLabors.Fonts.SystemFonts.Families.Any())
+        {
+            // Skip: no fonts on this runner; the production fix is fonts-dejavu-core in the image.
+            return;
+        }
+
+        var service = CreateService();
+
+        // Synthesize a 100x100 solid red JPEG in-memory.
+        using var sourceImage = new Image<Rgba32>(100, 100, new Rgba32(255, 0, 0));
+        using var input = new MemoryStream();
+        await sourceImage.SaveAsJpegAsync(input);
+        input.Position = 0;
+
+        using var output = new MemoryStream();
+        await service.ApplyWatermarkAsync(input, output, "© Phase1 Test");
+
+        Assert.True(output.Length > 0, "Watermarked output stream is empty");
+
+        output.Position = 0;
+        using var decoded = await Image.LoadAsync(output);
+        Assert.Equal(100, decoded.Width);
+        Assert.Equal(100, decoded.Height);
+    }
+
     [Fact]
     public async Task ApplyWatermarkAsync_RespectsJpegQuality()
     {
