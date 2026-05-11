@@ -457,6 +457,22 @@ public class AlbumService : IAlbumService
 
 *→ consult `efcore-migration-safer` for the canonical migration workflow.*
 
+> ⚠️ **Any time a model class, `DbContext` config, or entity property changes — even just an annotation — you MUST scaffold a new EF migration.** EF Core 9 makes `Microsoft.EntityFrameworkCore.Migrations.PendingModelChangesWarning` a runtime error, so `MigrateAsync()` will throw and `Program.cs` aborts startup if the snapshot drifts from the live model. The migration's `Up()`/`Down()` may be empty — what matters is the refreshed Designer.cs snapshot. PhotoGallery runs **two** providers (Sqlite + SqlServer); scaffold against **both** contexts whenever the shared model changes:
+>
+> ```bash
+> # Sqlite (default local dev)
+> dotnet ef migrations add <DescriptiveName> \
+>   --context ApplicationDbContext \
+>   --output-dir Data/Migrations
+>
+> # SqlServer (Azure-backed dev / production)
+> dotnet ef migrations add <DescriptiveName>SqlServer \
+>   --context ApplicationDbContextSqlServer \
+>   --output-dir Data/Migrations/SqlServer
+> ```
+>
+> Note: migration class names must be unique across both contexts even though they live in different namespaces — the EF tool collides on bare class name. Suffix the SqlServer one with `SqlServer` (or any disambiguator).
+
 ```bash
 dotnet ef migrations add InitialAlbumSchema --startup-project PhotoGallery
 dotnet ef database update --startup-project PhotoGallery
@@ -467,11 +483,23 @@ dotnet ef database update --startup-project PhotoGallery
 services.AddScoped<IAlbumRepository, AlbumRepository>();
 services.AddScoped<IAlbumService, AlbumService>();
 
-// Auto-migration
-using (var scope = app.Services.CreateScope())
+// Auto-migration — MUST fail-fast on error. A running container with an
+// un-migrated database 500s every authenticated request because Identity
+// tables are missing, and that failure is invisible if the exception is
+// swallowed. Let it bubble out so ACA's startup probe marks the revision
+// unhealthy and the deployment is flagged rather than silently broken.
+try
 {
+    using var scope = app.Services.CreateScope();
     var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await context.Database.MigrateAsync();
+}
+catch (Exception ex)
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    logger.LogCritical(ex, "Database initialization failed. Aborting startup.");
+    Log.CloseAndFlush();
+    Environment.Exit(1);
 }
 ```
 
