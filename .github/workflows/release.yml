@@ -11,6 +11,19 @@ name: Release Deploy
 on:
   release:
     types: [published]
+  # Manual escape hatch for two cases:
+  #   1. cut-release.yml created the release via GITHUB_TOKEN, which does NOT
+  #      cascade to other workflows by GitHub design — so `release: published`
+  #      from that source is silently dropped. (Fix is to swap GITHUB_TOKEN
+  #      for a PAT in cut-release.yml; tracked as follow-up.)
+  #   2. Re-running a deploy against an existing release tag (e.g. ACA fell
+  #      over and needs the image re-pushed).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to deploy (e.g. v1.0.0.0). Defaults to the latest published release.'
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -24,13 +37,24 @@ jobs:
       ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Resolve release version (strip leading 'v')
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Resolve the tag from the event payload (release: published) or the
+          # workflow_dispatch input. If neither, fall back to the latest
+          # published release on this repo.
           tag="${{ github.event.release.tag_name }}"
+          if [ -z "$tag" ]; then tag="${{ inputs.tag }}"; fi
+          if [ -z "$tag" ]; then
+            tag=$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName)
+          fi
           version="${tag#v}"
+          echo "Deploying tag=$tag version=$version"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -123,7 +147,7 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.publish-images.outputs.tag }}
           submodules: false
           lfs: false
 
