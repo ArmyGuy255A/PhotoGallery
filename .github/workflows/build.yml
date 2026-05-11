@@ -180,6 +180,45 @@ jobs:
             ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:latest
             ${{ env.ACR_LOGIN_SERVER }}/photogallery-frontend:${{ github.sha }}
 
+  deploy-backend:
+    name: Deploy backend (ACA)
+    needs: [build-docker]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # OIDC token issuance for azure/login@v2 — see DESIGN_DECISIONS.md D015.
+    # The github-actions SP holds Contributor on the Container App resource
+    # (scoped narrowly via terraform/dev/main.tf), which is the minimum
+    # required to update its image and roll a new revision.
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Pin the immutable SHA tag (not :latest) so each revision is
+      # reproducible and rollback is just `az containerapp revision set-active`
+      # against a prior revision name.
+      - name: Update Container App image
+        run: |
+          az containerapp update \
+            --name "${{ vars.ACA_BACKEND_NAME }}" \
+            --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
+            --image "${{ vars.ACR_LOGIN_SERVER }}/photogallery-backend:${{ github.sha }}"
+
+      # Surface the active revision so the run summary tells us what's live.
+      - name: Show active revision
+        run: |
+          az containerapp revision list \
+            --name "${{ vars.ACA_BACKEND_NAME }}" \
+            --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
+            --query "[?properties.active].{name:name, image:properties.template.containers[0].image, traffic:properties.trafficWeight, health:properties.healthState}" \
+            --output table
+
   security-scan:
     name: NuGet vulnerability scan (informational)
     runs-on: ubuntu-latest

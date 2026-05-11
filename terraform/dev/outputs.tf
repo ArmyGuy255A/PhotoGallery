@@ -57,6 +57,11 @@ output "container_app_uami_principal_id" {
   value = module.compute.uami_principal_id
 }
 
+output "container_app_id" {
+  description = "Resource ID of the API Container App. Used for least-privilege role assignments and for the CI deploy step to target with `az containerapp update`."
+  value       = module.compute.container_app_id
+}
+
 ###############################################################################
 # Container Registry
 ###############################################################################
@@ -94,6 +99,9 @@ output "static_web_app_api_key" {
   description = "Deploy API key for the SWA — used by the FE GitHub Actions workflow."
   value       = module.staticwebapp.api_key
   sensitive   = true
+}
+
+###############################################################################
 # GitHub Actions OIDC — values to set as repo variables/secrets so the CI
 # pipeline can authenticate to Azure with no long-lived credentials.
 #
@@ -102,6 +110,8 @@ output "static_web_app_api_key" {
 #   gh variable set AZURE_TENANT_ID       --body "$(terraform output -raw tenant_id)"
 #   gh variable set AZURE_SUBSCRIPTION_ID --body "$(terraform output -raw subscription_id)"
 #   gh variable set ACR_LOGIN_SERVER      --body "$(terraform output -raw container_registry_login_server)"
+#   gh variable set ACA_BACKEND_NAME      --body "$(terraform output -raw container_app_name)"
+#   gh variable set ACA_RESOURCE_GROUP    --body "$(terraform output -raw resource_group_name)"
 ###############################################################################
 
 output "github_actions_client_id" {

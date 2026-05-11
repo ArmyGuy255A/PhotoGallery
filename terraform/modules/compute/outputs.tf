@@ -28,6 +28,11 @@ output "uami_id" {
   value = azurerm_user_assigned_identity.aca.id
 }
 
+output "container_app_id" {
+  description = "Resource ID of the Container App. Use as scope for role assignments (e.g. AcrPush, Contributor for CI deploys)."
+  value       = azurerm_container_app.this.id
+}
+
 output "container_app_environment_id" {
   value = azurerm_container_app_environment.this.id
 }
