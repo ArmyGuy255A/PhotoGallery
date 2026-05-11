@@ -277,7 +277,14 @@ builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
 
-// Initialize database
+// Initialize database — migrations + seed.
+//
+// HARD FAIL on error: a running container with an un-migrated database
+// 500s every authenticated request because the Identity tables are missing,
+// and that failure was previously invisible because the exception got
+// swallowed here. Bubbling out terminates the process; ACA's startup probe
+// then marks the revision unhealthy so the deployment is flagged rather
+// than silently broken.
 try
 {
     await app.InitializeDatabaseAsync();
@@ -285,7 +292,9 @@ try
 catch (Exception ex)
 {
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    logger.LogError(ex, "Database initialization failed. The application will start anyway.");
+    logger.LogCritical(ex, "Database initialization failed. Aborting startup.");
+    Log.CloseAndFlush();
+    Environment.Exit(1);
 }
 
 // Configure the HTTP request pipeline.

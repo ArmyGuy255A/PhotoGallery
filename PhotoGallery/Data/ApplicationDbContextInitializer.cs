@@ -33,7 +33,15 @@ public class ApplicationDbContextInitializer(
         }
         catch (Exception ex)
         {
+            // RETHROW — startup must NOT silently continue with an
+            // un-migrated database. Symptoms of swallowing this previously
+            // were a healthy container that 500'd every request because
+            // `dbo.AspNetUsers` (and every other table) didn't exist.
+            // Program.cs catches at the top level, logs the fatal, and
+            // aborts the process so the container app's readiness probe
+            // fails fast and the deployment is flagged.
             logger.LogError(ex, "An error occurred while initialising the database.");
+            throw;
         }
     }
 
