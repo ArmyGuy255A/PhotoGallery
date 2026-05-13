@@ -210,8 +210,14 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
             await foreach (var blobItem in Container.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, CancellationToken.None))
             {
                 var size = blobItem.Properties.ContentLength ?? 0L;
-                var lastModified = blobItem.Properties.LastModified ?? DateTimeOffset.UtcNow;
-                items.Add(new BlobInfo(blobItem.Name, size, lastModified));
+                var lastModified = blobItem.Properties.LastModified;
+                if (lastModified is null)
+                {
+                    _logger.LogWarning(
+                        "Blob metadata for {Key} has null LastModified during prefix listing; defaulting to current UTC time",
+                        blobItem.Name);
+                }
+                items.Add(new BlobInfo(blobItem.Name, size, lastModified ?? DateTimeOffset.UtcNow));
             }
             return items;
         }
@@ -228,25 +234,20 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
         if (keyList.Count == 0) return 0;
 
         int deleted = 0;
-        // BlobBatchClient supports up to 256 URIs per request.
-        const int BatchSize = 256;
-        foreach (var chunk in keyList.Chunk(BatchSize))
+        foreach (var key in keyList)
         {
-            foreach (var key in chunk)
+            try
             {
-                try
+                var resp = await Container.GetBlobClient(key).DeleteIfExistsAsync();
+                if (resp.Value)
                 {
-                    var resp = await Container.GetBlobClient(key).DeleteIfExistsAsync();
-                    if (resp.Value)
-                    {
-                        deleted++;
-                    }
+                    deleted++;
                 }
-                catch (Exception ex)
-                {
-                    // Idempotent race: treat individual failures as warnings, keep going.
-                    _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
-                }
+            }
+            catch (Exception ex)
+            {
+                // Idempotent race: treat individual failures as warnings, keep going.
+                _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
             }
         }
         return deleted;
@@ -265,7 +266,8 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
     ///         protocol gotcha called out in <see cref="MinioStorageProvider"/>.
     ///         Azure blob endpoints are always HTTPS and we lock that in so
     ///         consumers can't be downgraded to HTTP.</item>
-    ///   <item><c>Resource = "b"</c> (single blob) with <c>Read</c> permission.</item>
+    ///   <item><c>Resource = "b"</c> (single blob) with the supplied
+    ///         <paramref name="permissions"/>.</item>
     ///   <item>Signed with the supplied <see cref="UserDelegationKey"/> — the
     ///         resulting SAS includes <c>skoid</c>/<c>sktid</c> claims that
     ///         account-key SAS does not, which is how downstream verification
@@ -278,7 +280,8 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
         string blobName,
         UserDelegationKey userDelegationKey,
         DateTimeOffset expiresOn,
-        Uri blobEndpoint)
+        Uri blobEndpoint,
+        BlobSasPermissions permissions = BlobSasPermissions.Read)
     {
         var builder = new BlobSasBuilder
         {
@@ -289,7 +292,7 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
             ExpiresOn = expiresOn,
             Protocol = SasProtocol.Https,
         };
-        builder.SetPermissions(BlobSasPermissions.Read);
+        builder.SetPermissions(permissions);
 
         var sasToken = builder.ToSasQueryParameters(userDelegationKey, accountName).ToString();
 
@@ -301,5 +304,33 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
             blobName.Split('/').Select(Uri.EscapeDataString));
         var blobPath = $"{basePath}/{containerName}/{escapedBlobName}";
         return new Uri($"{blobPath}?{sasToken}");
+    }
+
+    /// <summary>
+    /// Mint a write-only, single-blob user-delegation SAS. Used by the
+    /// direct-to-blob upload flow (Phase 2). Permissions are
+    /// <c>Write | Create</c> — enough for a single PUT to a brand-new blob,
+    /// not enough to read, list, or delete. TTL is the caller's choice
+    /// (recommended 30 min in <see cref="IStorageProvider"/>).
+    /// </summary>
+    public async Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl)
+    {
+        var udk = await _udkProvider.GetAsync();
+        var expiresOn = DateTimeOffset.UtcNow.Add(ttl);
+
+        var sasUri = BuildBlobSasUri(
+            accountName: _serviceClient.AccountName,
+            containerName: _containerName,
+            blobName: key,
+            userDelegationKey: udk,
+            expiresOn: expiresOn,
+            blobEndpoint: _serviceClient.Uri,
+            permissions: BlobSasPermissions.Write | BlobSasPermissions.Create);
+
+        _logger.LogInformation(
+            "Write-only user-delegation SAS generated for Azure Blob: {Key} (expires {ExpiresOn}).",
+            key,
+            expiresOn);
+        return sasUri.ToString();
     }
 }

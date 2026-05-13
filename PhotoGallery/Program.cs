@@ -19,6 +19,7 @@ using PhotoGallery.Services;
 using PhotoGallery.Services.Email;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
+using PhotoGallery.Hubs;
 using Serilog;
 using Serilog.Events;
 
@@ -283,6 +284,13 @@ builder.Services.Configure<AuthenticationOptions>(options =>
 
 builder.Services.AddControllersWithViews();
 
+// SignalR hub for real-time photo-processing progress (Phase 3).
+// JWT auth on the WebSocket handshake is wired via the OnMessageReceived
+// callback in Authentication/DependencyInjection.cs — browsers can't set
+// custom headers on the WS upgrade so the SPA passes the JWT in the
+// ?access_token=... query string for paths under /hubs/.
+builder.Services.AddSignalR();
+
 var app = builder.Build();
 
 // Initialize database — migrations + seed.
@@ -349,6 +357,11 @@ app.MapControllerRoute(
 
 app.MapRazorPages()
     .WithStaticAssets();
+
+// Map the photo-progress SignalR hub. Authenticated via JwtBearer; the
+// SPA passes the JWT as ?access_token=... on the WS upgrade. See
+// Authentication/DependencyInjection.cs → OnMessageReceived.
+app.MapHub<PhotoProgressHub>("/hubs/photo-progress");
 
 // Start image processing worker
 using (var scope = app.Services.CreateScope())

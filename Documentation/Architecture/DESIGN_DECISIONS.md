@@ -1772,3 +1772,54 @@ JSON
 - `.github/workflows/validate-pr-base.yml` — new.
 - `.github/workflows/deploy-frontend.yml` — deleted.
 - Skill updates (`skills/*/SKILL.md`) — `branch-strategy-u-prefix` mentions now target `trial`, not `main`.
+
+---
+
+## D017: Direct-to-Blob Uploads + Real-Time Processing Progress (SignalR)
+
+**Status:** ✅ Accepted (Phase 2 + Phase 3 of the v2 plan)
+**Decision owner:** pg-aspnet-backend-dev
+**Related:** D003 (Image Processing), D007 (Storage/DB Consistency), D011 (AAD-only auth + user-delegation SAS)
+
+### Context
+
+The v1 upload path was server-proxied: the SPA POSTed a multipart body to the ASP.NET API, which buffered each file in memory and re-uploaded to Azure Blob Storage. This put every byte of every upload through the API container's CPU and network budget. A 1 GB photo batch was 1 GB of traffic through a 0.5 vCPU Container Apps instance, which was the practical ceiling on upload throughput.
+
+Separately, the SPA had no real-time visibility into processing. Per-quality progress required polling `GET /api/photos/{id}/status` every 2 s, which scales linearly in users × photos × qualities.
+
+### Decision
+
+**Direct-to-blob uploads (Phase 2).** Two new endpoints replace the server-proxied path for new clients while the multipart endpoint stays as a fallback:
+
+1. `POST /api/photos/albums/{albumId}/upload-tickets` mints write-only, single-blob user-delegation SAS URLs (TTL 30 min) for each requested file. A Photo row is inserted in `ProcessingStatus = Uploading` (a new enum value, 4) and a parent `ProcessingQueue` row is bound to it. The album listing query (`PhotoRepository.GetAlbumPhotosAsync`) hides rows in `Uploading` so the user never sees a ghost row while the browser is mid-PUT.
+2. The SPA PUTs the file directly to the SAS URL. The API never sees the bytes.
+3. `POST /api/photos/{photoId}/upload-complete` HEADs the blob via `IStorageProvider.ExistsAsync`, transitions the row to `Pending`, creates the four `ProcessingQueueItem` rows (Thumbnail / Low / Medium / High), and broadcasts `ProcessingStarted` to the uploader's SignalR group.
+
+`IStorageProvider.GenerateWriteSasUrlAsync(string key, TimeSpan ttl)` is the new abstraction. Azure: user-delegation SAS with `BlobSasPermissions.Write | Create`, single-blob scope, HTTPS-locked. MinIO: pre-signed PUT URL.
+
+**Real-time progress (Phase 3).** A new SignalR hub at `/hubs/photo-progress`:
+
+- **Auth:** standard `JwtBearer` scheme. Browsers cannot set the `Authorization` header on a WebSocket upgrade, so the SPA carries the JWT as `?access_token=...` in the query string. The `JwtBearerOptions.Events.OnMessageReceived` callback in `Authentication/DependencyInjection.cs` reads the query token whenever the request path starts with `/hubs`. This chains onto (does not replace) the pre-existing auth-failure logging handlers.
+- **Groups:** every connection joins `user:{nameid}` on connect. Broadcasts target `Clients.Group($"user:{photo.UploadedBy}")` so only the uploader's connected tabs receive a given photo's progress.
+- **Events:** `ProcessingStarted`, `ProcessingProgress` (25 % / 50 % / 75 % / 100 % stages within `ImageProcessingService.ProcessQualityAsync`), `ProcessingCompleted` (success or terminal failure).
+- **Resync:** the hub exposes a `RequestStatus(photoId)` server method that sends a one-shot snapshot of the current `ProcessingQueueItem` state to the calling connection only. The SPA invokes it after a reconnect to catch up on missed events.
+
+### Why this matters
+
+- The API container is no longer the upload bottleneck. Throughput is bounded by SPA ↔ storage bandwidth.
+- Progress UX no longer needs polling. 100 photos × 5 qualities × 2 s polling = 250 RPS for one user dropped to push-only deltas.
+
+### Implementation
+
+- `PhotoGallery/Models/Photo.cs` — `PhotoProcessingStatus.Uploading = 4`.
+- `PhotoGallery/Data/Repositories/PhotoRepository.cs` — `GetAlbumPhotosAsync` filters out `Uploading`.
+- `PhotoGallery/Services/Storage/IStorageProvider.cs` — new `GenerateWriteSasUrlAsync` method, implemented by `AzureBlobStorageProvider`, `AzureStorageProvider` (legacy), and `MinioStorageProvider`.
+- `PhotoGallery/Controllers/PhotosController.cs` — new `CreateUploadTickets` + `UploadComplete` endpoints; multipart `UploadPhotos` retained as fallback.
+- `PhotoGallery/Hubs/PhotoProgressHub.cs` — new hub.
+- `PhotoGallery/Program.cs` — `AddSignalR()` + `MapHub<PhotoProgressHub>("/hubs/photo-progress")`.
+- `Authentication/DependencyInjection.cs` — JWT bearer accepts `?access_token=...` for `/hubs/*` paths.
+- `PhotoGallery/Services/Processing/ImageProcessingService.cs` — `IHubContext<PhotoProgressHub>` injected; broadcasts at 0 / 25 / 50 / 75 / 100 %.
+
+### SPA follow-up
+
+The Angular client work (`@microsoft/signalr` package, `PhotoProgressService`, `PhotoService.uploadPhoto` rewrite, per-photo progress UI) ships as a separate PR. Until then, the existing multipart endpoint remains in service for end-to-end flows.

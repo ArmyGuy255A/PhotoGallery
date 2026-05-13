@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using PhotoGallery.Controllers;
 using PhotoGallery.Data.Repositories;
+using PhotoGallery.Hubs;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services.Processing;
@@ -302,9 +304,11 @@ public class OrphanedBlobReaperServiceTests
             photoRepository: Mock.Of<IRepository<Photo>>(),
             albumRepository: Mock.Of<IRepository<Album>>(),
             photoVersionRepository: Mock.Of<IRepository<PhotoVersion>>(),
+            queueRepository: Mock.Of<IRepository<ProcessingQueue>>(),
             queueItemRepository: Mock.Of<IProcessingQueueItemRepository>(),
             storageConsistencyService: BuildPlaceholderConsistencyService(),
             orphanedBlobReaperService: reaper,
+            progressHub: Mock.Of<IHubContext<PhotoProgressHub>>(),
             logger: NullLogger<PhotosController>.Instance);
         controller.ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext
         {
