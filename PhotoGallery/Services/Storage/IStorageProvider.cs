@@ -50,4 +50,56 @@ public interface IStorageProvider
     /// <param name="prefix">Prefix to filter files (e.g., "photos/2024/")</param>
     /// <returns>List of file keys matching the prefix</returns>
     Task<IEnumerable<string>> ListAsync(string prefix);
+
+    /// <summary>
+    /// Generate a write-only, single-blob pre-signed URL that lets the caller
+    /// PUT a single object directly to storage without proxying bytes through
+    /// the API. Used by the direct-to-blob upload flow (Phase 2):
+    /// the SPA receives this URL from <c>POST /api/photos/albums/{id}/upload-tickets</c>
+    /// and PUTs the file contents to it, then notifies the server via
+    /// <c>POST /api/photos/{photoId}/upload-complete</c>.
+    ///
+    /// Implementations:
+    /// <list type="bullet">
+    ///   <item>Azure: user-delegation SAS with <c>Write|Create</c>, single-blob
+    ///         scope (Resource=b), HTTPS-only.</item>
+    ///   <item>MinIO: S3 pre-signed PUT URL.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="key">Blob key the upload will land at (e.g. <c>photogallery/{albumId}/{photoId}/original.jpg</c>)</param>
+    /// <param name="ttl">Lifetime of the URL — recommend 30 min for direct-to-blob uploads.</param>
+    /// <returns>Absolute URL the client can PUT to.</returns>
+    Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl);
+
+    /// <summary>
+    /// List immediate child "virtual directories" under <paramref name="prefix"/>
+    /// using <c>/</c> as a hierarchy delimiter. Returns sub-prefixes only (each
+    /// ending in <c>/</c>) — leaf blobs at this level are not returned. Used by
+    /// the orphaned-blob reaper (Phase 5) to enumerate albumGuid/ and
+    /// photoGuid/ levels without iterating every variant blob.
+    /// </summary>
+    /// <param name="prefix">Parent prefix (must end with <c>/</c> or be empty).</param>
+    Task<IEnumerable<string>> ListSubPrefixesAsync(string prefix);
+
+    /// <summary>
+    /// List all blobs under <paramref name="prefix"/> with size and
+    /// last-modified metadata. The orphaned-blob reaper uses this to apply the
+    /// grace-period filter (skip blobs younger than N minutes to protect
+    /// in-flight direct uploads) and to report bytes reclaimed.
+    /// </summary>
+    Task<IEnumerable<BlobInfo>> ListWithMetadataAsync(string prefix);
+
+    /// <summary>
+    /// Delete many blobs in one logical operation. Implementations may batch
+    /// internally (Azure supports 256 blobs per request); callers should not
+    /// rely on atomicity. Returns the number of blobs successfully deleted.
+    /// Already-deleted blobs are treated as success (idempotent — race-safe
+    /// across multiple reaper replicas).
+    /// </summary>
+    Task<int> DeleteManyAsync(IEnumerable<string> keys);
 }
+
+/// <summary>
+/// Lightweight metadata record returned by <see cref="IStorageProvider.ListWithMetadataAsync"/>.
+/// </summary>
+public sealed record BlobInfo(string Key, long Size, DateTimeOffset LastModified);

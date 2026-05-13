@@ -19,6 +19,7 @@ using PhotoGallery.Services;
 using PhotoGallery.Services.Email;
 using PhotoGallery.Services.Processing;
 using PhotoGallery.Services.Storage;
+using PhotoGallery.Hubs;
 using Serilog;
 using Serilog.Events;
 
@@ -246,10 +247,18 @@ builder.Services.AddScoped<PhotoConsistencyChecker>();
 // is per-instance which is sufficient for the single-process deployment model.
 builder.Services.AddScoped<StorageConsistencyService>();
 
+// Register the orphaned-blob reaper (Phase 5). Scoped to match the existing
+// reconciliation services so the per-tick worker scope and per-request admin
+// endpoint share identical lifetimes. The internal SemaphoreSlim serializes
+// in-process invocations; multi-replica safety relies on DeleteIfExists
+// idempotency at the storage layer.
+builder.Services.AddScoped<OrphanedBlobReaperService>();
+
 // Register background services for photo processing and URL refresh
 builder.Services.AddHostedService<PhotoProcessingWorker>();
 builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
 builder.Services.AddHostedService<StorageConsistencyWorker>();
+builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
@@ -274,6 +283,13 @@ builder.Services.Configure<AuthenticationOptions>(options =>
 });
 
 builder.Services.AddControllersWithViews();
+
+// SignalR hub for real-time photo-processing progress (Phase 3).
+// JWT auth on the WebSocket handshake is wired via the OnMessageReceived
+// callback in Authentication/DependencyInjection.cs — browsers can't set
+// custom headers on the WS upgrade so the SPA passes the JWT in the
+// ?access_token=... query string for paths under /hubs/.
+builder.Services.AddSignalR();
 
 var app = builder.Build();
 
@@ -341,6 +357,11 @@ app.MapControllerRoute(
 
 app.MapRazorPages()
     .WithStaticAssets();
+
+// Map the photo-progress SignalR hub. Authenticated via JwtBearer; the
+// SPA passes the JWT as ?access_token=... on the WS upgrade. See
+// Authentication/DependencyInjection.cs → OnMessageReceived.
+app.MapHub<PhotoProgressHub>("/hubs/photo-progress");
 
 // Start image processing worker
 using (var scope = app.Services.CreateScope())

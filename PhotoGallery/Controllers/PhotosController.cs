@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
+using PhotoGallery.Hubs;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services.Processing;
@@ -11,7 +13,24 @@ using System.Security.Claims;
 namespace PhotoGallery.Controllers;
 
 /// <summary>
-/// API endpoints for photo uploads, downloads, and processing
+/// API endpoints for photo uploads, downloads, and processing.
+///
+/// Upload paths — there are two:
+///
+///   1. Direct-to-blob (Phase 2, preferred):
+///      <c>POST /api/photos/albums/{albumId}/upload-tickets</c> mints write
+///      SAS URLs; the SPA PUTs the files directly to storage; then
+///      <c>POST /api/photos/{photoId}/upload-complete</c> verifies the blob
+///      landed, transitions the row to <c>Pending</c>, creates the per-quality
+///      <c>ProcessingQueueItem</c>s, and broadcasts <c>ProcessingStarted</c>
+///      via the SignalR hub. The API container never sees the file bytes —
+///      uploads are bounded by SPA ↔ storage bandwidth, not by the container
+///      CPU/network budget.
+///
+///   2. Server-proxied multipart (<c>POST /api/photos/albums/{albumId}</c>):
+///      kept as a fallback for tests, very small uploads, and any client
+///      that can't speak the 3-call flow. The two paths converge at the
+///      same database + queue rows.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -22,9 +41,24 @@ public class PhotosController : ControllerBase
     private readonly IRepository<Photo> _photoRepository;
     private readonly IRepository<Album> _albumRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
+    private readonly IRepository<ProcessingQueue> _queueRepository;
     private readonly IProcessingQueueItemRepository _queueItemRepository;
     private readonly StorageConsistencyService _storageConsistencyService;
+    private readonly IHubContext<PhotoProgressHub> _progressHub;
+    private readonly OrphanedBlobReaperService _orphanedBlobReaperService;
     private readonly ILogger<PhotosController> _logger;
+
+    // Single-file upload ceiling for direct-to-blob tickets. Picked to match
+    // the largest practical RAW/JPEG photo without inviting abuse. Kestrel's
+    // default request limit (30 MB) only matters for the multipart fallback
+    // path; SAS-uploaded blobs never traverse the API host.
+    private const long MaxUploadBytes = 100L * 1024 * 1024;
+
+    // TTL for the write-only SAS minted by /upload-tickets. Long enough for
+    // a flaky mobile uplink to finish the PUT, short enough that an
+    // abandoned ticket expires before the orphan-blob reaper (Phase 5,
+    // default 60 min grace) considers reaping it.
+    private static readonly TimeSpan UploadSasTtl = TimeSpan.FromMinutes(30);
 
     public PhotosController(
         IImageProcessor imageProcessor,
@@ -32,8 +66,11 @@ public class PhotosController : ControllerBase
         IRepository<Photo> photoRepository,
         IRepository<Album> albumRepository,
         IRepository<PhotoVersion> photoVersionRepository,
+        IRepository<ProcessingQueue> queueRepository,
         IProcessingQueueItemRepository queueItemRepository,
         StorageConsistencyService storageConsistencyService,
+        IHubContext<PhotoProgressHub> progressHub,
+        OrphanedBlobReaperService orphanedBlobReaperService,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -41,17 +78,237 @@ public class PhotosController : ControllerBase
         _photoRepository = photoRepository;
         _albumRepository = albumRepository;
         _photoVersionRepository = photoVersionRepository;
+        _queueRepository = queueRepository;
         _queueItemRepository = queueItemRepository;
         _storageConsistencyService = storageConsistencyService;
+        _orphanedBlobReaperService = orphanedBlobReaperService;
+        _progressHub = progressHub;
         _logger = logger;
     }
 
     /// <summary>
-    /// Upload photos to an album (authenticated users only)
+    /// Direct-to-blob upload, step 1: mint per-file write SAS URLs.
+    ///
+    /// For every requested file, validates ownership of the target album,
+    /// rejects oversize requests, inserts a Photo row in
+    /// <see cref="PhotoProcessingStatus.Uploading"/> (so the album listing
+    /// keeps hiding the row until step 2 lands), inserts a parent
+    /// <see cref="ProcessingQueue"/> bound to the photo, and returns the
+    /// write SAS that the SPA will PUT to.
+    ///
+    /// The per-quality <see cref="ProcessingQueueItem"/> rows are deliberately
+    /// NOT created here — they're created in <see cref="UploadComplete"/>
+    /// once the blob actually exists. This guarantees the worker only ever
+    /// dequeues photos whose original.jpg is real.
     /// </summary>
-    /// <param name="albumId">Album ID to upload to</param>
-    /// <param name="files">Photo files to upload</param>
-    /// <returns>List of job IDs for uploaded photos</returns>
+    [Authorize]
+    [HttpPost("albums/{albumId}/upload-tickets")]
+    public async Task<ActionResult<List<UploadTicketResponse>>> CreateUploadTickets(
+        string albumId,
+        [FromBody] List<UploadTicketRequest> files)
+    {
+        if (!Guid.TryParse(albumId, out var albumGuid))
+            return BadRequest("Invalid album ID");
+
+        if (files == null || files.Count == 0)
+            return BadRequest("No files requested");
+
+        var album = await _albumRepository.GetByIdAsync(albumGuid);
+        if (album == null)
+            return NotFound("Album not found");
+
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        if (album.OwnerId != userId && !User.IsInRole("Admin"))
+            return Forbid();
+
+        var responses = new List<UploadTicketResponse>(files.Count);
+
+        foreach (var file in files)
+        {
+            if (string.IsNullOrWhiteSpace(file.FileName))
+                return BadRequest("fileName is required for every ticket");
+
+            if (file.Size <= 0 || file.Size > MaxUploadBytes)
+                return BadRequest(
+                    $"{file.FileName}: size {file.Size} bytes is outside the allowed range " +
+                    $"(0, {MaxUploadBytes}]");
+
+            var photoId = Guid.NewGuid();
+            var blobPath = $"photogallery/{albumGuid}/{photoId}/original.jpg";
+
+            var photo = new Photo
+            {
+                Id = photoId,
+                AlbumId = albumGuid,
+                FileName = file.FileName,
+                UploadDate = DateTime.UtcNow,
+                UploadedBy = userId,
+                StorageKey = blobPath,
+                ProcessingStatus = PhotoProcessingStatus.Uploading
+            };
+            await _photoRepository.AddAsync(photo);
+
+            var queue = new ProcessingQueue
+            {
+                PhotoId = photoId,
+                Status = ProcessingStatus.Pending
+            };
+            await _queueRepository.AddAsync(queue);
+
+            // Save before minting the SAS so that, if save fails, we don't
+            // hand the SPA a writable URL into storage with no row to
+            // reconcile against.
+            await _photoRepository.SaveChangesAsync();
+
+            var uploadUrl = await _storageProvider.GenerateWriteSasUrlAsync(blobPath, UploadSasTtl);
+            var expiresAt = DateTime.UtcNow.Add(UploadSasTtl);
+
+            responses.Add(new UploadTicketResponse
+            {
+                PhotoId = photoId.ToString(),
+                UploadUrl = uploadUrl,
+                BlobPath = blobPath,
+                ExpiresAt = expiresAt
+            });
+
+            _logger.LogInformation(
+                "Issued upload ticket for photo {PhotoId} (file {FileName}, {Size} bytes) in album {AlbumId} for user {UserId}",
+                photoId, file.FileName, file.Size, albumGuid, userId);
+        }
+
+        return Ok(responses);
+    }
+
+    /// <summary>
+    /// Direct-to-blob upload, step 2: confirm the PUT landed and start
+    /// processing.
+    ///
+    /// Verifies the blob exists at the expected path (HEAD via
+    /// <c>BlobClient.ExistsAsync</c> through <see cref="IStorageProvider.ExistsAsync"/>),
+    /// transitions the row from <c>Uploading</c> to <c>Pending</c>, creates
+    /// the per-quality <see cref="ProcessingQueueItem"/> rows that the worker
+    /// will pick up, and broadcasts <c>ProcessingStarted</c> to the
+    /// uploader's hub group.
+    /// </summary>
+    [Authorize]
+    [HttpPost("{photoId:guid}/upload-complete")]
+    public async Task<ActionResult<UploadCompleteResponse>> UploadComplete(
+        Guid photoId,
+        [FromBody] UploadCompleteRequest body)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var photo = await _photoRepository.GetByIdAsync(photoId);
+        if (photo == null)
+            return NotFound("Photo not found");
+
+        if (photo.UploadedBy != userId && !User.IsInRole("Admin"))
+            return Forbid();
+
+        if (photo.ProcessingStatus != PhotoProcessingStatus.Uploading)
+        {
+            // Idempotency: a duplicate /upload-complete after the row already
+            // transitioned to Pending/Processing/Complete should be a no-op,
+            // not an error. The SPA may retry the call on a flaky network.
+            _logger.LogInformation(
+                "Photo {PhotoId} upload-complete called but status is already {Status} — treating as no-op",
+                photoId, photo.ProcessingStatus);
+            return Ok(new UploadCompleteResponse
+            {
+                PhotoId = photoId.ToString(),
+                Status = photo.ProcessingStatus.ToString()
+            });
+        }
+
+        // HEAD the blob — never trust the client's claim that the PUT landed.
+        // If the blob isn't there, the row stays in Uploading and the
+        // orphan-blob reaper (Phase 5) will eventually delete the photo row.
+        if (!await _storageProvider.ExistsAsync(photo.StorageKey))
+        {
+            _logger.LogWarning(
+                "upload-complete for photo {PhotoId} but blob {Key} does not exist — refusing",
+                photoId, photo.StorageKey);
+            return BadRequest(new { error = "Blob not found at expected path", blobPath = photo.StorageKey });
+        }
+
+        // Locate (or create) the parent ProcessingQueue row that
+        // /upload-tickets inserted, and add the four quality items.
+        var allQueues = await _queueRepository.GetAllAsync();
+        var queue = allQueues.FirstOrDefault(q => q.PhotoId == photoId);
+        if (queue == null)
+        {
+            queue = new ProcessingQueue { PhotoId = photoId, Status = ProcessingStatus.Pending };
+            await _queueRepository.AddAsync(queue);
+            await _queueRepository.SaveChangesAsync();
+        }
+
+        var qualities = new[]
+        {
+            QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High
+        };
+        foreach (var quality in qualities)
+        {
+            await _queueItemRepository.AddAsync(new ProcessingQueueItem
+            {
+                ProcessingQueueId = queue.Id,
+                PhotoId = photoId,
+                Quality = quality,
+                Status = ProcessingStatus.Pending,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        photo.ProcessingStatus = PhotoProcessingStatus.Pending;
+        photo.ProcessingStartedAt = DateTime.UtcNow;
+        await _photoRepository.UpdateAsync(photo);
+        await _photoRepository.SaveChangesAsync();
+        await _queueItemRepository.SaveChangesAsync();
+
+        // Broadcast ProcessingStarted (no quality — this is the per-photo
+        // event) to the uploader's hub group. Each per-quality
+        // ProcessingStarted event is emitted by ImageProcessingService when
+        // the worker actually picks up the queue item.
+        try
+        {
+            await _progressHub.Clients
+                .Group(PhotoProgressHub.UserGroup(photo.UploadedBy))
+                .SendAsync(
+                    PhotoProgressEvents.ProcessingStarted,
+                    new ProcessingStartedPayload(photoId.ToString(), null));
+        }
+        catch (Exception ex)
+        {
+            // Hub broadcast must never block the upload-complete response.
+            // The SPA will catch up via PhotoProgressHub.RequestStatus on
+            // its next (re)connect.
+            _logger.LogWarning(ex,
+                "Failed to broadcast ProcessingStarted for photo {PhotoId} — non-fatal",
+                photoId);
+        }
+
+        _logger.LogInformation(
+            "Photo {PhotoId} upload-complete: queued 4 quality items, transitioned to Pending. ActualSize={ActualSize} bytes Checksum={Checksum}",
+            photoId, body.ActualSize, body.Checksum ?? "(none)");
+
+        return Ok(new UploadCompleteResponse
+        {
+            PhotoId = photoId.ToString(),
+            Status = PhotoProcessingStatus.Pending.ToString()
+        });
+    }
+
+    /// <summary>
+    /// Upload photos to an album (multipart fallback path).
+    ///
+    /// Kept for tests, small uploads, and clients that can't speak the
+    /// direct-to-blob flow above. The preferred path is
+    /// <see cref="CreateUploadTickets"/> + <see cref="UploadComplete"/>.
+    /// </summary>
     [Authorize]
     [HttpPost("albums/{albumId}")]
     public async Task<ActionResult<UploadPhotoResponse>> UploadPhotos(string albumId, IFormFileCollection files)
@@ -405,6 +662,44 @@ public class PhotosController : ControllerBase
             return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
+    /// (Phase 5). Scans top-level <c>photogallery/&lt;albumGuid&gt;/</c> and
+    /// <c>photogallery/&lt;albumGuid&gt;/&lt;photoGuid&gt;/</c> prefixes and
+    /// deletes any whose DB row no longer exists. Blobs younger than
+    /// <c>Storage:OrphanReapGraceMinutes</c> are skipped to protect in-flight
+    /// direct uploads.
+    ///
+    /// Returns a JSON summary: <c>{ scanned, orphanedAlbums, orphanedPhotos,
+    /// blobsDeleted, bytesReclaimed, skippedByGracePeriod, elapsedMs }</c>.
+    ///
+    /// Same code path as the scheduled <see cref="OrphanedBlobReaperWorker"/>.
+    /// Note that this is a separate route from <c>reconcile-storage</c> (which
+    /// runs the DB→storage reconciler). The two endpoints are complementary
+    /// halves of the consistency story.
+    /// </summary>
+    [HttpPost("admin/reap-orphans")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ReapOrphans(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _logger.LogInformation("Admin {User} triggered orphaned-blob reap", User.Identity?.Name);
+            var report = await _orphanedBlobReaperService.RunOnceAsync(cancellationToken);
+            return Ok(report);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Admin orphaned-blob reap was cancelled");
+            return StatusCode(499, new { message = "Reap cancelled by client" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Admin orphaned-blob reap failed");
+            return StatusCode(500, new { message = "Reap failed", error = ex.Message });
+        }
+    }
 }
 
 /// <summary>
@@ -454,4 +749,44 @@ public class ProcessingStatusDto
     public bool HasLow { get; set; }
     public bool HasMedium { get; set; }
     public bool HasHigh { get; set; }
+}
+
+/// <summary>
+/// Per-file request entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// </summary>
+public class UploadTicketRequest
+{
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public long Size { get; set; }
+}
+
+/// <summary>
+/// Per-file response entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// The SPA PUTs the file bytes to <see cref="UploadUrl"/> and then calls
+/// <c>POST /api/photos/{photoId}/upload-complete</c>.
+/// </summary>
+public class UploadTicketResponse
+{
+    public string PhotoId { get; set; } = string.Empty;
+    public string UploadUrl { get; set; } = string.Empty;
+    public string BlobPath { get; set; } = string.Empty;
+    public DateTime ExpiresAt { get; set; }
+}
+
+/// <summary>
+/// Body for <c>POST /api/photos/{photoId}/upload-complete</c>. The optional
+/// checksum is logged for forensics; we don't verify it against the blob
+/// today (Azure Blob returns Content-MD5 if the client sent it on the PUT).
+/// </summary>
+public class UploadCompleteRequest
+{
+    public long ActualSize { get; set; }
+    public string? Checksum { get; set; }
+}
+
+public class UploadCompleteResponse
+{
+    public string PhotoId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
 }

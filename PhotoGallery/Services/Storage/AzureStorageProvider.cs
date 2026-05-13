@@ -147,4 +147,91 @@ public class AzureStorageProvider : IStorageProvider
             return Enumerable.Empty<string>();
         }
     }
+
+    /// <summary>
+    /// Account-key SAS variant of write-only single-blob URL. Used only by the
+    /// legacy <c>Storage:Provider=Azure</c> alias; the AAD-only profile uses
+    /// <see cref="AzureBlobStorageProvider.GenerateWriteSasUrlAsync"/>.
+    /// </summary>
+    public Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl)
+    {
+        var blobClient = _containerClient.GetBlobClient(key);
+        var sasUri = blobClient.GenerateSasUri(
+            BlobSasPermissions.Write | BlobSasPermissions.Create,
+            DateTimeOffset.UtcNow.Add(ttl));
+        return Task.FromResult(sasUri.ToString());
+    }
+
+    public async Task<IEnumerable<string>> ListSubPrefixesAsync(string prefix)
+    {
+        try
+        {
+            var prefixes = new List<string>();
+            await foreach (var page in _containerClient
+                .GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, delimiter: "/", prefix: prefix, cancellationToken: CancellationToken.None)
+                .AsPages())
+            {
+                foreach (var item in page.Values)
+                {
+                    if (item.IsPrefix && !string.IsNullOrEmpty(item.Prefix))
+                    {
+                        prefixes.Add(item.Prefix);
+                    }
+                }
+            }
+            return prefixes;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing sub-prefixes from Azure Blob Storage with prefix: {Prefix}", prefix);
+            return Enumerable.Empty<string>();
+        }
+    }
+
+    public async Task<IEnumerable<BlobInfo>> ListWithMetadataAsync(string prefix)
+    {
+        try
+        {
+            var items = new List<BlobInfo>();
+            await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, CancellationToken.None))
+            {
+                var size = blobItem.Properties.ContentLength ?? 0L;
+                var lastModified = blobItem.Properties.LastModified;
+                if (lastModified is null)
+                {
+                    _logger.LogWarning(
+                        "Blob metadata for {Key} has null LastModified during prefix listing; defaulting to current UTC time",
+                        blobItem.Name);
+                }
+                items.Add(new BlobInfo(blobItem.Name, size, lastModified ?? DateTimeOffset.UtcNow));
+            }
+            return items;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing blobs with metadata from Azure Blob Storage with prefix: {Prefix}", prefix);
+            return Enumerable.Empty<BlobInfo>();
+        }
+    }
+
+    public async Task<int> DeleteManyAsync(IEnumerable<string> keys)
+    {
+        var keyList = keys?.ToList() ?? new List<string>();
+        if (keyList.Count == 0) return 0;
+
+        int deleted = 0;
+        foreach (var key in keyList)
+        {
+            try
+            {
+                var resp = await _containerClient.GetBlobClient(key).DeleteIfExistsAsync();
+                if (resp.Value) deleted++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
+            }
+        }
+        return deleted;
+    }
 }

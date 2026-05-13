@@ -22,8 +22,11 @@ RUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 
-# Install curl for healthchecks
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl for healthchecks and fonts-dejavu-core so WatermarkService has a
+# system font available at runtime (the base aspnet:9.0 image ships with none,
+# which made SystemFonts.Families.First() throw "Sequence contains no elements"
+# on every photo upload — see WatermarkService.cs).
+RUN apt-get update && apt-get install -y curl fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .
 

@@ -187,6 +187,133 @@ public class MinioStorageProvider : IStorageProvider
         }
     }
 
+    public async Task<string> GenerateWriteSasUrlAsync(string key, TimeSpan ttl)
+    {
+        try
+        {
+            var request = new GetPreSignedUrlRequest
+            {
+                BucketName = _bucketName,
+                Key = key,
+                Expires = DateTime.UtcNow.Add(ttl),
+                Verb = HttpVerb.PUT,
+                Protocol = _presignProtocol
+            };
+
+            var url = _s3Client.GetPreSignedURL(request);
+            _logger.LogInformation("Pre-signed PUT URL generated for Minio: {Key}", key);
+            return await Task.FromResult(url);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating pre-signed PUT URL for Minio: {Key}", key);
+            throw;
+        }
+    }
+
+    public async Task<IEnumerable<string>> ListSubPrefixesAsync(string prefix)
+    {
+        try
+        {
+            var prefixes = new List<string>();
+            var request = new ListObjectsV2Request
+            {
+                BucketName = _bucketName,
+                Prefix = prefix,
+                Delimiter = "/"
+            };
+
+            ListObjectsV2Response response;
+            do
+            {
+                response = await _s3Client.ListObjectsV2Async(request);
+                if (response.CommonPrefixes != null)
+                {
+                    prefixes.AddRange(response.CommonPrefixes);
+                }
+                request.ContinuationToken = response.NextContinuationToken;
+            }
+            while (response.IsTruncated ?? false);
+
+            return prefixes;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing sub-prefixes from Minio with prefix: {Prefix}", prefix);
+            return Enumerable.Empty<string>();
+        }
+    }
+
+    public async Task<IEnumerable<BlobInfo>> ListWithMetadataAsync(string prefix)
+    {
+        try
+        {
+            var items = new List<BlobInfo>();
+            var request = new ListObjectsV2Request
+            {
+                BucketName = _bucketName,
+                Prefix = prefix
+            };
+
+            ListObjectsV2Response response;
+            do
+            {
+                response = await _s3Client.ListObjectsV2Async(request);
+                foreach (var obj in response.S3Objects)
+                {
+                    items.Add(new BlobInfo(obj.Key, obj.Size ?? 0L, obj.LastModified ?? DateTimeOffset.UtcNow));
+                }
+                request.ContinuationToken = response.NextContinuationToken;
+            }
+            while (response.IsTruncated ?? false);
+
+            return items;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing files with metadata from Minio with prefix: {Prefix}", prefix);
+            return Enumerable.Empty<BlobInfo>();
+        }
+    }
+
+    public async Task<int> DeleteManyAsync(IEnumerable<string> keys)
+    {
+        var keyList = keys?.ToList() ?? new List<string>();
+        if (keyList.Count == 0) return 0;
+
+        int deleted = 0;
+        // S3 DeleteObjects supports up to 1000 keys per request.
+        const int BatchSize = 1000;
+        foreach (var chunk in keyList.Chunk(BatchSize))
+        {
+            try
+            {
+                var req = new DeleteObjectsRequest
+                {
+                    BucketName = _bucketName,
+                    Objects = chunk.Select(k => new KeyVersion { Key = k }).ToList(),
+                    Quiet = true,
+                };
+                var resp = await _s3Client.DeleteObjectsAsync(req);
+                // S3 returns Quiet response: missing entries are silently treated as success.
+                // Count chunk size minus reported errors as deleted.
+                var errorCount = resp.DeleteErrors?.Count ?? 0;
+                deleted += chunk.Length - errorCount;
+                if (errorCount > 0)
+                {
+                    foreach (var err in resp.DeleteErrors!)
+                    {
+                        _logger.LogWarning("DeleteMany: failed to delete {Key}: {Code} {Message}", err.Key, err.Code, err.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "DeleteMany batch failed against Minio (chunk size {Count})", chunk.Length);
+            }
+        }
+        return deleted;
+    }
     private async Task EnsureBucketExistsAsync()
     {
         try
@@ -207,4 +334,3 @@ public class MinioStorageProvider : IStorageProvider
         }
     }
 }
-

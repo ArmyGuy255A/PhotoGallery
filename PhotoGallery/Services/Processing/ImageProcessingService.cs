@@ -1,6 +1,8 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Processing;
+using Microsoft.AspNetCore.SignalR;
+using PhotoGallery.Hubs;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services.Storage;
@@ -20,6 +22,7 @@ public class ImageProcessingService : IImageProcessor
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IStorageProvider _storageProvider;
+    private readonly IHubContext<PhotoProgressHub>? _progressHub;
     private readonly ILogger<ImageProcessingService> _logger;
     private readonly int _workerParallelism;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromMinutes(5);
@@ -50,7 +53,8 @@ public class ImageProcessingService : IImageProcessor
         IServiceProvider serviceProvider,
         IStorageProvider storageProvider,
         ILogger<ImageProcessingService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHubContext<PhotoProgressHub>? progressHub = null)
     {
         _serviceProvider = serviceProvider;
         _storageProvider = storageProvider;
@@ -60,6 +64,7 @@ public class ImageProcessingService : IImageProcessor
         // avoid an operator pasting nonsense into the appsetting and pinning a worker.
         var configured = configuration.GetValue<int>("PhotoProcessing:WorkerParallelism", 5);
         _workerParallelism = Math.Clamp(configured, 1, 64);
+        _progressHub = progressHub;
     }
 
     /// <summary>Queue a photo for processing with all 4 quality versions</summary>
@@ -107,6 +112,30 @@ public class ImageProcessingService : IImageProcessor
         if (!Guid.TryParse(photoId, out var photoGuid))
             throw new ArgumentException("Invalid photo ID format", nameof(photoId));
         return await QueuePhotoAsync(photoGuid);
+    }
+
+    /// <summary>
+    /// Best-effort broadcast to the uploader's hub group. The hub is optional
+    /// (Phase 3) — if no <see cref="IHubContext{T}"/> was injected, or the
+    /// send throws, the worker continues normally. Tests that don't wire
+    /// SignalR can leave the constructor argument null.
+    /// </summary>
+    private async Task BroadcastAsync(string? userId, string eventName, object payload)
+    {
+        if (_progressHub == null || string.IsNullOrEmpty(userId))
+            return;
+        try
+        {
+            await _progressHub.Clients
+                .Group(PhotoProgressHub.UserGroup(userId))
+                .SendAsync(eventName, payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to broadcast {EventName} to user group {UserId} — non-fatal",
+                eventName, userId);
+        }
     }
 
     /// <summary>
@@ -311,6 +340,10 @@ public class ImageProcessingService : IImageProcessor
             return;
         }
 
+        // Phase 3 — per-quality ProcessingStarted broadcast to the uploader.
+        await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingStarted,
+            new ProcessingStartedPayload(item.PhotoId.ToString(), item.Quality.ToString()));
+
         // Get original from storage
         var originalPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/original.jpg";
         if (!await _storageProvider.ExistsAsync(originalPath))
@@ -320,6 +353,10 @@ public class ImageProcessingService : IImageProcessor
         {
             if (originalStream == null)
                 throw new InvalidOperationException($"Cannot read original photo from {originalPath}");
+
+            // 25%: original downloaded.
+            await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingProgress,
+                new ProcessingProgressPayload(item.PhotoId.ToString(), item.Quality.ToString(), 25));
 
             // Load image
             using (var image = await Image.LoadAsync(originalStream, cancellationToken))
@@ -335,6 +372,10 @@ public class ImageProcessingService : IImageProcessor
                         Mode = ResizeMode.Max,
                         Sampler = KnownResamplers.Lanczos3
                     }));
+
+                // 50%: resize complete.
+                await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingProgress,
+                    new ProcessingProgressPayload(item.PhotoId.ToString(), item.Quality.ToString(), 50));
 
                 // Save to storage
                 var qualityName = item.Quality switch
@@ -353,7 +394,22 @@ public class ImageProcessingService : IImageProcessor
                     await _storageProvider.UploadAsync(outputPath, outputStream, "image/jpeg");
                 }
 
+                // 75%: variant uploaded.
+                await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingProgress,
+                    new ProcessingProgressPayload(item.PhotoId.ToString(), item.Quality.ToString(), 75));
+
                 _logger.LogInformation("Saved {Quality} version to {Path}", item.Quality, outputPath);
+
+                // 100%: success. Completion broadcast (with blobPath) so the
+                // SPA can flip the per-quality progress bar to "done" without
+                // re-querying.
+                await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingCompleted,
+                    new ProcessingCompletedPayload(
+                        item.PhotoId.ToString(),
+                        item.Quality.ToString(),
+                        Success: true,
+                        BlobPath: outputPath,
+                        Error: null));
             }
         }
     }
