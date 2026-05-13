@@ -228,25 +228,20 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
         if (keyList.Count == 0) return 0;
 
         int deleted = 0;
-        // BlobBatchClient supports up to 256 URIs per request.
-        const int BatchSize = 256;
-        foreach (var chunk in keyList.Chunk(BatchSize))
+        foreach (var key in keyList)
         {
-            foreach (var key in chunk)
+            try
             {
-                try
+                var resp = await Container.GetBlobClient(key).DeleteIfExistsAsync();
+                if (resp.Value)
                 {
-                    var resp = await Container.GetBlobClient(key).DeleteIfExistsAsync();
-                    if (resp.Value)
-                    {
-                        deleted++;
-                    }
+                    deleted++;
                 }
-                catch (Exception ex)
-                {
-                    // Idempotent race: treat individual failures as warnings, keep going.
-                    _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
-                }
+            }
+            catch (Exception ex)
+            {
+                // Idempotent race: treat individual failures as warnings, keep going.
+                _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
             }
         }
         return deleted;

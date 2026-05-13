@@ -196,8 +196,14 @@ public class AzureStorageProvider : IStorageProvider
             await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, CancellationToken.None))
             {
                 var size = blobItem.Properties.ContentLength ?? 0L;
-                var lastModified = blobItem.Properties.LastModified ?? DateTimeOffset.UtcNow;
-                items.Add(new BlobInfo(blobItem.Name, size, lastModified));
+                var lastModified = blobItem.Properties.LastModified;
+                if (lastModified is null)
+                {
+                    _logger.LogWarning(
+                        "Blob metadata for {Key} omitted LastModified during prefix listing; defaulting to current UTC time",
+                        blobItem.Name);
+                }
+                items.Add(new BlobInfo(blobItem.Name, size, lastModified ?? DateTimeOffset.UtcNow));
             }
             return items;
         }

@@ -261,7 +261,7 @@ public class MinioStorageProvider : IStorageProvider
                 response = await _s3Client.ListObjectsV2Async(request);
                 foreach (var obj in response.S3Objects)
                 {
-                    items.Add(new BlobInfo(obj.Key, obj.Size ?? 0L, obj.LastModified ?? DateTimeOffset.UtcNow.UtcDateTime));
+                    items.Add(new BlobInfo(obj.Key, obj.Size ?? 0L, obj.LastModified ?? DateTimeOffset.UtcNow));
                 }
                 request.ContinuationToken = response.NextContinuationToken;
             }
