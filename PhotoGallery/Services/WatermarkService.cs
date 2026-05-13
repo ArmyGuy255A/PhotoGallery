@@ -41,6 +41,18 @@ public class WatermarkService
                 f.Name == "DejaVu Sans" || f.Name == "Arial" || f.Name == "Liberation Sans");
             if (fontFamily.Equals(default(FontFamily)))
             {
+                // Belt-and-suspenders: if SystemFonts is empty the container image
+                // is misconfigured (no font package installed). Fail loudly with
+                // an actionable message instead of the cryptic LINQ
+                // "Sequence contains no elements" we used to throw.
+                if (!SystemFonts.Families.Any())
+                {
+                    throw new InvalidOperationException(
+                        "No system fonts available. The container image must include a font package " +
+                        "(e.g. fonts-dejavu-core in Dockerfile.backend). See WatermarkService.cs for " +
+                        "fallback selection order.");
+                }
+
                 // First-available fallback — covers Windows (Arial usually first), Linux (often DejaVu)
                 fontFamily = SystemFonts.Families.First();
                 _logger.LogWarning("Default watermark font unavailable; using {FontName}", fontFamily.Name);
