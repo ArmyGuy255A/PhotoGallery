@@ -200,7 +200,7 @@ public class AzureStorageProvider : IStorageProvider
                 if (lastModified is null)
                 {
                     _logger.LogWarning(
-                        "Blob metadata for {Key} omitted LastModified during prefix listing; defaulting to current UTC time",
+                        "Blob metadata for {Key} has null LastModified during prefix listing; defaulting to current UTC time",
                         blobItem.Name);
                 }
                 items.Add(new BlobInfo(blobItem.Name, size, lastModified ?? DateTimeOffset.UtcNow));
