@@ -45,6 +45,7 @@ public class PhotosController : ControllerBase
     private readonly IProcessingQueueItemRepository _queueItemRepository;
     private readonly StorageConsistencyService _storageConsistencyService;
     private readonly IHubContext<PhotoProgressHub> _progressHub;
+    private readonly OrphanedBlobReaperService _orphanedBlobReaperService;
     private readonly ILogger<PhotosController> _logger;
 
     // Single-file upload ceiling for direct-to-blob tickets. Picked to match
@@ -69,6 +70,7 @@ public class PhotosController : ControllerBase
         IProcessingQueueItemRepository queueItemRepository,
         StorageConsistencyService storageConsistencyService,
         IHubContext<PhotoProgressHub> progressHub,
+        OrphanedBlobReaperService orphanedBlobReaperService,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -79,6 +81,7 @@ public class PhotosController : ControllerBase
         _queueRepository = queueRepository;
         _queueItemRepository = queueItemRepository;
         _storageConsistencyService = storageConsistencyService;
+        _orphanedBlobReaperService = orphanedBlobReaperService;
         _progressHub = progressHub;
         _logger = logger;
     }
@@ -657,6 +660,44 @@ public class PhotosController : ControllerBase
         {
             _logger.LogError(ex, "Admin storage reconciliation failed");
             return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
+    /// (Phase 5). Scans top-level <c>photogallery/&lt;albumGuid&gt;/</c> and
+    /// <c>photogallery/&lt;albumGuid&gt;/&lt;photoGuid&gt;/</c> prefixes and
+    /// deletes any whose DB row no longer exists. Blobs younger than
+    /// <c>Storage:OrphanReapGraceMinutes</c> are skipped to protect in-flight
+    /// direct uploads.
+    ///
+    /// Returns a JSON summary: <c>{ scanned, orphanedAlbums, orphanedPhotos,
+    /// blobsDeleted, bytesReclaimed, skippedByGracePeriod, elapsedMs }</c>.
+    ///
+    /// Same code path as the scheduled <see cref="OrphanedBlobReaperWorker"/>.
+    /// Note that this is a separate route from <c>reconcile-storage</c> (which
+    /// runs the DB→storage reconciler). The two endpoints are complementary
+    /// halves of the consistency story.
+    /// </summary>
+    [HttpPost("admin/reap-orphans")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ReapOrphans(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _logger.LogInformation("Admin {User} triggered orphaned-blob reap", User.Identity?.Name);
+            var report = await _orphanedBlobReaperService.RunOnceAsync(cancellationToken);
+            return Ok(report);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Admin orphaned-blob reap was cancelled");
+            return StatusCode(499, new { message = "Reap cancelled by client" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Admin orphaned-blob reap failed");
+            return StatusCode(500, new { message = "Reap failed", error = ex.Message });
         }
     }
 }

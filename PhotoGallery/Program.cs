@@ -247,10 +247,18 @@ builder.Services.AddScoped<PhotoConsistencyChecker>();
 // is per-instance which is sufficient for the single-process deployment model.
 builder.Services.AddScoped<StorageConsistencyService>();
 
+// Register the orphaned-blob reaper (Phase 5). Scoped to match the existing
+// reconciliation services so the per-tick worker scope and per-request admin
+// endpoint share identical lifetimes. The internal SemaphoreSlim serializes
+// in-process invocations; multi-replica safety relies on DeleteIfExists
+// idempotency at the storage layer.
+builder.Services.AddScoped<OrphanedBlobReaperService>();
+
 // Register background services for photo processing and URL refresh
 builder.Services.AddHostedService<PhotoProcessingWorker>();
 builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
 builder.Services.AddHostedService<StorageConsistencyWorker>();
+builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()

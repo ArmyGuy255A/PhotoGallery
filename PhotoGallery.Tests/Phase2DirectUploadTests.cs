@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -105,6 +106,12 @@ public class Phase2DirectUploadTests
             // with a permissive in-memory context to keep DI honest.
             new StubStorageConsistencyService(),
             hub.Object,
+            new OrphanedBlobReaperService(
+                Mock.Of<IAlbumRepository>(),
+                Mock.Of<IPhotoRepository>(),
+                Mock.Of<IStorageProvider>(),
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                NullLogger<OrphanedBlobReaperService>.Instance),
             NullLogger<PhotosController>.Instance);
 
         var identity = new ClaimsIdentity(new[]
