@@ -176,6 +176,82 @@ public sealed class AzureBlobStorageProvider : IStorageProvider
         }
     }
 
+    public async Task<IEnumerable<string>> ListSubPrefixesAsync(string prefix)
+    {
+        try
+        {
+            var prefixes = new List<string>();
+            await foreach (var page in Container
+                .GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, delimiter: "/", prefix: prefix, cancellationToken: CancellationToken.None)
+                .AsPages())
+            {
+                foreach (var item in page.Values)
+                {
+                    if (item.IsPrefix && !string.IsNullOrEmpty(item.Prefix))
+                    {
+                        prefixes.Add(item.Prefix);
+                    }
+                }
+            }
+            return prefixes;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing sub-prefixes from Azure Blob with prefix: {Prefix}", prefix);
+            return Array.Empty<string>();
+        }
+    }
+
+    public async Task<IEnumerable<BlobInfo>> ListWithMetadataAsync(string prefix)
+    {
+        try
+        {
+            var items = new List<BlobInfo>();
+            await foreach (var blobItem in Container.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix, CancellationToken.None))
+            {
+                var size = blobItem.Properties.ContentLength ?? 0L;
+                var lastModified = blobItem.Properties.LastModified ?? DateTimeOffset.UtcNow;
+                items.Add(new BlobInfo(blobItem.Name, size, lastModified));
+            }
+            return items;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error listing blobs with metadata from Azure Blob with prefix: {Prefix}", prefix);
+            return Array.Empty<BlobInfo>();
+        }
+    }
+
+    public async Task<int> DeleteManyAsync(IEnumerable<string> keys)
+    {
+        var keyList = keys?.ToList() ?? new List<string>();
+        if (keyList.Count == 0) return 0;
+
+        int deleted = 0;
+        // BlobBatchClient supports up to 256 URIs per request.
+        const int BatchSize = 256;
+        foreach (var chunk in keyList.Chunk(BatchSize))
+        {
+            foreach (var key in chunk)
+            {
+                try
+                {
+                    var resp = await Container.GetBlobClient(key).DeleteIfExistsAsync();
+                    if (resp.Value)
+                    {
+                        deleted++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Idempotent race: treat individual failures as warnings, keep going.
+                    _logger.LogWarning(ex, "DeleteMany: failed to delete blob {Key}", key);
+                }
+            }
+        }
+        return deleted;
+    }
+
     /// <summary>
     /// Builds a user-delegation SAS URI for the given blob.
     ///
