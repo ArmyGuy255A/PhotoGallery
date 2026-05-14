@@ -1,12 +1,11 @@
 import { Component } from '@angular/core';
 import {NavbarComponent} from '../components/navbar/navbar.component';
 import {SidenavComponent} from '../components/sidenav/sidenav.component';
-import {FooterComponent} from '../components/footer/footer.component';
 import {CartDrawerComponent} from '../components/cart/cart-drawer.component';
 
 /**
  * Authenticated app shell — wraps every route guarded by `authGuard`
- * with the global navbar, sidenav, and footer.
+ * with the global navbar and sidenav.
  *
  * The `<router-outlet/>` for child feature routes lives inside
  * `<app-sidenav>`'s `<mat-sidenav-content>` slot — see
@@ -18,7 +17,6 @@ import {CartDrawerComponent} from '../components/cart/cart-drawer.component';
   imports: [
     NavbarComponent,
     SidenavComponent,
-    FooterComponent,
     CartDrawerComponent
   ],
   templateUrl: './base-layout.component.html',

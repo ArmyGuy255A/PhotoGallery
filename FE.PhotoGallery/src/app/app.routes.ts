@@ -38,7 +38,7 @@ export const routes: Routes = [
   },
 
   // Authenticated app shell — every child route renders inside
-  // <app-navbar> + <app-sidenav> + <app-footer> via BaseLayoutComponent.
+  // <app-navbar> + <app-sidenav> via BaseLayoutComponent.
   {
     path: '',
     component: BaseLayoutComponent,
