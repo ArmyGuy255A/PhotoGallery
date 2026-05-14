@@ -19,6 +19,7 @@ public class AlbumsController : ControllerBase
     private readonly IPhotoRepository _photoRepository;
     private readonly IAccessCodeRepository _accessCodeRepository;
     private readonly PhotoVersionUrlService _urlService;
+    private readonly IUserDisplayNameResolver _displayNames;
     private readonly ILogger<AlbumsController> _logger;
 
     public AlbumsController(
@@ -26,12 +27,14 @@ public class AlbumsController : ControllerBase
         IPhotoRepository photoRepository,
         IAccessCodeRepository accessCodeRepository,
         PhotoVersionUrlService urlService,
+        IUserDisplayNameResolver displayNames,
         ILogger<AlbumsController> logger)
     {
         _albumRepository = albumRepository;
         _photoRepository = photoRepository;
         _accessCodeRepository = accessCodeRepository;
         _urlService = urlService;
+        _displayNames = displayNames;
         _logger = logger;
     }
 
@@ -53,6 +56,11 @@ public class AlbumsController : ControllerBase
             ? allAlbums.ToList()
             : allAlbums.Where(a => a.OwnerId == userId).ToList();
 
+        // Resolve CreatedBy ids -> display names in one batched pass. Listing
+        // N albums by the same uploader does 1 DB lookup, not N.
+        var displayNames = await _displayNames.ResolveManyAsync(
+            userAlbums.Select(a => a.CreatedBy));
+
         var result = userAlbums.Select(a => new AlbumListDto
         {
             Id = a.Id.ToString(),
@@ -60,6 +68,8 @@ public class AlbumsController : ControllerBase
             Description = a.Description ?? string.Empty,
             CreatedDate = a.CreatedDate,
             OwnerId = a.OwnerId,
+            CreatedBy = a.CreatedBy,
+            CreatedByDisplayName = LookupDisplayName(displayNames, a.CreatedBy),
             CanManage = a.OwnerId == userId || User.IsInRole("Admin")
         }).ToList();
 
@@ -97,7 +107,7 @@ public class AlbumsController : ControllerBase
 
         await _albumRepository.SaveChangesAsync();
 
-        return CreatedAtAction(nameof(GetAlbumById), new { id = album.Id }, MapToDetailDto(album));
+        return CreatedAtAction(nameof(GetAlbumById), new { id = album.Id }, await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -123,7 +133,7 @@ public class AlbumsController : ControllerBase
             return Forbid();
 
         _logger.LogInformation("Album {AlbumId} retrieved by {UserId}", albumId, userId);
-        return Ok(MapToDetailDto(album));
+        return Ok(await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -162,7 +172,7 @@ public class AlbumsController : ControllerBase
         await _albumRepository.SaveChangesAsync();
         _logger.LogInformation("Album {AlbumId} updated by {UserId}", albumId, userId);
 
-        return Ok(MapToDetailDto(album));
+        return Ok(await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -319,8 +329,12 @@ public class AlbumsController : ControllerBase
             return Forbid();
 
         var allCodes = await _accessCodeRepository.GetAllAsync();
-        var albumCodes = allCodes
-            .Where(c => c.AlbumId == albumGuid)
+        var albumCodesEntities = allCodes.Where(c => c.AlbumId == albumGuid).ToList();
+
+        var codeDisplayNames = await _displayNames.ResolveManyAsync(
+            albumCodesEntities.Select(c => c.CreatedBy));
+
+        var albumCodes = albumCodesEntities
             .Select(c => new AccessCodeListDto
             {
                 Id = c.Id.ToString(),
@@ -328,6 +342,7 @@ public class AlbumsController : ControllerBase
                 ExpirationDate = c.ExpirationDate,
                 CreatedDate = c.CreatedDate,
                 CreatedBy = c.CreatedBy,
+                CreatedByDisplayName = LookupDisplayName(codeDisplayNames, c.CreatedBy),
                 IsExpired = c.ExpirationDate.HasValue && c.ExpirationDate < DateTime.UtcNow
             })
             .ToList();
@@ -416,6 +431,7 @@ public class AlbumsController : ControllerBase
             ExpirationDate = accessCode.ExpirationDate,
             CreatedDate = accessCode.CreatedDate,
             CreatedBy = accessCode.CreatedBy,
+            CreatedByDisplayName = await _displayNames.ResolveAsync(accessCode.CreatedBy),
             IsExpired = false
         });
     }
@@ -456,7 +472,7 @@ public class AlbumsController : ControllerBase
         return NoContent();
     }
 
-    private AlbumDetailDto MapToDetailDto(Album album)
+    private async Task<AlbumDetailDto> MapToDetailDtoAsync(Album album)
     {
         return new AlbumDetailDto
         {
@@ -465,8 +481,18 @@ public class AlbumsController : ControllerBase
             Description = album.Description ?? string.Empty,
             OwnerId = album.OwnerId,
             CreatedDate = album.CreatedDate,
-            CreatedBy = album.CreatedBy
+            CreatedBy = album.CreatedBy,
+            CreatedByDisplayName = await _displayNames.ResolveAsync(album.CreatedBy)
         };
+    }
+
+    private static string LookupDisplayName(IReadOnlyDictionary<string, string> map, string? key)
+    {
+        if (!string.IsNullOrWhiteSpace(key) && map.TryGetValue(key, out var name))
+        {
+            return name;
+        }
+        return UserDisplayNameResolver.DefaultDisplayName;
     }
 
     private static string GenerateAccessCode()
@@ -490,6 +516,10 @@ public class AlbumListDto
     public string Description { get; set; } = string.Empty;
     public DateTime CreatedDate { get; set; }
     public string OwnerId { get; set; } = string.Empty;
+    /// <summary>Raw uploader user id; kept for clients that need the GUID.</summary>
+    public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name (e.g. "Phillip Dieppa") for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool CanManage { get; set; }
 }
 
@@ -504,6 +534,8 @@ public class AlbumDetailDto
     public string OwnerId { get; set; } = string.Empty;
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name (e.g. "Phillip Dieppa") for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -561,6 +593,8 @@ public class AccessCodeListDto
     public DateTime? ExpirationDate { get; set; }
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool IsExpired { get; set; }
 }
 
@@ -574,6 +608,8 @@ public class AccessCodeDetailDto
     public DateTime? ExpirationDate { get; set; }
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool IsExpired { get; set; }
 }
 

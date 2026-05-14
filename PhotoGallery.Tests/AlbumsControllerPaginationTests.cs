@@ -83,8 +83,16 @@ public class AlbumsControllerPaginationTests
 
         var codeRepo = new Mock<IAccessCodeRepository>();
 
+        var displayNames = new Mock<IUserDisplayNameResolver>();
+        displayNames.Setup(r => r.ResolveAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UserDisplayNameResolver.DefaultDisplayName);
+        displayNames.Setup(r => r.ResolveManyAsync(It.IsAny<IEnumerable<string?>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<string?> ids, CancellationToken _) =>
+                (IReadOnlyDictionary<string, string>)new Dictionary<string, string>());
+
         var controller = new AlbumsController(
             albumRepo.Object, photoRepo, codeRepo.Object, NewUrlService(),
+            displayNames.Object,
             NullLogger<AlbumsController>.Instance);
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };

@@ -221,8 +221,7 @@ builder.Services.AddSingleton<WatermarkService>();
 builder.Services.AddScoped<IWatermarkTextResolver, WatermarkTextResolver>();
 builder.Services.AddScoped<IWatermarkBackfillService, WatermarkBackfillService>();
 builder.Services.AddScoped<GdprService>();
-builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
-builder.Services.AddScoped<GdprService>();
+builder.Services.AddScoped<IUserDisplayNameResolver, UserDisplayNameResolver>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
