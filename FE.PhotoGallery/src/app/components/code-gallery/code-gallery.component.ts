@@ -649,6 +649,22 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }, { rootMargin: '200px' });
     this.observeSentinelIfPresent();
+    // Phase 6 progressive-load bug fix: once the new page is appended the
+    // sentinel often remains in the viewport (rootMargin: '200px' guarantees
+    // it for any page that doesn't fill at least one screen). The observer
+    // only fires on intersection-state *transitions*, so "still visible"
+    // never re-triggers loadNext. Re-observing the same element forces a
+    // fresh evaluation that fires again if the sentinel is still
+    // intersecting — which is exactly the trigger we want for "the user is
+    // still at the bottom, give them the next page."
+    this.loader.onLoadCompleted = () => this.reobserveSentinel();
+  }
+
+  private reobserveSentinel(): void {
+    const el = this.sentinelRef?.nativeElement;
+    if (!this.intersectionObserver || !el) return;
+    this.intersectionObserver.unobserve(el);
+    this.intersectionObserver.observe(el);
   }
 
   private observeSentinelIfPresent(): void {

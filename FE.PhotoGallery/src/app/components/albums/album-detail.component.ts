@@ -821,6 +821,20 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }, { rootMargin: '200px' });
     this.observeSentinelIfPresent();
+    // Phase 6 progressive-load bug fix: re-evaluate the sentinel after each
+    // successful page load. IntersectionObserver only fires on intersection-
+    // state *transitions* — when the appended page doesn't push the sentinel
+    // out of the viewport it stays "intersecting" silently, and the user's
+    // scroll never reloads. Re-observing the same element forces a fresh
+    // evaluation that fires loadNext again if the sentinel is still visible.
+    this.loader.onLoadCompleted = () => this.reobserveSentinel();
+  }
+
+  private reobserveSentinel(): void {
+    const el = this.sentinelRef?.nativeElement;
+    if (!this.intersectionObserver || !el) return;
+    this.intersectionObserver.unobserve(el);
+    this.intersectionObserver.observe(el);
   }
 
   private observeSentinelIfPresent(): void {

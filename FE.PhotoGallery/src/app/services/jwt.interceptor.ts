@@ -22,6 +22,16 @@ import { AuthService, TokenType } from './auth.service';
  * endpoint with no client-side error.
  */
 export const jwtInterceptor: HttpInterceptorFn = (req, next) => {
+  // Direct-to-blob SAS PUTs (Phase 2 upload flow) must NOT carry an
+  // Authorization header — storage will 403 the request because SAS auth and
+  // bearer auth are mutually exclusive. Azure Blob SAS URLs always carry a
+  // `sig=` query parameter, MinIO presigned URLs use `X-Amz-Signature=`.
+  // Either match short-circuits the interceptor; everything else still gets
+  // the JWT.
+  if (isPresignedStorageUrl(req.url)) {
+    return next(req);
+  }
+
   const authService = inject(AuthService);
   const token = authService.getToken(TokenType.AppToken);
 
@@ -35,6 +45,20 @@ export const jwtInterceptor: HttpInterceptorFn = (req, next) => {
 
   return next(req);
 };
+
+/**
+ * True when the URL is a pre-signed storage URL (Azure Blob SAS or S3/MinIO
+ * presigned). Detection is intentionally a substring scan of the query string
+ * — sniffing the host would couple the SPA to storage topology that changes
+ * per environment (dev MinIO, prod Azure).
+ */
+export function isPresignedStorageUrl(url: string): boolean {
+  if (!url) return false;
+  const q = url.indexOf('?');
+  if (q < 0) return false;
+  const query = url.substring(q + 1).toLowerCase();
+  return query.includes('sig=') || query.includes('x-amz-signature=');
+}
 
 /**
  * Legacy class-based interceptor kept for backwards compatibility with any

@@ -60,6 +60,22 @@ export class PhotoPageLoader<T> {
   readonly totalCount = signal<number>(0);
 
   /**
+   * Optional hook fired after every successful page load (after
+   * <c>onPageLoaded</c>). Components use this to nudge an
+   * IntersectionObserver into re-evaluating the sentinel — once the new page
+   * is appended the sentinel often remains within the viewport (especially
+   * with a generous <c>rootMargin</c>), and IntersectionObserver only fires on
+   * intersection-state transitions, so "still visible" by itself never
+   * triggers another load. The conventional fix is for the consumer to
+   * <c>unobserve(sentinel); observe(sentinel);</c> which forces a fresh
+   * evaluation against the now-shorter page.
+   *
+   * Plain mutable property rather than a constructor arg so the wiring can be
+   * attached *after* the observer is created in <c>ngAfterViewInit</c>.
+   */
+  onLoadCompleted?: () => void;
+
+  /**
    * Convenience signal: true exactly when the loader has finished loading,
    * accumulated zero photos, and the server confirmed there are no more pages.
    * This is the trigger for the "No photos yet" empty-state copy — never just
@@ -109,6 +125,7 @@ export class PhotoPageLoader<T> {
           this.hasMore.set(!!envelope?.hasMore);
           this.isLoading.set(false);
           this.onPageLoaded?.(items);
+          this.onLoadCompleted?.();
         },
         error: () => {
           // Surface the failure as "not loading any more" without flipping

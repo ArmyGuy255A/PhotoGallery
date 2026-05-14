@@ -1,6 +1,6 @@
 import { Component, Input, Output, EventEmitter, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { PhotoService } from '../../services/photo.service';
+import { PhotoService, UploadProgress } from '../../services/photo.service';
 import { interval, Subject, takeUntil, switchMap, filter, take } from 'rxjs';
 
 interface UploadFile {
@@ -546,22 +546,53 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
     item.status = 'uploading';
     console.log(`[PhotoUpload] Starting upload for file ${index}: ${item.file.name}, albumId: ${this.albumId}`);
 
+    // Phase 2 direct-to-blob flow: PhotoService emits a stream of
+    // UploadProgress events ending in either { phase: 'queued' } (server
+    // accepted, scheduled processing) or { phase: 'error' }. The status
+    // polling path below remains the source of truth for per-quality
+    // progress — we just need to flip status to 'processing' once 'queued'
+    // arrives so the poll picks it up.
     this.photoService.uploadPhoto(this.albumId, item.file).subscribe({
-      next: (response: any) => {
-        console.log(`[PhotoUpload] Upload success for ${item.file.name}:`, response);
-        item.photoId = response.successfulUploads?.[0]?.photoId;
-        item.uploadProgress = 100;
-        item.status = 'processing';
-        item.processingProgress = 0;
-        this.processingCount++;
-        
-        // Start polling for processing status
-        if (item.photoId) {
-          this.startProcessingStatusPoll(item);
+      next: (progress: UploadProgress) => {
+        switch (progress.phase) {
+          case 'ticket':
+            // Sent the upload-ticket request; still showing 0% progress.
+            break;
+          case 'uploading':
+            item.photoId = progress.photoId;
+            item.uploadProgress = progress.bytesTotal > 0
+              ? Math.round((progress.bytesSent / progress.bytesTotal) * 100)
+              : 0;
+            break;
+          case 'completing':
+            item.photoId = progress.photoId;
+            item.uploadProgress = 100;
+            break;
+          case 'queued':
+            item.photoId = progress.photoId;
+            item.uploadProgress = 100;
+            item.status = 'processing';
+            item.processingProgress = 0;
+            this.processingCount++;
+            if (item.photoId) {
+              this.startProcessingStatusPoll(item);
+            }
+            this.checkUploadComplete();
+            break;
+          case 'error':
+            console.log(`[PhotoUpload] Upload error for ${item.file.name}:`, progress.message);
+            if (progress.photoId) item.photoId = progress.photoId;
+            item.status = 'error';
+            item.errorMessage = progress.message || 'Upload failed';
+            this.errorCount++;
+            this.checkUploadComplete();
+            break;
         }
-        this.checkUploadComplete();
       },
       error: (error: any) => {
+        // Defensive: PhotoService catches its own errors and emits an 'error'
+        // phase, so this path is rare (transport-layer surprise). Treat it
+        // the same as a phase: 'error' event.
         console.log(`[PhotoUpload] Upload error for ${item.file.name}:`, error);
         item.status = 'error';
         item.errorMessage = error?.error?.message || error?.message || 'Upload failed';
