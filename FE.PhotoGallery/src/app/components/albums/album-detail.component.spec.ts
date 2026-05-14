@@ -407,3 +407,69 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Owner display-name on album header (resolves GUID -> friendly name)
+// ---------------------------------------------------------------------------
+describe('AlbumDetailComponent — owner display name', () => {
+  let fixture: ComponentFixture<AlbumDetailComponent>;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AlbumDetailComponent],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: CartService, useValue: new CartServiceStub() },
+        { provide: AuthService, useClass: AuthServiceStub },
+        { provide: ActivatedRoute, useValue: { params: of({ id: 'A1' }) } }
+      ]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AlbumDetailComponent);
+    fixture.detectChanges();
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    try { httpMock.verify(); } catch { /* polling timer may have queued one */ }
+  });
+
+  it('renders the resolved display name instead of the raw GUID when present', () => {
+    const guid = '08a0e965-50e9-4cac-bc5d-e88b72d9a9f7';
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1`).flush({
+      id: 'A1', title: 'My Album', description: '',
+      createdDate: new Date().toISOString(),
+      createdBy: guid,
+      createdByDisplayName: 'Phillip Dieppa',
+      ownerId: 'u1'
+    });
+    httpMock.expectOne(r => r.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`))
+      .flush({ items: [], totalCount: 0, page: 1, pageSize: 20, hasMore: false });
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1/access-codes`).flush([]);
+    fixture.detectChanges();
+
+    const meta: HTMLElement = fixture.debugElement.query(By.css('p.meta')).nativeElement;
+    expect(meta.textContent).toContain('by Phillip Dieppa');
+    expect(meta.textContent).not.toContain(guid);
+  });
+
+  it('falls back to the raw createdBy value when display name is missing', () => {
+    const guid = '08a0e965-50e9-4cac-bc5d-e88b72d9a9f7';
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1`).flush({
+      id: 'A1', title: 'My Album', description: '',
+      createdDate: new Date().toISOString(),
+      createdBy: guid,
+      ownerId: 'u1'
+    });
+    httpMock.expectOne(r => r.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`))
+      .flush({ items: [], totalCount: 0, page: 1, pageSize: 20, hasMore: false });
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1/access-codes`).flush([]);
+    fixture.detectChanges();
+
+    const meta: HTMLElement = fixture.debugElement.query(By.css('p.meta')).nativeElement;
+    expect(meta.textContent).toContain(`by ${guid}`);
+  });
+});

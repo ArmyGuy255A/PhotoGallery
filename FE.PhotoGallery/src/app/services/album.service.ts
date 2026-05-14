@@ -10,6 +10,7 @@ export interface Album {
   ownerId: string;
   createdDate: Date;
   createdBy: string;
+  createdByDisplayName?: string;
   canManage: boolean;
 }
 

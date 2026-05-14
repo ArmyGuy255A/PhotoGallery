@@ -29,6 +29,8 @@ interface AccessCode {
   code: string;
   expirationDate: string | null;
   createdDate: string;
+  createdBy?: string;
+  createdByDisplayName?: string;
 }
 
 interface Album {
@@ -37,6 +39,7 @@ interface Album {
   description: string;
   createdDate: string;
   createdBy: string;
+  createdByDisplayName?: string;
   ownerId: string;
 }
 
@@ -59,7 +62,7 @@ interface Album {
         <div *ngIf="!isLoading && album">
           <section class="album-info">
             <p class="description">{{ album.description || 'No description' }}</p>
-            <p class="meta">Created on {{ (album.createdDate | date: 'short') }} by {{ album.createdBy }}</p>
+            <p class="meta">Created on {{ (album.createdDate | date: 'short') }} by {{ album.createdByDisplayName || album.createdBy }}</p>
           </section>
 
           <!-- Photo Upload Section -->
