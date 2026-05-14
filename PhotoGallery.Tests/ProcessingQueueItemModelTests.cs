@@ -150,9 +150,9 @@ public class ProcessingQueueItemModelTests
     }
 
     [Fact]
-    public void ProcessingQueueItem_Should_Prevent_Retry_After_Max_Retries()
+    public void ProcessingQueueItem_Should_Always_Allow_Retry()
     {
-        // Arrange
+        // Phase 4 §1: CanRetry always returns true — there is no max-retry dead-letter.
         var item = new ProcessingQueueItem
         {
             Id = Guid.NewGuid(),
@@ -163,24 +163,51 @@ public class ProcessingQueueItemModelTests
             RetryCount = 0
         };
 
-        // Act - First increment
         item.IncrementRetry("Error 1");
         Assert.Equal(1, item.RetryCount);
         Assert.True(item.CanRetry);
 
-        // Act - Second increment
         item.IncrementRetry("Error 2");
         Assert.Equal(2, item.RetryCount);
         Assert.True(item.CanRetry);
 
-        // Act - Third increment
-        item.IncrementRetry("Error 3");
-        Assert.Equal(3, item.RetryCount);
-        Assert.False(item.CanRetry); // Max retries reached
+        // Drive past the historical "3 strikes" cap.
+        for (int i = 0; i < 25; i++)
+            item.IncrementRetry($"Error {i + 3}");
 
-        // Assert
-        Assert.Equal(3, item.RetryCount);
-        Assert.False(item.CanRetry);
+        Assert.Equal(27, item.RetryCount);
+        Assert.True(item.CanRetry, "Every item must remain retryable under Phase 4");
+    }
+
+    [Fact]
+    public void IncrementRetry_Should_Cap_Backoff_At_1024_Seconds()
+    {
+        // Phase 4 §1: backoff curve = min(2^retryCount, 1024) seconds. Caps at ~17 min
+        // so a permanently broken item retries hourly forever instead of clogging
+        // the worker with sub-second retries OR waiting weeks between attempts.
+        var item = new ProcessingQueueItem
+        {
+            Id = Guid.NewGuid(),
+            PhotoId = Guid.NewGuid(),
+            Quality = QualityType.High,
+            Status = ProcessingStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        // RetryCount = 10  →  2^10 = 1024 seconds (right at the cap)
+        for (int i = 0; i < 10; i++)
+            item.IncrementRetry("transient");
+
+        Assert.NotNull(item.NextRetryTime);
+        var seconds10 = (item.NextRetryTime!.Value - DateTime.UtcNow).TotalSeconds;
+        Assert.InRange(seconds10, 1020, 1030);
+
+        // Crank to 30 retries — 2^30 would be ~34 years if uncapped. Should still cap at 1024s.
+        for (int i = 0; i < 20; i++)
+            item.IncrementRetry("transient");
+
+        var seconds30 = (item.NextRetryTime!.Value - DateTime.UtcNow).TotalSeconds;
+        Assert.True(seconds30 <= 1024 + 5, $"Backoff at 30 retries should still cap at ~1024s, got {seconds30}s");
     }
 
     [Fact]

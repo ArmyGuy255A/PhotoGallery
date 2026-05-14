@@ -8,13 +8,15 @@ using PhotoGallery.Models;
 using PhotoGallery.Services.Storage;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
+using System.Threading.Channels;
 
 namespace PhotoGallery.Services.Processing;
 
 /// <summary>
 /// Service for processing photos with multiple compression levels.
 /// Uses ProcessingQueue and ProcessingQueueItem for tracking per-quality processing.
-/// Reference: D003 (Image Processing with Compression Profiles)
+/// Reference: D003 (Image Processing with Compression Profiles), Phase 4 (resilient
+/// retries + in-instance parallelism + DB lease).
 /// </summary>
 public class ImageProcessingService : IImageProcessor
 {
@@ -22,6 +24,8 @@ public class ImageProcessingService : IImageProcessor
     private readonly IStorageProvider _storageProvider;
     private readonly IHubContext<PhotoProgressHub>? _progressHub;
     private readonly ILogger<ImageProcessingService> _logger;
+    private readonly int _workerParallelism;
+    private readonly TimeSpan _leaseDuration = TimeSpan.FromMinutes(5);
     private CancellationTokenSource? _processingCts;
     private Task? _processingTask;
 
@@ -33,15 +37,33 @@ public class ImageProcessingService : IImageProcessor
         { QualityType.High, (3840, 3840, 95) }        // Print/download
     };
 
+    /// <summary>
+    /// The 4 base resize qualities. The Watermark pseudo-quality is enqueued as a separate
+    /// item once all four of these complete. Reference: Phase 4 §2.
+    /// </summary>
+    private static readonly QualityType[] BaseQualities =
+    {
+        QualityType.Thumbnail,
+        QualityType.Low,
+        QualityType.Medium,
+        QualityType.High,
+    };
+
     public ImageProcessingService(
         IServiceProvider serviceProvider,
         IStorageProvider storageProvider,
         ILogger<ImageProcessingService> logger,
+        IConfiguration configuration,
         IHubContext<PhotoProgressHub>? progressHub = null)
     {
         _serviceProvider = serviceProvider;
         _storageProvider = storageProvider;
         _logger = logger;
+
+        // Phase 4 §3: in-instance parallel consumers. Default 5; clamp to [1, 64] to
+        // avoid an operator pasting nonsense into the appsetting and pinning a worker.
+        var configured = configuration.GetValue<int>("PhotoProcessing:WorkerParallelism", 5);
+        _workerParallelism = Math.Clamp(configured, 1, 64);
         _progressHub = progressHub;
     }
 
@@ -58,9 +80,9 @@ public class ImageProcessingService : IImageProcessor
             await queueRepository.AddAsync(queue);
             await queueRepository.SaveChangesAsync();
 
-            // Create 4 processing items (one for each quality)
-            var qualities = new[] { QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High };
-            foreach (var quality in qualities)
+            // Create 4 processing items (one for each base quality). The Watermark item
+            // is enqueued later by EnqueueWatermarkIfReadyAsync once all four complete.
+            foreach (var quality in BaseQualities)
             {
                 var item = new ProcessingQueueItem
                 {
@@ -116,122 +138,146 @@ public class ImageProcessingService : IImageProcessor
         }
     }
 
-    /// <summary>Process all pending queue items</summary>
+    /// <summary>
+    /// Process all pending queue items. Phase 4 §3: lease a batch via the repo's
+    /// DB-level lease, then drain through a bounded channel with
+    /// <see cref="Parallel.ForEachAsync"/> at the configured parallelism. Each consumer
+    /// gets its own DI scope so per-quality ImageSharp <c>Image</c> instances never
+    /// cross threads. Reference: Phase 4 scope §3 + §4.
+    /// </summary>
     public async Task ProcessQueueAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
-            var photoRepository = scope.ServiceProvider.GetRequiredService<IPhotoRepository>();
-            var urlService = scope.ServiceProvider.GetRequiredService<PhotoVersionUrlService>();
-
-            var pendingItems = await itemRepository.GetPendingItemsAsync();
-            var processedPhotos = new HashSet<Guid>();
-
-            // Per-batch cache so we resolve each uploader's display name at most once
-            // even when a photo's Thumbnail and Medium are processed in separate iterations
-            // (and across multiple photos by the same uploader).
-            var watermarkTextCache = new Dictionary<string, string>(StringComparer.Ordinal);
-
-            foreach (var item in pendingItems)
+            // Lease a batch of work — Pending OR (Error AND retry-due) AND lease-free.
+            // The lease itself is set atomically by the repo so two workers (in-instance
+            // or cross-instance once we scale ACA replicas) never claim the same row.
+            IReadOnlyList<ProcessingQueueItem> leased;
+            using (var leaseScope = _serviceProvider.CreateScope())
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-
-                try
-                {
-                    await ProcessQualityAsync(item, itemRepository, photoRepository, watermarkTextCache, cancellationToken);
-                    await itemRepository.MarkCompleteAsync(item.Id);
-                    _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}", item.PhotoId, item.Quality);
-                    processedPhotos.Add(item.PhotoId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing item {ItemId} (photo {PhotoId}, quality {Quality})", 
-                        item.Id, item.PhotoId, item.Quality);
-                    await itemRepository.MarkFailedAsync(item.Id, ex.Message);
-
-                    // Broadcast a terminal-for-this-attempt failure so the
-                    // SPA can flip the per-quality bar to "error". The
-                    // retry machinery (Phase 4) will re-emit ProcessingStarted
-                    // if/when the item is picked up again.
-                    var failedPhoto = await photoRepository.GetByIdAsync(item.PhotoId);
-                    await BroadcastAsync(failedPhoto?.UploadedBy,
-                        PhotoProgressEvents.ProcessingCompleted,
-                        new ProcessingCompletedPayload(
-                            item.PhotoId.ToString(),
-                            item.Quality.ToString(),
-                            Success: false,
-                            BlobPath: null,
-                            Error: ex.Message));
-
-                    // Increment retry if possible
-                    if (item.CanRetry)
-                    {
-                        item.IncrementRetry(ex.Message);
-                        await itemRepository.UpdateAsync(item);
-                        await itemRepository.SaveChangesAsync();
-                    }
-                }
+                var itemRepository = leaseScope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+                // Lease up to 4x parallelism so consumers always have queued work even
+                // while some are mid-flight. 5 min lease > worst-case single-photo
+                // processing time so a slow consumer doesn't have its row stolen.
+                leased = await itemRepository.LeaseNextBatchAsync(
+                    _workerParallelism * 4, _leaseDuration, cancellationToken);
             }
 
-            // Process items ready for retry
-            var retryItems = await itemRepository.GetReadyForRetryAsync();
-            foreach (var item in retryItems)
+            if (leased.Count == 0)
+                return;
+
+            _logger.LogDebug("Leased {Count} items for processing (parallelism={Parallelism})",
+                leased.Count, _workerParallelism);
+
+            // Funnel into a Channel so we have backpressure if a slow consumer falls
+            // behind, and so cancellation cleanly drains in-flight items.
+            var channel = Channel.CreateBounded<ProcessingQueueItem>(new BoundedChannelOptions(leased.Count)
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
+                SingleReader = false,
+                SingleWriter = true,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
+            foreach (var item in leased)
+                await channel.Writer.WriteAsync(item, cancellationToken);
+            channel.Writer.Complete();
 
-                try
+            var processedPhotos = new System.Collections.Concurrent.ConcurrentBag<Guid>();
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = _workerParallelism,
+                CancellationToken = cancellationToken,
+            };
+
+            await Parallel.ForEachAsync(
+                channel.Reader.ReadAllAsync(cancellationToken),
+                parallelOptions,
+                async (item, ct) =>
                 {
-                    item.Status = ProcessingStatus.Pending;
-                    await itemRepository.UpdateAsync(item);
-                    await itemRepository.SaveChangesAsync();
+                    // Per-consumer DI scope — each ImageSharp Image instance lives inside
+                    // one scope's lifetime and never crosses threads.
+                    using var scope = _serviceProvider.CreateScope();
+                    var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+                    var photoRepository = scope.ServiceProvider.GetRequiredService<IPhotoRepository>();
+                    var watermarkTextCache = new Dictionary<string, string>(StringComparer.Ordinal);
 
-                    await ProcessQualityAsync(item, itemRepository, photoRepository, watermarkTextCache, cancellationToken);
-                    await itemRepository.MarkCompleteAsync(item.Id);
-                    _logger.LogInformation("Retry succeeded for photo {PhotoId} quality {Quality} (attempt {Attempt})", 
-                        item.PhotoId, item.Quality, item.RetryCount + 1);
-                    processedPhotos.Add(item.PhotoId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Retry failed for item {ItemId}", item.Id);
-                    await itemRepository.MarkFailedAsync(item.Id, ex.Message);
-
-                    if (item.CanRetry)
+                    try
                     {
-                        item.IncrementRetry(ex.Message);
-                        await itemRepository.UpdateAsync(item);
-                        await itemRepository.SaveChangesAsync();
+                        await ProcessQualityAsync(item, scope.ServiceProvider, itemRepository, photoRepository, watermarkTextCache, ct);
+                        await itemRepository.MarkCompleteAsync(item.Id);
+                        _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}",
+                            item.PhotoId, item.Quality);
+                        processedPhotos.Add(item.PhotoId);
                     }
-                }
-            }
-
-            // Generate pre-signed URLs for all processed photos
-            foreach (var photoId in processedPhotos)
-            {
-                try
-                {
-                    // Check if all quality items are complete for this photo
-                    var queueId = (await itemRepository.GetByPhotoIdAsync(photoId)).FirstOrDefault()?.ProcessingQueueId;
-                    if (queueId.HasValue)
+                    catch (OperationCanceledException)
                     {
-                        var allItems = await itemRepository.GetByQueueIdAsync(queueId.Value);
-                        if (allItems.All(i => i.Status == ProcessingStatus.Complete))
+                        // Release the lease so another worker can pick this up.
+                        try { await itemRepository.ReleaseLeaseAsync(item.Id, CancellationToken.None); } catch { }
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing item {ItemId} (photo {PhotoId}, quality {Quality})",
+                            item.Id, item.PhotoId, item.Quality);
+
+                        // Increment retry counter + compute next backoff. MarkFailedAsync
+                        // clears the lease so the row is eligible on the next pass.
+                        var fresh = await itemRepository.GetByIdAsync(item.Id);
+                        if (fresh != null)
                         {
-                            _logger.LogDebug("All qualities complete for photo {PhotoId}. Generating pre-signed URLs...", photoId);
-                            await urlService.GeneratePhotoVersionUrlsAsync(photoId);
+                            fresh.IncrementRetry(ex.Message);
+                            fresh.Status = ProcessingStatus.Error;
+                            fresh.LastError = ex.Message;
+                            fresh.LeaseExpiresAt = null;
+                            fresh.UpdatedAt = DateTime.UtcNow;
+                            await itemRepository.UpdateAsync(fresh);
+                            await itemRepository.SaveChangesAsync();
                         }
                     }
+                });
+
+            // Watermark enqueue + URL generation pass. Single-threaded after the parallel
+            // work drains so we touch each photo's "completion" state exactly once.
+            foreach (var photoId in processedPhotos.Distinct())
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                using var scope = _serviceProvider.CreateScope();
+                var itemRepository = scope.ServiceProvider.GetRequiredService<IProcessingQueueItemRepository>();
+                var urlService = scope.ServiceProvider.GetRequiredService<PhotoVersionUrlService>();
+
+                try
+                {
+                    var queueId = (await itemRepository.GetByPhotoIdAsync(photoId)).FirstOrDefault()?.ProcessingQueueId;
+                    if (!queueId.HasValue)
+                        continue;
+
+                    var allItems = (await itemRepository.GetByQueueIdAsync(queueId.Value)).ToList();
+                    var baseItems = allItems.Where(i => i.Quality != QualityType.Watermark).ToList();
+
+                    var allBaseComplete = baseItems.Count == BaseQualities.Length
+                        && baseItems.All(i => i.Status == ProcessingStatus.Complete);
+
+                    if (allBaseComplete)
+                    {
+                        // Phase 4 §2: enqueue a single Watermark item once per photo so
+                        // watermark rendering gets the same backoff/retry plumbing as the
+                        // other qualities. Idempotent — skip if one already exists.
+                        await EnqueueWatermarkIfMissingAsync(itemRepository, queueId.Value, photoId, allItems);
+
+                        _logger.LogDebug("All base qualities complete for photo {PhotoId}. Generating pre-signed URLs...", photoId);
+                        await urlService.GeneratePhotoVersionUrlsAsync(photoId);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error generating pre-signed URLs for photo {PhotoId}", photoId);
-                    // Don't fail the entire queue if URL generation fails
+                    _logger.LogError(ex, "Error finalizing photo {PhotoId}", photoId);
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the normal shutdown path — not an error.
         }
         catch (Exception ex)
         {
@@ -239,9 +285,38 @@ public class ImageProcessingService : IImageProcessor
         }
     }
 
+    /// <summary>
+    /// Add a Watermark queue item for the photo if one does not already exist.
+    /// Phase 4 §2 — promotes watermark generation to a first-class queue item so it
+    /// gets the same backoff + indefinite retry treatment as the other qualities.
+    /// </summary>
+    internal static async Task EnqueueWatermarkIfMissingAsync(
+        IProcessingQueueItemRepository itemRepository,
+        Guid queueId,
+        Guid photoId,
+        IReadOnlyList<ProcessingQueueItem> existingItems)
+    {
+        if (existingItems.Any(i => i.Quality == QualityType.Watermark))
+            return;
+
+        var watermarkItem = new ProcessingQueueItem
+        {
+            Id = Guid.NewGuid(),
+            ProcessingQueueId = queueId,
+            PhotoId = photoId,
+            Quality = QualityType.Watermark,
+            Status = ProcessingStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        await itemRepository.AddAsync(watermarkItem);
+        await itemRepository.SaveChangesAsync();
+    }
+
     /// <summary>Process a single quality version of a photo</summary>
     private async Task ProcessQualityAsync(
         ProcessingQueueItem item,
+        IServiceProvider scopedProvider,
         IProcessingQueueItemRepository itemRepository,
         IPhotoRepository photoRepository,
         IDictionary<string, string> watermarkTextCache,
@@ -256,6 +331,14 @@ public class ImageProcessingService : IImageProcessor
         var photo = await photoRepository.GetByIdAsync(item.PhotoId);
         if (photo == null)
             throw new FileNotFoundException($"Photo not found: {item.PhotoId}");
+
+        // Watermark pseudo-quality: render watermarked Thumbnail + Medium variants
+        // from the already-rendered base files in storage. Phase 4 §2.
+        if (item.Quality == QualityType.Watermark)
+        {
+            await ProcessWatermarkAsync(photo, item, scopedProvider, watermarkTextCache, cancellationToken);
+            return;
+        }
 
         // Phase 3 — per-quality ProcessingStarted broadcast to the uploader.
         await BroadcastAsync(photo.UploadedBy, PhotoProgressEvents.ProcessingStarted,
@@ -317,16 +400,6 @@ public class ImageProcessingService : IImageProcessor
 
                 _logger.LogInformation("Saved {Quality} version to {Path}", item.Quality, outputPath);
 
-                // For public-viewing qualities (Thumbnail + Medium), also generate watermarked
-                // variants. Reference: D009 (Watermark Pipeline). Public viewers (access-code
-                // gallery, photo modal) see the watermarked Thumbnail/Medium; the unwatermarked
-                // variants are delivered only via cart-checkout. Original/Low/High are never
-                // watermarked here (defense in depth — Original ships only via paid checkout).
-                if (item.Quality == QualityType.Medium || item.Quality == QualityType.Thumbnail)
-                {
-                    await GenerateWatermarkedVariantAsync(photo, item, image, quality, qualityName, watermarkTextCache, cancellationToken);
-                }
-
                 // 100%: success. Completion broadcast (with blobPath) so the
                 // SPA can flip the per-quality progress bar to "done" without
                 // re-querying.
@@ -342,54 +415,52 @@ public class ImageProcessingService : IImageProcessor
     }
 
     /// <summary>
-    /// Render and store a watermarked version of the just-resized image.
-    /// Used for Thumbnail and Medium qualities — the variants public/guest viewers see.
-    /// Failures are logged but do not fail the parent queue item — the unwatermarked
-    /// variant is still useful, and the consistency checker will retry watermark generation.
+    /// Render and store watermarked variants of the Thumbnail + Medium base files.
+    /// Reads the (already-uploaded) base JPEGs from storage so this method has no
+    /// dependency on the in-process <see cref="Image"/> object that produced them.
+    /// Failures throw — the caller increments retry/backoff so a font-init / blob
+    /// transient gets the same indefinite-retry treatment as the other qualities.
+    /// Reference: Phase 4 §2 (watermark gets its own queue item) + D009.
     /// </summary>
-    private async Task GenerateWatermarkedVariantAsync(
+    private async Task ProcessWatermarkAsync(
         Photo photo,
         ProcessingQueueItem item,
-        Image image,
-        int jpegQuality,
-        string qualityName,
+        IServiceProvider scopedProvider,
         IDictionary<string, string> watermarkTextCache,
         CancellationToken cancellationToken)
     {
-        try
+        var watermarkService = scopedProvider.GetRequiredService<WatermarkService>();
+        var watermarkText = await ResolveWatermarkTextAsync(
+            scopedProvider, photo.UploadedBy, watermarkTextCache, cancellationToken);
+
+        // Quality used for re-encoding the watermarked output. Mirrors the dimensions
+        // table's quality column for each rendered base.
+        var watermarkTargets = new (string baseName, int jpegQuality)[]
         {
-            using var scope = _serviceProvider.CreateScope();
-            var watermarkService = scope.ServiceProvider.GetRequiredService<WatermarkService>();
+            ("thumbnail", QualityDimensions[QualityType.Thumbnail].quality),
+            ("medium",    QualityDimensions[QualityType.Medium].quality),
+        };
 
-            // Encode the (already-resized) image into a fresh stream so the watermark
-            // service can re-decode + apply watermark without mutating the original `image`.
-            using var sourceStream = new MemoryStream();
-            await image.SaveAsJpegAsync(sourceStream, new JpegEncoder { Quality = jpegQuality }, cancellationToken);
-            sourceStream.Position = 0;
+        foreach (var (baseName, jpegQuality) in watermarkTargets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
 
+            var sourceKey = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{baseName}.jpg";
+            if (!await _storageProvider.ExistsAsync(sourceKey))
+                throw new FileNotFoundException($"Base variant missing for watermark: {sourceKey}");
+
+            using var sourceStream = await _storageProvider.DownloadAsync(sourceKey)
+                ?? throw new InvalidOperationException($"Cannot read {sourceKey}");
             using var watermarkedStream = new MemoryStream();
-
-            // Resolve the photographer's display name from the Users table — fixes the
-            // pre-fix bug where Photo.UploadedBy (a GUID string) was painted onto every
-            // watermarked variant verbatim. The resolver caches per-uploader lookups
-            // across the entire batch via watermarkTextCache. Reference: PRs #47 / #48.
-            var watermarkText = await ResolveWatermarkTextAsync(
-                scope.ServiceProvider, photo.UploadedBy, watermarkTextCache, cancellationToken);
 
             await watermarkService.ApplyWatermarkAsync(
                 sourceStream, watermarkedStream, watermarkText, jpegQuality, cancellationToken);
             watermarkedStream.Position = 0;
 
-            var outputPath = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{qualityName}-watermarked.jpg";
-            await _storageProvider.UploadAsync(outputPath, watermarkedStream, "image/jpeg");
+            var outputKey = $"photogallery/{photo.AlbumId}/{item.PhotoId}/{baseName}-watermarked.jpg";
+            await _storageProvider.UploadAsync(outputKey, watermarkedStream, "image/jpeg");
 
-            _logger.LogInformation("Saved watermarked {Quality} variant to {Path}", item.Quality, outputPath);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex,
-                "Failed to generate watermarked {Quality} for photo {PhotoId}; non-fatal — guest viewers will fall back to unwatermarked variant.",
-                item.Quality, item.PhotoId);
+            _logger.LogInformation("Saved watermarked {BaseName} variant to {Path}", baseName, outputKey);
         }
     }
 

@@ -34,9 +34,6 @@ public class ProcessingQueueItemConfiguration : IEntityTypeConfiguration<Process
         builder.Property(item => item.RetryCount)
             .HasDefaultValue(0);
 
-        builder.Property(item => item.MaxRetries)
-            .HasDefaultValue(3);
-
         builder.Property(item => item.LastError)
             .HasMaxLength(500)
             .IsRequired(false);
@@ -45,6 +42,9 @@ public class ProcessingQueueItemConfiguration : IEntityTypeConfiguration<Process
             .HasDefaultValue(0);
 
         builder.Property(item => item.NextRetryTime)
+            .IsRequired(false);
+
+        builder.Property(item => item.LeaseExpiresAt)
             .IsRequired(false);
 
         builder.Property(item => item.CreatedAt)
@@ -80,9 +80,13 @@ public class ProcessingQueueItemConfiguration : IEntityTypeConfiguration<Process
         builder.HasIndex(item => item.Status);
         builder.HasIndex(item => item.Quality);
         builder.HasIndex(item => new { item.ProcessingQueueId, item.Quality }).IsUnique();
-        
+
         // Filtered index for items ready to retry
         builder.HasIndex(item => new { item.Status, item.NextRetryTime })
             .HasFilter("[Status] = 3 AND [NextRetryTime] IS NOT NULL"); // Error status with retry time set
+
+        // Lease index — supports the Phase 4 §4 dequeue query that picks rows where
+        // Status indicates work to do AND the lease is either unset or expired.
+        builder.HasIndex(item => new { item.Status, item.LeaseExpiresAt });
     }
 }

@@ -387,9 +387,13 @@ public class PhotoVersionUrlService
             var now = DateTime.UtcNow;
             var expiresAt = now.AddDays(_ttlDays);
 
-            // Generate URLs for all 4 qualities
+            // Generate URLs for all 5 storage-backed qualities (Thumbnail/Low/Medium/High/Original).
+            // The Watermark pseudo-quality (Phase 4 §2) is not a storage object — it's a queue-only
+            // marker that drives watermarked-variant rendering — so it's excluded from URL generation.
             foreach (QualityType quality in Enum.GetValues(typeof(QualityType)))
             {
+                if (quality == QualityType.Watermark)
+                    continue;
                 try
                 {
                     var url = await GeneratePhotoVersionUrlAsync(photoId, quality, shouldCache: ShouldCacheQuality(quality));

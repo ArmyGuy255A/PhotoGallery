@@ -420,36 +420,39 @@ public class StorageConsistencyServiceTests
         _mockItemRepository.Verify(r => r.UpdateAsync(thumbItem), Times.Never);
     }
 
-    // ---- Edge: Error items at MaxRetries ----
+    // ---- Phase 4 §1: dead-letter behaviour removed — every Error item must retry forever ----
 
     [Fact]
-    public async Task RunOnceAsync_Should_Skip_Error_Items_At_Max_Retries()
+    public async Task RunOnceAsync_Should_Reset_Error_Items_With_High_RetryCount_When_Storage_Missing()
     {
+        // Pre-Phase-4 this branch was the "max retries — leave alone" dead-letter case.
+        // Now there is no max; an Error item with a high RetryCount is still a retry candidate
+        // and the consistency sweep should reset it to Pending when its storage is missing.
         var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
         var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Error };
 
+        // Thumbnail missing from storage; other 3 base qualities present.
         var presentKeys = new List<string> { KeyFor(photo, "original"), KeyFor(photo, "low"), KeyFor(photo, "medium"), KeyFor(photo, "high") };
         SetupStorage(PrefixFor(photo), presentKeys);
 
-        var exhausted = new ProcessingQueueItem
+        var pummeled = new ProcessingQueueItem
         {
             PhotoId = photo.Id,
             Quality = QualityType.Thumbnail,
             Status = ProcessingStatus.Error,
             ProcessingQueueId = queue.Id,
-            RetryCount = 3,
-            MaxRetries = 3,
-            LastError = "give up",
+            RetryCount = 17,
+            LastError = "still failing",
         };
         _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
         _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
-        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[] { exhausted });
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[] { pummeled });
 
         await BuildService().RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(ProcessingStatus.Error, exhausted.Status);
-        Assert.Equal(3, exhausted.RetryCount);
-        _mockItemRepository.Verify(r => r.UpdateAsync(exhausted), Times.Never);
+        Assert.Equal(ProcessingStatus.Pending, pummeled.Status);
+        Assert.Equal(0, pummeled.RetryCount);
+        _mockItemRepository.Verify(r => r.UpdateAsync(pummeled), Times.Once);
     }
 
     // ---- Edge: retryable Error items ----
@@ -470,7 +473,6 @@ public class StorageConsistencyServiceTests
             Status = ProcessingStatus.Error,
             ProcessingQueueId = queue.Id,
             RetryCount = 1,
-            MaxRetries = 3,
             LastError = "io error",
             NextRetryTime = DateTime.UtcNow.AddSeconds(2),
             Attempts = 2,
@@ -506,7 +508,6 @@ public class StorageConsistencyServiceTests
             Status = ProcessingStatus.Error,
             ProcessingQueueId = queue.Id,
             RetryCount = 1,
-            MaxRetries = 3,
             LastError = "transient",
             Attempts = 2,
         };

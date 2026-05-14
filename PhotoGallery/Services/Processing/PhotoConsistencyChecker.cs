@@ -25,18 +25,23 @@ public class PhotoConsistencyChecker
         _logger = logger;
     }
 
-    /// <summary>Verify all completed photos have all 4 quality versions</summary>
+    /// <summary>
+    /// Verify all 4 base quality versions exist and are Complete for the given photo.
+    /// The optional Watermark queue item (Phase 4 §2) is intentionally excluded from
+    /// this check: watermark rendering is best-effort and not part of "photo viewable".
+    /// </summary>
     public async Task<bool> VerifyPhotoCompleteAsync(Guid photoId)
     {
         try
         {
             var items = await _itemRepository.GetByPhotoIdAsync(photoId);
-            var items_list = items.ToList();
+            // Exclude Watermark items — those are an independent retry track.
+            var items_list = items.Where(i => i.Quality != QualityType.Watermark).ToList();
 
-            // Must have exactly 4 items
+            // Must have exactly 4 items (Thumbnail/Low/Medium/High)
             if (items_list.Count != 4)
             {
-                _logger.LogWarning("Photo {PhotoId} has {Count} items, expected 4", photoId, items_list.Count);
+                _logger.LogWarning("Photo {PhotoId} has {Count} base-quality items, expected 4", photoId, items_list.Count);
                 return false;
             }
 
@@ -48,7 +53,7 @@ public class PhotoConsistencyChecker
                 return false;
             }
 
-            // Must have all 4 quality types
+            // Must have all 4 base quality types
             var qualities = items_list.Select(i => i.Quality).ToHashSet();
             if (qualities.Count != 4 || !qualities.Contains(QualityType.Thumbnail) || !qualities.Contains(QualityType.Low) ||
                 !qualities.Contains(QualityType.Medium) || !qualities.Contains(QualityType.High))
@@ -67,7 +72,11 @@ public class PhotoConsistencyChecker
         }
     }
 
-    /// <summary>Mark queue as complete if all items complete</summary>
+    /// <summary>
+    /// Mark queue as complete if every base-quality item is Complete. The Watermark
+    /// item, if present, is excluded — the queue's overall lifecycle tracks the
+    /// resize variants only; the watermark item is a side track.
+    /// </summary>
     public async Task MarkQueueCompleteIfReadyAsync(Guid queueId)
     {
         try
@@ -77,9 +86,9 @@ public class PhotoConsistencyChecker
                 return;
 
             var items = await _itemRepository.GetByQueueIdAsync(queueId);
-            var items_list = items.ToList();
+            var items_list = items.Where(i => i.Quality != QualityType.Watermark).ToList();
 
-            if (items_list.All(i => i.Status == ProcessingStatus.Complete))
+            if (items_list.Count > 0 && items_list.All(i => i.Status == ProcessingStatus.Complete))
             {
                 queue.MarkComplete();
                 await _queueRepository.UpdateAsync(queue);
