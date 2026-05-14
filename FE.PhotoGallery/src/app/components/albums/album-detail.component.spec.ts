@@ -65,8 +65,8 @@ describe('AlbumDetailComponent — cart integration (#58)', () => {
       createdDate: new Date().toISOString(), createdBy: 'me', ownerId: 'u1'
     });
     // Photos
-    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1/photos`).flush({
-      photos: [
+    httpMock.expectOne(req => req.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`)).flush({
+      items: [
         { id: 'p1', fileName: 'p1.jpg', uploadDate: new Date().toISOString(),
           thumbnailUrl: 'http://thumb/p1', processingStatus: 'Complete' }
       ],
@@ -287,3 +287,123 @@ describe('AlbumDetailComponent', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 6 — progressive grid: skeleton, empty-state, infinite-scroll
+// ---------------------------------------------------------------------------
+describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
+  let fixture: ComponentFixture<AlbumDetailComponent>;
+  let component: AlbumDetailComponent;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AlbumDetailComponent, HttpClientTestingModule],
+      providers: [
+        provideRouter([]),
+        { provide: AuthService, useClass: AuthServiceStub },
+        // params: NEVER so ngOnInit doesn't auto-fire the loader; we drive it
+        // explicitly from each spec to keep the scenarios deterministic.
+        { provide: ActivatedRoute, useValue: { params: NEVER } }
+      ]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AlbumDetailComponent);
+    component = fixture.componentInstance;
+    httpMock = TestBed.inject(HttpTestingController);
+    component.isLoading = false;
+    component.albumId = 'A1';
+    component.album = {
+      id: 'A1', title: 'A', description: '',
+      createdDate: '2026-01-01T00:00:00Z', createdBy: 'me', ownerId: 'u1'
+    } as any;
+  });
+
+  afterEach(() => {
+    try { httpMock.verify(); } catch { /* noop */ }
+  });
+
+  function skeleton() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-skeleton"]'));
+  }
+  function emptyMessage() {
+    return fixture.debugElement.query(By.css('[data-testid="album-empty-photos"]'));
+  }
+  function sentinel() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-sentinel"]'));
+  }
+
+  it('renders the skeleton grid while the loader is fetching (no empty-state flash)', () => {
+    component.loader.loadNext();
+    fixture.detectChanges();
+
+    expect(skeleton()).withContext('skeleton renders during load').toBeTruthy();
+    expect(emptyMessage()).withContext('no empty-state during load').toBeFalsy();
+
+    const req = httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'));
+    req.flush({ items: [{ id: 'p1', fileName: 'a.jpg', uploadDate: '' }],
+                page: 1, pageSize: 20, totalCount: 1, hasMore: false });
+    fixture.detectChanges();
+
+    expect(skeleton()).withContext('skeleton gone after load').toBeFalsy();
+  });
+
+  it('shows the empty-state ONLY when nothing is loading AND server reports no more pages', () => {
+    // Before any load: no empty-state (we haven't asked yet).
+    fixture.detectChanges();
+    expect(emptyMessage()).withContext('no empty-state before first load').toBeFalsy();
+
+    // Mid-load: still no empty-state, skeleton instead.
+    component.loader.loadNext();
+    fixture.detectChanges();
+    expect(emptyMessage()).withContext('no empty-state mid-load').toBeFalsy();
+
+    // Flush an empty page with hasMore=false — only NOW does the empty copy appear.
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+    fixture.detectChanges();
+
+    expect(emptyMessage()).withContext('empty-state after empty hasMore=false').toBeTruthy();
+  });
+
+  it('renders the IntersectionObserver sentinel while loader.hasMore() is true', () => {
+    component.loader.loadNext();
+    fixture.detectChanges();
+    expect(sentinel()).withContext('sentinel present during load').toBeTruthy();
+
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [{ id: 'p1', fileName: 'a.jpg', uploadDate: '' }],
+               page: 1, pageSize: 20, totalCount: 1, hasMore: false });
+    fixture.detectChanges();
+
+    expect(sentinel()).withContext('sentinel removed when hasMore=false').toBeFalsy();
+  });
+
+  it('loader.loadNext appends results to the grid (infinite-scroll surrogate)', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('page=1'))
+      .flush({ items: [{ id: 'p1', fileName: 'a.jpg', uploadDate: '' }],
+               page: 1, pageSize: 1, totalCount: 2, hasMore: true });
+    fixture.detectChanges();
+    expect(component.photos.length).toBe(1);
+
+    // Simulate the sentinel firing.
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('page=2'))
+      .flush({ items: [{ id: 'p2', fileName: 'b.jpg', uploadDate: '' }],
+               page: 2, pageSize: 1, totalCount: 2, hasMore: false });
+    fixture.detectChanges();
+
+    expect(component.photos.map(p => p.id)).toEqual(['p1', 'p2']);
+    expect(component.loader.hasMore()).toBeFalse();
+  });
+
+  it('sends page=1 and pageSize=20 on the first fetch (paginated contract)', () => {
+    component.loader.loadNext();
+    const req = httpMock.expectOne(r => r.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`));
+    expect(req.request.urlWithParams).toContain('page=1');
+    expect(req.request.urlWithParams).toContain('pageSize=20');
+    req.flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+  });
+});
+

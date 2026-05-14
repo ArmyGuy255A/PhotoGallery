@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -12,6 +12,7 @@ import { takeUntil, switchMap } from 'rxjs/operators';
 import { CartService, CartQuality } from '../../services/cart.service';
 import { AuthService } from '../../services/auth.service';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
+import { PhotoPage, PhotoPageLoader } from '../../services/photo-page-loader';
 
 interface Photo {
   id: string;
@@ -133,9 +134,36 @@ interface Album {
               </div>
             </div>
 
-            <div class="empty-message" *ngIf="photos.length === 0" data-testid="album-empty-photos">
+            <!--
+              Phase 6 skeleton grid: shown while the loader is fetching. Replaces
+              the previous "no photos yet" flash that fired for any slow initial
+              load. The 8 placeholder tiles are pure CSS so they paint within the
+              first frame after route navigation.
+            -->
+            <div class="photos-grid skeleton-grid" *ngIf="loader.isLoading()" data-testid="album-photos-skeleton">
+              <div *ngFor="let _ of skeletonSlots" class="photo-card skeleton-card" aria-hidden="true">
+                <div class="skeleton-thumb"></div>
+                <div class="skeleton-line"></div>
+                <div class="skeleton-line short"></div>
+              </div>
+            </div>
+
+            <!--
+              Phase 6: the truly-empty state is only valid when nothing is loading
+              AND the server confirmed there are no more pages. Conflating
+              "photos.length === 0" with "empty" was the /code/8SSPRIUAMO5A bug.
+            -->
+            <div class="empty-message" *ngIf="loader.isEmpty()" data-testid="album-empty-photos">
               <p>No photos yet. Upload some photos to get started above.</p>
             </div>
+
+            <!--
+              Phase 6 sentinel: an empty div the IntersectionObserver watches.
+              When it scrolls into view the component asks the loader for the
+              next page. Rendered only while the server says there's more to
+              fetch — keeps the observer from re-firing forever at the bottom.
+            -->
+            <div #sentinel class="photo-grid-sentinel" *ngIf="loader.hasMore()" aria-hidden="true" data-testid="album-photos-sentinel"></div>
           </section>
 
           <section class="access-codes-section">
@@ -658,12 +686,57 @@ interface Album {
     .photo-delete-btn:hover {
       background: #c62828;
     }
+
+    /* Phase 6: progressive grid skeleton + sentinel. */
+    .skeleton-grid {
+      opacity: 0.7;
+    }
+    .skeleton-card {
+      cursor: default;
+      pointer-events: none;
+    }
+    .skeleton-thumb {
+      width: 100%;
+      height: 120px;
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+      background-size: 200% 100%;
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+    }
+    .skeleton-line {
+      height: 12px;
+      margin: 10px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #eee 25%, #f5f5f5 50%, #eee 75%);
+      background-size: 200% 100%;
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+    }
+    .skeleton-line.short {
+      width: 60%;
+    }
+    @keyframes skeleton-pulse {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .photo-grid-sentinel {
+      width: 100%;
+      height: 1px;
+      margin-top: 24px;
+    }
   `]
 })
-export class AlbumDetailComponent implements OnInit, OnDestroy {
+export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
   albumId: string = '';
   album: Album | null = null;
-  photos: Photo[] = [];
+  /**
+   * Phase 6: progressive photo loader. The component reads {@link photos} via
+   * the {@link loader} signal so the grid grows as the IntersectionObserver
+   * sentinel scrolls into view.
+   */
+  loader = new PhotoPageLoader<Photo>(
+    (page, pageSize) => this.fetchPhotoPage(page, pageSize)
+  );
+  /** Skeleton-grid placeholder count (8 cards while the loader is fetching). */
+  readonly skeletonSlots: ReadonlyArray<unknown> = new Array(8);
   accessCodes: AccessCode[] = [];
   isLoading = true;
   errorMessage = '';
@@ -679,6 +752,21 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   /** Per-photo quality selection (defaults to Medium when unset). */
   selectedQuality: Record<string, CartQuality> = {};
 
+  @ViewChild('sentinel', { read: ElementRef }) sentinelRef?: ElementRef<HTMLElement>;
+  private intersectionObserver: IntersectionObserver | null = null;
+
+  /**
+   * Photos accumulated by the loader. Exposed as a plain getter (not a signal)
+   * so the existing template + spec bindings (`photos.length`, `*ngFor`,
+   * direct array mutation in tests) keep working without churn.
+   */
+  get photos(): Photo[] {
+    return this.loader.photos();
+  }
+  set photos(value: Photo[]) {
+    this.loader.photos.set(value);
+  }
+
   private destroy$ = new Subject<void>();
 
   constructor(
@@ -691,16 +779,54 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       this.albumId = params['id'];
+      // Reset the loader so navigating between albums doesn't append the new
+      // album's photos to the previous one's cache.
+      this.loader.reset();
       this.loadAlbum();
-      this.loadPhotos();
+      this.loader.loadNext();
       this.loadAccessCodes();
       this.startPhotoStatusPolling();
     });
   }
 
+  ngAfterViewInit(): void {
+    this.setupSentinelObserver();
+  }
+
   ngOnDestroy(): void {
+    this.intersectionObserver?.disconnect();
+    this.intersectionObserver = null;
+    this.loader.destroy();
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  /**
+   * Wires the IntersectionObserver to the bottom-of-grid sentinel. The
+   * sentinel is added/removed reactively via *ngIf="loader.hasMore()", so we
+   * re-attach whenever the ViewChild ref changes. Browsers without
+   * IntersectionObserver fall back to a no-op — the user can still see the
+   * loaded page; they just don't auto-load the next one.
+   */
+  private setupSentinelObserver(): void {
+    if (typeof IntersectionObserver === 'undefined') return;
+    this.intersectionObserver = new IntersectionObserver(entries => {
+      for (const e of entries) {
+        // Guard against the sentinel firing before route params landed: without
+        // an albumId the fetcher would build an invalid URL. The ViewChild ref
+        // re-attaches once *ngIf re-renders the sentinel after the first page.
+        if (e.isIntersecting && this.albumId) {
+          this.loader.loadNext();
+        }
+      }
+    }, { rootMargin: '200px' });
+    this.observeSentinelIfPresent();
+  }
+
+  private observeSentinelIfPresent(): void {
+    if (this.intersectionObserver && this.sentinelRef?.nativeElement) {
+      this.intersectionObserver.observe(this.sentinelRef.nativeElement);
+    }
   }
 
   /**
@@ -735,7 +861,7 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: () => {
-          this.photos = this.photos.filter(p => p.id !== photo.id);
+          this.loader.removeWhere(p => p.id === photo.id);
         },
         error: (err) => {
           console.error('Failed to delete photo', err);
@@ -821,19 +947,29 @@ export class AlbumDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  loadPhotos(): void {
+  /**
+   * Phase 6: per-page HTTP fetcher used by the {@link PhotoPageLoader}. Replaces
+   * the previous "fetch all photos at once" call. The pre-signed URL cost is
+   * paid only for items on the current page; older clients that don't supply
+   * page/pageSize still get a safe default (page=1, size=20) per the server.
+   */
+  private fetchPhotoPage(page: number, pageSize: number): Observable<PhotoPage<Photo>> {
     const apiUrl = environment.apiUrl || '';
-    // Backend now returns a paginated envelope { photos, totalCount, page, pageSize, hasMore }
-    this.http.get<{ photos: Photo[]; totalCount: number; page: number; pageSize: number; hasMore: boolean }>(
-      `${apiUrl}/api/albums/${this.albumId}/photos`
-    ).pipe(takeUntil(this.destroy$)).subscribe({
-      next: (data) => {
-        this.photos = data?.photos ?? [];
-      },
-      error: (error) => {
-        console.error('Error loading photos:', error);
-      }
-    });
+    const url = `${apiUrl}/api/albums/${this.albumId}/photos?page=${page}&pageSize=${pageSize}`;
+    return this.http.get<PhotoPage<Photo>>(url);
+  }
+
+  /**
+   * @deprecated Phase 6 wired the grid through {@link PhotoPageLoader}; the
+   * original full-list fetch is preserved here for tests and the upload-complete
+   * refresh path, which intentionally resets the loader and pulls page 1 again.
+   */
+  loadPhotos(): void {
+    this.loader.reset();
+    this.loader.loadNext();
+    // Re-observe in case the sentinel was removed (hasMore was false) and the
+    // *ngIf re-rendered it on the next page-1 fetch.
+    queueMicrotask(() => this.observeSentinelIfPresent());
   }
 
   loadAccessCodes(): void {
