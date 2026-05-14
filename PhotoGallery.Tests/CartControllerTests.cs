@@ -96,6 +96,12 @@ public class CartControllerTests
             _context.Photos.Include(p => p.PhotoVersions).FirstOrDefaultAsync(p => p.Id == photoId);
         public Task<List<Photo>> GetUnprocessedPhotosAsync() =>
             _context.Photos.Where(p => !p.ProcessingComplete).ToListAsync();
+        public async Task<HashSet<string>> GetExistingFileNamesAsync(Guid albumId)
+        {
+            var names = await _context.Photos.Where(p => p.AlbumId == albumId)
+                .Select(p => p.FileName).ToListAsync();
+            return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private class TestRepository<T> : Repository<T> where T : class

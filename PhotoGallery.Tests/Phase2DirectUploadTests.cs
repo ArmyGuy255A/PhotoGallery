@@ -85,7 +85,7 @@ public class Phase2DirectUploadTests
         Mock<IHubContext<PhotoProgressHub>> hub,
         string userId)
     {
-        var photoRepo = new Repository<Photo>(ctx);
+        var photoRepo = new PhotoRepository(ctx);
         var albumRepo = new Repository<Album>(ctx);
         var photoVersionRepo = new Repository<PhotoVersion>(ctx);
         var queueRepo = new Repository<ProcessingQueue>(ctx);
@@ -246,6 +246,195 @@ public class Phase2DirectUploadTests
         var reloaded = await ctx.Photos.FindAsync(photoId);
         Assert.Equal(PhotoProcessingStatus.Uploading, reloaded!.ProcessingStatus);
         Assert.Empty(await ctx.ProcessingQueueItems.Where(i => i.PhotoId == photoId).ToListAsync());
+    }
+
+    // --- Duplicate-filename rejection (both upload paths) ------------------
+
+    private static async Task<(ApplicationDbContext ctx, PhotosController controller, Guid albumId)>
+        SetupAlbumWithExistingPhotosAsync(string userId, params string[] existingFileNames)
+    {
+        var ctx = NewContext();
+        await ctx.Database.EnsureCreatedAsync();
+
+        var albumId = Guid.NewGuid();
+        ctx.Albums.Add(new Album
+        {
+            Id = albumId,
+            Title = "A",
+            OwnerId = userId,
+            CreatedBy = userId,
+            CreatedDate = DateTime.UtcNow
+        });
+        foreach (var name in existingFileNames)
+        {
+            var pid = Guid.NewGuid();
+            ctx.Photos.Add(new Photo
+            {
+                Id = pid,
+                AlbumId = albumId,
+                FileName = name,
+                StorageKey = $"photogallery/{albumId}/{pid}/original.jpg",
+                UploadDate = DateTime.UtcNow,
+                UploadedBy = userId,
+                ProcessingStatus = PhotoProcessingStatus.Complete
+            });
+        }
+        await ctx.SaveChangesAsync();
+
+        var storage = new Mock<IStorageProvider>();
+        storage
+            .Setup(s => s.GenerateWriteSasUrlAsync(It.IsAny<string>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync((string blob, TimeSpan _) => $"https://test.blob/{blob}?sas=stub");
+        var hub = new Mock<IHubContext<PhotoProgressHub>>();
+
+        var controller = BuildController(ctx, storage, hub, userId);
+        return (ctx, controller, albumId);
+    }
+
+    [Fact]
+    public async Task UploadTickets_RejectsDuplicateFileName()
+    {
+        const string userId = "owner-1";
+        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId, "DSC_8000.JPG");
+
+        var result = await controller.CreateUploadTickets(
+            albumId.ToString(),
+            new List<UploadTicketRequest>
+            {
+                new() { FileName = "DSC_8000.JPG", ContentType = "image/jpeg", Size = 1000 }
+            });
+
+        // Single-item batch where the only item is a duplicate → 409 Conflict
+        var conflict = Assert.IsType<ConflictObjectResult>(result.Result);
+        var body = Assert.IsType<UploadTicketsResponse>(conflict.Value);
+        Assert.Empty(body.Tickets);
+        var rej = Assert.Single(body.Rejected);
+        Assert.Equal("DSC_8000.JPG", rej.FileName);
+        Assert.Equal("duplicate", rej.Reason);
+
+        // No second Photo row inserted for the duplicate filename.
+        var rows = await ctx.Photos.Where(p => p.AlbumId == albumId && p.FileName == "DSC_8000.JPG").CountAsync();
+        Assert.Equal(1, rows);
+
+        ctx.Dispose();
+    }
+
+    [Fact]
+    public async Task UploadTickets_BatchWithMixedNewAndDuplicate()
+    {
+        const string userId = "owner-1";
+        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(
+            userId, "dup-a.jpg", "dup-b.jpg");
+
+        var batch = new List<UploadTicketRequest>
+        {
+            new() { FileName = "new-1.jpg", ContentType = "image/jpeg", Size = 1000 },
+            new() { FileName = "dup-a.jpg", ContentType = "image/jpeg", Size = 1000 },
+            new() { FileName = "new-2.jpg", ContentType = "image/jpeg", Size = 1000 },
+            new() { FileName = "dup-b.jpg", ContentType = "image/jpeg", Size = 1000 },
+            new() { FileName = "new-3.jpg", ContentType = "image/jpeg", Size = 1000 }
+        };
+
+        var result = await controller.CreateUploadTickets(albumId.ToString(), batch);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
+        Assert.Equal(3, body.Tickets.Count);
+        Assert.Equal(2, body.Rejected.Count);
+        Assert.All(body.Rejected, r => Assert.Equal("duplicate", r.Reason));
+        Assert.Contains(body.Rejected, r => r.FileName == "dup-a.jpg");
+        Assert.Contains(body.Rejected, r => r.FileName == "dup-b.jpg");
+        Assert.Contains(body.Tickets, t => t.FileName == "new-1.jpg");
+        Assert.Contains(body.Tickets, t => t.FileName == "new-2.jpg");
+        Assert.Contains(body.Tickets, t => t.FileName == "new-3.jpg");
+
+        // 3 new Uploading rows added (plus the 2 originals).
+        var inserted = await ctx.Photos
+            .Where(p => p.AlbumId == albumId && p.ProcessingStatus == PhotoProcessingStatus.Uploading)
+            .Select(p => p.FileName).ToListAsync();
+        Assert.Equal(3, inserted.Count);
+        Assert.Contains("new-1.jpg", inserted);
+        Assert.Contains("new-2.jpg", inserted);
+        Assert.Contains("new-3.jpg", inserted);
+
+        ctx.Dispose();
+    }
+
+    [Fact]
+    public async Task UploadTickets_SingleDuplicateReturns409()
+    {
+        const string userId = "owner-1";
+        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId, "only.jpg");
+
+        var result = await controller.CreateUploadTickets(
+            albumId.ToString(),
+            new List<UploadTicketRequest>
+            {
+                new() { FileName = "only.jpg", ContentType = "image/jpeg", Size = 1000 }
+            });
+
+        Assert.IsType<ConflictObjectResult>(result.Result);
+        ctx.Dispose();
+    }
+
+    [Fact]
+    public async Task UploadTickets_DuplicateWithinSameBatch_RejectsSecondOccurrence()
+    {
+        const string userId = "owner-1";
+        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId);
+
+        var result = await controller.CreateUploadTickets(
+            albumId.ToString(),
+            new List<UploadTicketRequest>
+            {
+                new() { FileName = "same.jpg", ContentType = "image/jpeg", Size = 1000 },
+                new() { FileName = "same.jpg", ContentType = "image/jpeg", Size = 1000 }
+            });
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
+        Assert.Single(body.Tickets);
+        Assert.Single(body.Rejected);
+        ctx.Dispose();
+    }
+
+    [Fact]
+    public async Task MultipartUpload_RejectsDuplicate()
+    {
+        const string userId = "owner-1";
+        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId, "existing.jpg");
+
+        // Build a multipart form file collection: one duplicate, one fresh.
+        var dupBytes = new byte[] { 1, 2, 3 };
+        var newBytes = new byte[] { 4, 5, 6 };
+        IFormFile dup = new FormFile(new MemoryStream(dupBytes), 0, dupBytes.Length, "files", "existing.jpg")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/jpeg"
+        };
+        IFormFile fresh = new FormFile(new MemoryStream(newBytes), 0, newBytes.Length, "files", "brand-new.jpg")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "image/jpeg"
+        };
+        var collection = new FormFileCollection { dup, fresh };
+
+        var result = await controller.UploadPhotos(albumId.ToString(), collection);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<UploadPhotoResponse>(ok.Value);
+
+        // The duplicate is captured in errors, never makes it to storage or
+        // the DB. The fresh upload may itself fail later in the pipeline
+        // (mock storage provider is not wired here) but the duplicate must
+        // not land regardless.
+        Assert.Contains(body.Errors, e => e.Contains("existing.jpg") && e.Contains("already exists"));
+        var existingRows = await ctx.Photos
+            .Where(p => p.AlbumId == albumId && p.FileName == "existing.jpg")
+            .CountAsync();
+        Assert.Equal(1, existingRows);
+
+        ctx.Dispose();
     }
 }
 

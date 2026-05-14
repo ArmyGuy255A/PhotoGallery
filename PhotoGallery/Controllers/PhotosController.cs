@@ -38,7 +38,7 @@ public class PhotosController : ControllerBase
 {
     private readonly IImageProcessor _imageProcessor;
     private readonly IStorageProvider _storageProvider;
-    private readonly IRepository<Photo> _photoRepository;
+    private readonly IPhotoRepository _photoRepository;
     private readonly IRepository<Album> _albumRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
     private readonly IRepository<ProcessingQueue> _queueRepository;
@@ -63,7 +63,7 @@ public class PhotosController : ControllerBase
     public PhotosController(
         IImageProcessor imageProcessor,
         IStorageProvider storageProvider,
-        IRepository<Photo> photoRepository,
+        IPhotoRepository photoRepository,
         IRepository<Album> albumRepository,
         IRepository<PhotoVersion> photoVersionRepository,
         IRepository<ProcessingQueue> queueRepository,
@@ -103,7 +103,7 @@ public class PhotosController : ControllerBase
     /// </summary>
     [Authorize]
     [HttpPost("albums/{albumId}/upload-tickets")]
-    public async Task<ActionResult<List<UploadTicketResponse>>> CreateUploadTickets(
+    public async Task<ActionResult<UploadTicketsResponse>> CreateUploadTickets(
         string albumId,
         [FromBody] List<UploadTicketRequest> files)
     {
@@ -124,7 +124,16 @@ public class PhotosController : ControllerBase
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
-        var responses = new List<UploadTicketResponse>(files.Count);
+        // Pull the existing filename set for this album in one query, then
+        // do the duplicate check in memory per request item. Includes rows
+        // in Uploading state on purpose: two concurrent tabs uploading the
+        // same name should collide cleanly here rather than create two
+        // ghost rows. Abandoned Uploading rows are reclaimed by the
+        // OrphanedBlobReaperService after Storage:OrphanReapGraceMinutes.
+        var existingNames = await _photoRepository.GetExistingFileNamesAsync(albumGuid);
+
+        var tickets = new List<UploadTicketResponse>(files.Count);
+        var rejected = new List<RejectedUploadTicket>();
 
         foreach (var file in files)
         {
@@ -135,6 +144,23 @@ public class PhotosController : ControllerBase
                 return BadRequest(
                     $"{file.FileName}: size {file.Size} bytes is outside the allowed range " +
                     $"(0, {MaxUploadBytes}]");
+
+            if (existingNames.Contains(file.FileName))
+            {
+                rejected.Add(new RejectedUploadTicket
+                {
+                    FileName = file.FileName,
+                    Reason = "duplicate"
+                });
+                _logger.LogInformation(
+                    "Rejected upload ticket for duplicate filename {FileName} in album {AlbumId} for user {UserId}",
+                    file.FileName, albumGuid, userId);
+                continue;
+            }
+
+            // Reserve the name in-process so a single batch containing the
+            // same filename twice rejects the second occurrence.
+            existingNames.Add(file.FileName);
 
             var photoId = Guid.NewGuid();
             var blobPath = $"photogallery/{albumGuid}/{photoId}/original.jpg";
@@ -166,12 +192,13 @@ public class PhotosController : ControllerBase
             var uploadUrl = await _storageProvider.GenerateWriteSasUrlAsync(blobPath, UploadSasTtl);
             var expiresAt = DateTime.UtcNow.Add(UploadSasTtl);
 
-            responses.Add(new UploadTicketResponse
+            tickets.Add(new UploadTicketResponse
             {
                 PhotoId = photoId.ToString(),
                 UploadUrl = uploadUrl,
                 BlobPath = blobPath,
-                ExpiresAt = expiresAt
+                ExpiresAt = expiresAt,
+                FileName = file.FileName
             });
 
             _logger.LogInformation(
@@ -179,7 +206,19 @@ public class PhotosController : ControllerBase
                 photoId, file.FileName, file.Size, albumGuid, userId);
         }
 
-        return Ok(responses);
+        var envelope = new UploadTicketsResponse
+        {
+            Tickets = tickets,
+            Rejected = rejected
+        };
+
+        // Single-item batch where the only item is a duplicate: surface
+        // 409 Conflict so the SPA can render a clear error without having
+        // to inspect the partial-success envelope.
+        if (files.Count == 1 && rejected.Count == 1 && tickets.Count == 0)
+            return Conflict(envelope);
+
+        return Ok(envelope);
     }
 
     /// <summary>
@@ -334,6 +373,11 @@ public class PhotosController : ControllerBase
         var uploadedPhotos = new List<PhotoUploadInfo>();
         var errors = new List<string>();
 
+        // Cache the album's existing filename set so the per-file duplicate
+        // check is a memory lookup. Includes Uploading rows (see
+        // CreateUploadTickets for the trade-off rationale).
+        var existingNames = await _photoRepository.GetExistingFileNamesAsync(albumGuid);
+
         foreach (var file in files)
         {
             try
@@ -343,6 +387,16 @@ public class PhotosController : ControllerBase
                     errors.Add($"{file.FileName}: File is empty");
                     continue;
                 }
+
+                if (existingNames.Contains(file.FileName))
+                {
+                    errors.Add($"{file.FileName}: A photo with this name already exists in the album. Delete the existing photo first.");
+                    _logger.LogInformation(
+                        "Rejected multipart upload for duplicate filename {FileName} in album {AlbumId} for user {UserId}",
+                        file.FileName, albumGuid, userId);
+                    continue;
+                }
+                existingNames.Add(file.FileName);
 
                 // Allowed image formats
                 var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp", "application/octet-stream" };
@@ -772,6 +826,32 @@ public class UploadTicketResponse
     public string UploadUrl { get; set; } = string.Empty;
     public string BlobPath { get; set; } = string.Empty;
     public DateTime ExpiresAt { get; set; }
+    public string FileName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Per-file rejection entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// Today the only <see cref="Reason"/> is <c>"duplicate"</c> (the album
+/// already contains a photo with the same file name). The shape is open
+/// so additional reasons can be added without breaking the SPA contract.
+/// </summary>
+public class RejectedUploadTicket
+{
+    public string FileName { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Envelope returned by <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// A batch can produce a mix of <see cref="Tickets"/> (filenames that were
+/// new in the album) and <see cref="Rejected"/> (filenames already in use).
+/// A batch of size 1 whose only item is a duplicate is returned as
+/// HTTP 409 Conflict using this same envelope.
+/// </summary>
+public class UploadTicketsResponse
+{
+    public List<UploadTicketResponse> Tickets { get; set; } = new();
+    public List<RejectedUploadTicket> Rejected { get; set; } = new();
 }
 
 /// <summary>
