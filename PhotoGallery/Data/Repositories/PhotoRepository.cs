@@ -36,4 +36,19 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
             .Where(p => !p.ProcessingComplete)
             .ToListAsync();
     }
+
+    public async Task<HashSet<string>> GetExistingFileNamesAsync(Guid albumId)
+    {
+        // Case-sensitive HashSet to match the storage layer; the duplicate
+        // check intentionally uses OrdinalIgnoreCase on the caller side so
+        // we don't depend on the database collation. Includes Uploading
+        // rows so concurrent tabs cannot both reserve the same name. The
+        // orphan reaper releases names from abandoned tickets after the
+        // grace window expires.
+        var names = await _dbSet
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => p.FileName)
+            .ToListAsync();
+        return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+    }
 }

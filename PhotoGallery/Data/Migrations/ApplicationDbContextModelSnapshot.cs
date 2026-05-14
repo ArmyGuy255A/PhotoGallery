@@ -389,6 +389,10 @@ namespace PhotoGallery.Data.Migrations
 
                     b.HasIndex("UserId");
 
+                    b.HasIndex("AlbumId", "FileName")
+                        .IsUnique()
+                        .HasFilter("[ProcessingStatus] <> 4");
+
                     b.ToTable("Photos");
                 });
 
