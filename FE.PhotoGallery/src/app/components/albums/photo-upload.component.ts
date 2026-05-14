@@ -1,18 +1,22 @@
-import { Component, Input, Output, EventEmitter, OnInit, OnDestroy } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnDestroy, effect, inject, Injector, runInInjectionContext, EffectRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PhotoService, UploadProgress } from '../../services/photo.service';
-import { interval, Subject, takeUntil, switchMap, filter, take } from 'rxjs';
+import { PhotoProgressService, QUALITIES, Quality } from '../../services/photo-progress.service';
+import { Subject } from 'rxjs';
 
 interface UploadFile {
   file: File;
   uploadProgress: number;
   processingProgress: number;
+  perQuality: Partial<Record<Quality, number>>;
   status: 'pending' | 'uploading' | 'complete' | 'error' | 'processing';
   errorMessage?: string;
   photoId?: string;
   processingStatus?: string;
   thumbnailUrl?: string;
   completeTime?: Date;
+  /** Cleanup hook for the effect bound to this row's photoId. */
+  effectRef?: EffectRef;
 }
 
 @Component({
@@ -101,6 +105,26 @@ interface UploadFile {
                   </div>
                 </div>
 
+                <!-- Per-quality bars (one row per quality). Shown only once we
+                     have a photoId AND processing has started (any quality
+                     percent observed). Real-time-driven by PhotoProgressService. -->
+                <div *ngIf="item.status === 'processing' || item.status === 'complete'" class="quality-bars" data-testid="upload-item-quality-bars">
+                  <div *ngFor="let q of qualities" class="quality-bar-row" [attr.data-quality]="q">
+                    <small class="quality-label">{{ q }}</small>
+                    <div class="progress quality-progress">
+                      <div
+                        class="progress-bar quality-progress-bar"
+                        [style.width.%]="item.perQuality[q] || 0"
+                        role="progressbar"
+                        [attr.aria-valuenow]="item.perQuality[q] || 0"
+                        aria-valuemin="0"
+                        aria-valuemax="100">
+                      </div>
+                    </div>
+                    <small class="quality-percent">{{ item.perQuality[q] || 0 }}%</small>
+                  </div>
+                </div>
+
                 <!-- Status text -->
                 <small class="status-text" data-testid="upload-item-status">
                   <span *ngIf="item.status === 'uploading'">📤 Uploading...</span>
@@ -109,6 +133,14 @@ interface UploadFile {
                   <span *ngIf="item.status === 'error'">❌ Error</span>
                 </small>
                 <small *ngIf="item.errorMessage" class="error-message">{{ item.errorMessage }}</small>
+                <button
+                  *ngIf="item.status === 'error'"
+                  type="button"
+                  class="btn btn-sm btn-outline-danger retry-btn"
+                  data-testid="upload-item-retry"
+                  (click)="retryUpload(item)">
+                  Retry
+                </button>
               </div>
 
               <!-- Status badge -->
@@ -445,11 +477,65 @@ interface UploadFile {
       border-color: #bee5eb;
       color: #0c5460;
     }
+
+    /* Per-quality bars (Phase 3 SignalR) */
+    .quality-bars {
+      margin-top: 30px; /* clear the absolutely-positioned upload progress */
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .quality-bar-row {
+      display: grid;
+      grid-template-columns: 80px 1fr 40px;
+      gap: 8px;
+      align-items: center;
+    }
+    .quality-label {
+      text-transform: capitalize;
+      color: #555;
+      font-size: 0.75rem;
+    }
+    .quality-progress {
+      position: relative;
+      height: 8px;
+      background: #e9ecef;
+      border-radius: 2px;
+      overflow: hidden;
+      width: 100%;
+    }
+    .quality-progress-bar {
+      height: 100%;
+      background: #27ae60;
+      transition: width 0.3s ease;
+    }
+    .quality-percent {
+      color: #666;
+      font-size: 0.7rem;
+      text-align: right;
+    }
+    .retry-btn {
+      margin-top: 4px;
+      padding: 2px 10px;
+      background: transparent;
+      color: #e74c3c;
+      border: 1px solid #e74c3c;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .retry-btn:hover {
+      background: #e74c3c;
+      color: white;
+    }
   `]
 })
 export class PhotoUploadComponent implements OnInit, OnDestroy {
   @Input() albumId: string = '';
   @Output() uploadComplete = new EventEmitter<any>();
+
+  /** Per-quality bar labels rendered in template order. */
+  readonly qualities = QUALITIES;
 
   uploadFiles: UploadFile[] = [];
   isDraggingOver = false;
@@ -459,17 +545,29 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
   processingCount = 0;
   errorCount = 0;
   private destroy$ = new Subject<void>();
-  private pollStop$ = new Subject<void>();
+
+  private readonly progressService = inject(PhotoProgressService);
+  private readonly injector = inject(Injector);
 
   constructor(private photoService: PhotoService) {}
 
-  ngOnInit() {}
+  ngOnInit() {
+    // Open the SignalR hub once for the lifetime of the upload view. Errors
+    // are non-fatal: progress updates simply won't arrive (the upload row
+    // will sit at "Processing" until the user navigates away). The polling
+    // fallback was DoS'ing the browser at scale, so we explicitly do not
+    // restore it.
+    this.progressService.start().catch(err =>
+      console.error('[PhotoUpload] PhotoProgressService failed to start', err)
+    );
+  }
 
   ngOnDestroy() {
     this.destroy$.next();
     this.destroy$.complete();
-    this.pollStop$.next();
-    this.pollStop$.complete();
+    for (const item of this.uploadFiles) {
+      item.effectRef?.destroy();
+    }
   }
 
   /**
@@ -517,6 +615,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
         file,
         uploadProgress: 0,
         processingProgress: 0,
+        perQuality: {},
         status: 'pending'
       });
     });
@@ -575,7 +674,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
             item.processingProgress = 0;
             this.processingCount++;
             if (item.photoId) {
-              this.startProcessingStatusPoll(item);
+              this.subscribeToProcessing(item);
             }
             this.checkUploadComplete();
             break;
@@ -602,40 +701,90 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
     });
   }
 
-  private startProcessingStatusPoll(item: UploadFile) {
+  /**
+   * Wire this row to <c>PhotoProgressService</c> via an Angular <c>effect</c>.
+   * The effect re-fires whenever the service's progress / completed / errors
+   * signals change. The effect's lifetime is bound to the component via the
+   * <c>Injector</c> we capture in ngOnInit; we additionally keep an explicit
+   * <c>EffectRef</c> on the row so once the photo is fully complete (or has
+   * been removed from the list) we can destroy the effect immediately and
+   * stop reacting to unrelated photoId updates.
+   *
+   * This replaces the previous per-photo <c>interval(2000)</c> polling loop,
+   * which at ~500 concurrent uploads exhausted the browser's HTTP connection
+   * pool with <c>ERR_INSUFFICIENT_RESOURCES</c>.
+   */
+  private subscribeToProcessing(item: UploadFile) {
     if (!item.photoId) return;
+    const photoId = item.photoId;
 
-    interval(2000) // Poll every 2 seconds
-      .pipe(
-        takeUntil(this.destroy$),
-        filter(() => item.status === 'processing'),
-        switchMap(() => this.photoService.getPhotoProcessingStatus(item.photoId!))
-      )
-      .subscribe({
-        next: (status: any) => {
-          item.processingProgress = status.percentComplete || 0;
-          item.processingStatus = this.getProcessingStatusText(status);
-          
-          if (status.percentComplete === 100 && status.hasThumbnail) {
-            item.status = 'complete';
-            item.thumbnailUrl = this.photoService.getThumbnailUrl(item.photoId!);
-            item.completeTime = new Date();
-            this.processingCount--;
-            this.successCount++;
-            console.log(`[PhotoUpload] Processing complete for ${item.file.name}`);
-            this.checkUploadComplete();
-            
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-              this.removeCompletedItem(item);
-            }, 5000);
-          }
-        },
-        error: (error: any) => {
-          console.log(`[PhotoUpload] Error polling status:`, error);
-          // Don't fail on polling errors - just keep trying
+    item.effectRef = runInInjectionContext(this.injector, () =>
+      effect(() => {
+        const map = this.progressService.progress();
+        const done = this.progressService.completed();
+        const errs = this.progressService.errors();
+
+        const perQuality = map.get(photoId);
+        if (perQuality) {
+          item.perQuality = { ...perQuality };
+          // Aggregate percent for the legacy "processing" bar = average across
+          // the five qualities. Bars not yet started count as 0.
+          const total = QUALITIES.reduce((acc, q) => acc + (perQuality[q] ?? 0), 0);
+          item.processingProgress = Math.round(total / QUALITIES.length);
         }
-      });
+
+        if (errs.has(photoId) && item.status !== 'error') {
+          item.status = 'error';
+          item.errorMessage = errs.get(photoId);
+          this.processingCount = Math.max(0, this.processingCount - 1);
+          this.errorCount++;
+          item.effectRef?.destroy();
+          item.effectRef = undefined;
+          this.checkUploadComplete();
+          return;
+        }
+
+        if (done.has(photoId) && item.status !== 'complete') {
+          item.status = 'complete';
+          item.processingProgress = 100;
+          item.thumbnailUrl = this.photoService.getThumbnailUrl(photoId);
+          item.completeTime = new Date();
+          this.processingCount = Math.max(0, this.processingCount - 1);
+          this.successCount++;
+          this.checkUploadComplete();
+
+          // Tear down the effect — no more updates will come for this row.
+          item.effectRef?.destroy();
+          item.effectRef = undefined;
+
+          // Auto-remove after 5s (visual fade-out handled by CSS .completed)
+          setTimeout(() => this.removeCompletedItem(item), 5000);
+        }
+      })
+    );
+  }
+
+  /**
+   * Re-upload the same File from scratch. The previous photoId is abandoned
+   * (server-side it will time out and be reaped by the orphaned-blob sweep
+   * if no bytes ever landed). Simpler than wiring a dedicated /retry
+   * endpoint, and the SAS-upload flow makes a fresh upload identical to the
+   * first attempt.
+   */
+  retryUpload(item: UploadFile) {
+    item.effectRef?.destroy();
+    item.effectRef = undefined;
+    item.status = 'pending';
+    item.errorMessage = undefined;
+    item.uploadProgress = 0;
+    item.processingProgress = 0;
+    item.perQuality = {};
+    item.photoId = undefined;
+    this.errorCount = Math.max(0, this.errorCount - 1);
+    this.uploadCompleteFlag = false;
+    this.isUploading = true;
+    const index = this.uploadFiles.indexOf(item);
+    this.uploadFile(item, index);
   }
 
   private removeCompletedItem(item: UploadFile) {
