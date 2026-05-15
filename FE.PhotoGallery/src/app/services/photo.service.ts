@@ -342,23 +342,13 @@ export class PhotoService {
   }
 
   /**
-   * Poll processing status repeatedly
+   * NOTE: <c>pollProcessingStatus</c> was removed when SignalR replaced the
+   * per-photo 2-second polling loop (Phase 3). The single-shot
+   * <see cref="getPhotoProcessingStatus"/> above is retained for snapshot
+   * use cases (e.g. album-detail loading mid-processing photos on first
+   * render); callers must NOT wrap it in <c>setInterval</c> / RxJS
+   * <c>interval()</c>. Subscribe to <c>PhotoProgressService</c> instead.
    */
-  pollProcessingStatus(photoId: string, intervalMs: number = 2000): Observable<ProcessingStatus> {
-    return new Observable(observer => {
-      const interval = setInterval(() => {
-        this.getPhotoProcessingStatus(photoId).subscribe({
-          next: (status) => observer.next(status),
-          error: (error) => {
-            clearInterval(interval);
-            observer.error(error);
-          }
-        });
-      }, intervalMs);
-
-      return () => clearInterval(interval);
-    });
-  }
 
   /**
    * Download photo via access code
