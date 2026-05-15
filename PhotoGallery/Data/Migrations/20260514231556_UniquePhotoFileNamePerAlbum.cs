@@ -32,19 +32,33 @@ namespace PhotoGallery.Data.Migrations
             // works here as on SqlServer. Local-dev DBs are usually empty,
             // making this a no-op, but we keep the step so the migration
             // behaves identically on every provider.
+            // Capture the doomed Photo Ids and pre-clean children whose FK uses
+            // ON DELETE RESTRICT (Downloads, ProcessingQueues,
+            // ProcessingQueueItems, UserCartItems). Cascade-configured
+            // children (PhotoFiles, PhotoVersions, PhotoVersionUrls) clean up
+            // when the parent row is removed. Sqlite has no temp-table SELECT
+            // INTO; we just inline the CTE for each child delete.
             migrationBuilder.Sql(@"
-                DELETE FROM Photos
-                WHERE Id IN (
-                    SELECT Id FROM (
-                        SELECT Id, ROW_NUMBER() OVER (
-                            PARTITION BY AlbumId, FileName
-                            ORDER BY UploadDate ASC, Id ASC
-                        ) AS rn
-                        FROM Photos
-                        WHERE ProcessingStatus <> 4
-                    ) ranked
-                    WHERE rn > 1
-                );
+                CREATE TEMP TABLE IF NOT EXISTS _DupePhotos (Id BLOB PRIMARY KEY);
+                DELETE FROM _DupePhotos;
+                INSERT INTO _DupePhotos (Id)
+                SELECT Id FROM (
+                    SELECT Id, ROW_NUMBER() OVER (
+                        PARTITION BY AlbumId, FileName
+                        ORDER BY UploadDate ASC, Id ASC
+                    ) AS rn
+                    FROM Photos
+                    WHERE ProcessingStatus <> 4
+                ) ranked
+                WHERE rn > 1;
+
+                DELETE FROM Downloads            WHERE PhotoId IN (SELECT Id FROM _DupePhotos);
+                DELETE FROM UserCartItems        WHERE PhotoId IN (SELECT Id FROM _DupePhotos);
+                DELETE FROM ProcessingQueueItems WHERE PhotoId IN (SELECT Id FROM _DupePhotos);
+                DELETE FROM ProcessingQueues     WHERE PhotoId IN (SELECT Id FROM _DupePhotos);
+                DELETE FROM Photos               WHERE Id      IN (SELECT Id FROM _DupePhotos);
+
+                DROP TABLE _DupePhotos;
             ");
 
             migrationBuilder.CreateIndex(

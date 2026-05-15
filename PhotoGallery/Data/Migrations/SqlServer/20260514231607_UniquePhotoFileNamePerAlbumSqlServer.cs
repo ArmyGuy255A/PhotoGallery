@@ -20,7 +20,13 @@ namespace PhotoGallery.Data.Migrations.SqlServer
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // Capture the doomed Photo Ids into a temp table so we can also
+            // clean up child rows whose FK uses ON DELETE RESTRICT (Downloads,
+            // ProcessingQueues, ProcessingQueueItems, UserCartItems). The
+            // cascade-configured children (PhotoFiles, PhotoVersions,
+            // PhotoVersionUrls) clean themselves up when the parent row goes.
             migrationBuilder.Sql(@"
+                IF OBJECT_ID('tempdb..#DupePhotos') IS NOT NULL DROP TABLE #DupePhotos;
                 ;WITH ranked AS (
                     SELECT Id, ROW_NUMBER() OVER (
                         PARTITION BY AlbumId, FileName
@@ -29,8 +35,15 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                     FROM Photos
                     WHERE ProcessingStatus <> 4
                 )
-                DELETE FROM Photos
-                WHERE Id IN (SELECT Id FROM ranked WHERE rn > 1);
+                SELECT Id INTO #DupePhotos FROM ranked WHERE rn > 1;
+
+                DELETE FROM Downloads            WHERE PhotoId IN (SELECT Id FROM #DupePhotos);
+                DELETE FROM UserCartItems        WHERE PhotoId IN (SELECT Id FROM #DupePhotos);
+                DELETE FROM ProcessingQueueItems WHERE PhotoId IN (SELECT Id FROM #DupePhotos);
+                DELETE FROM ProcessingQueues     WHERE PhotoId IN (SELECT Id FROM #DupePhotos);
+                DELETE FROM Photos               WHERE Id      IN (SELECT Id FROM #DupePhotos);
+
+                DROP TABLE #DupePhotos;
             ");
 
             migrationBuilder.CreateIndex(
