@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
+import { UploadProgressAsideComponent } from './upload-progress-aside.component';
 import { AccessCodeFormComponent } from './access-code-form.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { Subject, interval, Observable } from 'rxjs';
@@ -46,7 +47,7 @@ interface Album {
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent, BackToDashboardComponent],
+  imports: [CommonModule, FormsModule, PhotoUploadComponent, UploadProgressAsideComponent, AccessCodeFormComponent, PhotoModalComponent, BackToDashboardComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
@@ -279,6 +280,11 @@ interface Album {
         (closed)="modalOpen = false"
         (cartAction)="onModalCartAction($event)">
       </app-photo-modal>
+
+      <app-upload-progress-aside
+        *ngIf="album?.id"
+        [albumId]="album!.id">
+      </app-upload-progress-aside>
     </div>
   `,
   styles: [`

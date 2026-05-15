@@ -648,6 +648,77 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
+    /// Aggregate processing summary for an album. Returns counts per
+    /// <see cref="PhotoProcessingStatus"/> across photos and per-quality
+    /// counts across queue items, so the SPA can render a single floating
+    /// "X uploading, Y processing thumbnails, Z complete" widget instead
+    /// of per-photo progress bars. This is the recommended endpoint to
+    /// drive any in-flight progress UI at scale — one query returns the
+    /// whole album's state regardless of how many photos are in flight.
+    /// </summary>
+    [Authorize]
+    [HttpGet("albums/{albumId:guid}/processing-summary")]
+    public async Task<ActionResult<AlbumProcessingSummary>> GetAlbumProcessingSummary(Guid albumId)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var album = await _albumRepository.GetByIdAsync(albumId);
+        if (album == null)
+            return NotFound();
+
+        var isAdmin = User.IsInRole("Admin");
+        if (!isAdmin && album.OwnerId != userId)
+            return Forbid();
+
+        var allPhotos = await _photoRepository.GetAlbumPhotosAsync(albumId);
+        // GetAlbumPhotosAsync filters out Uploading status — re-include them
+        // for the summary so the user sees pending-upload work.
+        var uploadingPhotos = (await _photoRepository.GetAllAsync())
+            .Where(p => p.AlbumId == albumId && p.ProcessingStatus == PhotoProcessingStatus.Uploading)
+            .ToList();
+        var photos = allPhotos.Concat(uploadingPhotos).ToList();
+
+        var statusCounts = new PhotoStatusCounts
+        {
+            Uploading = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Uploading),
+            Pending = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Pending),
+            Processing = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Processing),
+            Complete = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Complete),
+            Failed = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Failed)
+        };
+
+        var photoIds = photos.Select(p => p.Id).ToHashSet();
+        var items = (await _queueItemRepository.GetAllAsync())
+            .Where(i => photoIds.Contains(i.PhotoId))
+            .ToList();
+
+        QualityCounts CountFor(QualityType q) => new()
+        {
+            Pending = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Pending),
+            Processing = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Processing),
+            Complete = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Complete),
+            Failed = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Error)
+        };
+
+        return Ok(new AlbumProcessingSummary
+        {
+            AlbumId = albumId.ToString(),
+            TotalPhotos = photos.Count,
+            PhotoStatus = statusCounts,
+            ByQuality = new ByQualityCounts
+            {
+                Thumbnail = CountFor(QualityType.Thumbnail),
+                Low = CountFor(QualityType.Low),
+                Medium = CountFor(QualityType.Medium),
+                High = CountFor(QualityType.High)
+            },
+            UpdatedAt = DateTime.UtcNow
+        });
+    }
+
+    /// <summary>
     /// Batch processing-status fetch — one round-trip for many photos.
     /// Used as a defense-in-depth fallback by the SPA when SignalR events
     /// for newly-uploaded photos are dropped (silent network failure,
@@ -1005,4 +1076,45 @@ public class UploadCompleteResponse
 public class BatchStatusRequest
 {
     public List<string> PhotoIds { get; set; } = new();
+}
+
+/// <summary>
+/// Response from <c>GET /api/photos/albums/{albumId}/processing-summary</c>.
+/// Drives the floating in-flight progress aside on the album page. One
+/// query gives the SPA the whole album's processing state regardless of
+/// how many photos are in flight — the recommended primitive for any
+/// progress UI past ~50 photos.
+/// </summary>
+public class AlbumProcessingSummary
+{
+    public string AlbumId { get; set; } = string.Empty;
+    public int TotalPhotos { get; set; }
+    public PhotoStatusCounts PhotoStatus { get; set; } = new();
+    public ByQualityCounts ByQuality { get; set; } = new();
+    public DateTime UpdatedAt { get; set; }
+}
+
+public class PhotoStatusCounts
+{
+    public int Uploading { get; set; }
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Failed { get; set; }
+}
+
+public class ByQualityCounts
+{
+    public QualityCounts Thumbnail { get; set; } = new();
+    public QualityCounts Low { get; set; } = new();
+    public QualityCounts Medium { get; set; } = new();
+    public QualityCounts High { get; set; } = new();
+}
+
+public class QualityCounts
+{
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Failed { get; set; }
 }

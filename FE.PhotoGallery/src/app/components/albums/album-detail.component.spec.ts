@@ -208,6 +208,23 @@ describe('AlbumDetailComponent', () => {
   });
 
   afterEach(() => {
+    // The floating UploadProgressAsideComponent fires a periodic
+    // processing-summary fetch on mount. The spec doesn't care about it,
+    // so drain any pending matches before verify() to keep assertions
+    // focused on the test's own HTTP traffic.
+    const asideRequests = httpMock.match(r => r.url.includes('/processing-summary'));
+    asideRequests.forEach(r => r.flush({
+      albumId: 'album-1',
+      totalPhotos: 0,
+      photoStatus: { uploading: 0, pending: 0, processing: 0, complete: 0, failed: 0 },
+      byQuality: {
+        thumbnail: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        low: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        medium: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        high: { pending: 0, processing: 0, complete: 0, failed: 0 }
+      },
+      updatedAt: '2026-05-15T00:00:00Z'
+    }));
     httpMock.verify();
   });
 

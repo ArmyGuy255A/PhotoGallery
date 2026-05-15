@@ -41,6 +41,41 @@ export interface ProcessingStatus {
   hasHigh: boolean;
 }
 
+export interface PhotoStatusCounts {
+  uploading: number;
+  pending: number;
+  processing: number;
+  complete: number;
+  failed: number;
+}
+
+export interface QualityCounts {
+  pending: number;
+  processing: number;
+  complete: number;
+  failed: number;
+}
+
+export interface ByQualityCounts {
+  thumbnail: QualityCounts;
+  low: QualityCounts;
+  medium: QualityCounts;
+  high: QualityCounts;
+}
+
+/**
+ * Response from <c>GET /api/photos/albums/{albumId}/processing-summary</c>.
+ * Drives the floating UploadProgressAsideComponent — one HTTP call gives
+ * the album's whole in-flight state regardless of photo count.
+ */
+export interface AlbumProcessingSummary {
+  albumId: string;
+  totalPhotos: number;
+  photoStatus: PhotoStatusCounts;
+  byQuality: ByQualityCounts;
+  updatedAt: string;
+}
+
 /**
  * Per-file request body for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
  * The SPA submits a batch (one entry per file); the controller mints a
@@ -361,6 +396,18 @@ export class PhotoService {
   getPhotoProcessingStatus(photoId: string): Observable<ProcessingStatus> {
     return this.http.get<ProcessingStatus>(
       `${this.API_URL}/${photoId}/status`
+    );
+  }
+
+  /**
+   * Aggregate processing summary for an album. ONE HTTP call returns the
+   * whole album's in-flight state regardless of photo count — the
+   * recommended primitive for any progress UI past ~50 photos. Drives the
+   * floating UploadProgressAsideComponent.
+   */
+  getAlbumProcessingSummary(albumId: string): Observable<AlbumProcessingSummary> {
+    return this.http.get<AlbumProcessingSummary>(
+      `${this.API_URL}/albums/${albumId}/processing-summary`
     );
   }
 
