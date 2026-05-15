@@ -651,30 +651,31 @@ public class PhotosController : ControllerBase
     /// Batch processing-status fetch — one round-trip for many photos.
     /// Used as a defense-in-depth fallback by the SPA when SignalR events
     /// for newly-uploaded photos are dropped (silent network failure,
-    /// auth-on-handshake hiccup, FE effect race). One HTTP call regardless
-    /// of how many files are in flight, so it is safe to call on a small
-    /// timer (10s in the SPA today) without re-introducing the per-file
-    /// polling DoS we removed in PR #131.
+    /// auth-on-handshake hiccup, FE effect race). Switched from GET-with-
+    /// query-string to POST-with-body because real-world batches hit the
+    /// ~2KB URL ceiling once you cross ~50 GUIDs; the SPA chunks at 100
+    /// per call to keep the request body small and parallelizes across
+    /// the chunks. Server still caps the per-request id list at 200 as a
+    /// sanity guard.
     /// </summary>
     [Authorize]
-    [HttpGet("batch-status")]
+    [HttpPost("batch-status")]
     public async Task<ActionResult<IEnumerable<ProcessingStatusDto>>> GetBatchProcessingStatus(
-        [FromQuery] string photoIds)
+        [FromBody] BatchStatusRequest request)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
             return Unauthorized();
 
-        if (string.IsNullOrWhiteSpace(photoIds))
+        if (request?.PhotoIds == null || request.PhotoIds.Count == 0)
             return Ok(Array.Empty<ProcessingStatusDto>());
 
-        var guids = photoIds
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var guids = request.PhotoIds
             .Select(s => Guid.TryParse(s, out var g) ? (Guid?)g : null)
             .Where(g => g.HasValue)
             .Select(g => g!.Value)
             .Distinct()
-            .Take(200) // sanity cap; SPA batches above that should be very rare
+            .Take(200) // sanity cap; SPA chunks at 100 in practice
             .ToList();
 
         if (guids.Count == 0) return Ok(Array.Empty<ProcessingStatusDto>());
@@ -994,4 +995,14 @@ public class UploadCompleteResponse
 {
     public string PhotoId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Body for <c>POST /api/photos/batch-status</c>. Used instead of a query
+/// string because real-world batches (~456 GUIDs in the field) bust the
+/// ~2KB URL ceiling.
+/// </summary>
+public class BatchStatusRequest
+{
+    public List<string> PhotoIds { get; set; } = new();
 }
