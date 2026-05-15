@@ -56,7 +56,7 @@ describe('PhotoService — SAS upload flow', () => {
       blobPath: 'blobs/photo-1',
       expiresAt: new Date().toISOString()
     };
-    ticketReq.flush([ticket]);
+    ticketReq.flush({ tickets: [ticket], alreadyComplete: [] });
 
     // Step 2: PUT to SAS URL
     const putReq = httpMock.expectOne(ticket.uploadUrl);
@@ -103,12 +103,15 @@ describe('PhotoService — SAS upload flow', () => {
     service.uploadPhoto('a', file).subscribe({ next: e => events.push(e), complete: () => (completed = true) });
 
     const ticketReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/albums/a/upload-tickets`);
-    ticketReq.flush([{
-      photoId: 'photo-err',
-      uploadUrl: 'https://storage.example.com/p?sig=xyz',
-      blobPath: 'p',
-      expiresAt: new Date().toISOString()
-    }]);
+    ticketReq.flush({
+      tickets: [{
+        photoId: 'photo-err',
+        uploadUrl: 'https://storage.example.com/p?sig=xyz',
+        blobPath: 'p',
+        expiresAt: new Date().toISOString()
+      }],
+      alreadyComplete: []
+    });
 
     const putReq = httpMock.expectOne('https://storage.example.com/p?sig=xyz');
     putReq.flush('forbidden', { status: 403, statusText: 'Forbidden' });
@@ -132,6 +135,35 @@ describe('PhotoService — SAS upload flow', () => {
 
     const last = events[events.length - 1];
     expect(last.phase).toBe('error');
+  });
+
+  it('emits queued (no PUT) when the server reports the file as already complete', () => {
+    const file = makeFile();
+    const events: UploadProgress[] = [];
+    let completed = false;
+    service.uploadPhoto('a', file).subscribe({
+      next: e => events.push(e),
+      complete: () => (completed = true)
+    });
+
+    const ticketReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/albums/a/upload-tickets`);
+    ticketReq.flush({
+      tickets: [],
+      alreadyComplete: [{ photoId: 'existing-photo-id', fileName: file.name }]
+    });
+
+    // No PUT to storage should be issued.
+    httpMock.expectNone(req => req.method === 'PUT');
+
+    expect(completed).toBeTrue();
+    const phases = events.map(e => e.phase);
+    expect(phases).toEqual(['ticket', 'queued']);
+    const queued = events[1];
+    if (queued.phase === 'queued') {
+      expect(queued.photoId).toBe('existing-photo-id');
+    } else {
+      fail('expected queued event');
+    }
   });
 
   it('isPresignedStorageUrl detects Azure Blob and S3/MinIO signature params', () => {

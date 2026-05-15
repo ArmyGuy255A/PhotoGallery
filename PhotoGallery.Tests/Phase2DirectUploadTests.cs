@@ -292,10 +292,12 @@ public class Phase2DirectUploadTests
     }
 
     [Fact]
-    public async Task UploadTickets_RejectsDuplicateFileName()
+    public async Task UploadTickets_DuplicateOfCompletedPhoto_ReturnsAlreadyComplete()
     {
         const string userId = "owner-1";
         var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId, "DSC_8000.JPG");
+        var existingId = await ctx.Photos.Where(p => p.AlbumId == albumId && p.FileName == "DSC_8000.JPG")
+            .Select(p => p.Id).FirstAsync();
 
         var result = await controller.CreateUploadTickets(
             albumId.ToString(),
@@ -304,17 +306,77 @@ public class Phase2DirectUploadTests
                 new() { FileName = "DSC_8000.JPG", ContentType = "image/jpeg", Size = 1000 }
             });
 
-        // Single-item batch where the only item is a duplicate → 409 Conflict
-        var conflict = Assert.IsType<ConflictObjectResult>(result.Result);
-        var body = Assert.IsType<UploadTicketsResponse>(conflict.Value);
+        // No more 409 — duplicate is short-circuited as AlreadyComplete (200 OK).
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
         Assert.Empty(body.Tickets);
-        var rej = Assert.Single(body.Rejected);
-        Assert.Equal("DSC_8000.JPG", rej.FileName);
-        Assert.Equal("duplicate", rej.Reason);
+        var done = Assert.Single(body.AlreadyComplete);
+        Assert.Equal("DSC_8000.JPG", done.FileName);
+        Assert.Equal(existingId.ToString(), done.PhotoId);
 
         // No second Photo row inserted for the duplicate filename.
         var rows = await ctx.Photos.Where(p => p.AlbumId == albumId && p.FileName == "DSC_8000.JPG").CountAsync();
         Assert.Equal(1, rows);
+
+        ctx.Dispose();
+    }
+
+    [Fact]
+    public async Task UploadTickets_DuplicateOfUploadingPhoto_RecyclesOrphanAndIssuesNewTicket()
+    {
+        const string userId = "owner-1";
+        var ctx = NewContext();
+        await ctx.Database.EnsureCreatedAsync();
+
+        var albumId = Guid.NewGuid();
+        ctx.Albums.Add(new Album
+        {
+            Id = albumId, Title = "A", OwnerId = userId, CreatedBy = userId, CreatedDate = DateTime.UtcNow
+        });
+        var orphanId = Guid.NewGuid();
+        ctx.Photos.Add(new Photo
+        {
+            Id = orphanId,
+            AlbumId = albumId,
+            FileName = "DSC_RETRY.JPG",
+            StorageKey = $"photogallery/{albumId}/{orphanId}/original.jpg",
+            UploadDate = DateTime.UtcNow,
+            UploadedBy = userId,
+            // Orphan from a prior failed ticket attempt.
+            ProcessingStatus = PhotoProcessingStatus.Uploading
+        });
+        ctx.ProcessingQueues.Add(new ProcessingQueue { PhotoId = orphanId, Status = ProcessingStatus.Pending });
+        await ctx.SaveChangesAsync();
+
+        var storage = new Mock<IStorageProvider>();
+        storage.Setup(s => s.GenerateWriteSasUrlAsync(It.IsAny<string>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync((string blob, TimeSpan _) => $"https://test.blob/{blob}?sas=stub");
+        var hub = new Mock<IHubContext<PhotoProgressHub>>();
+        var controller = BuildController(ctx, storage, hub, userId);
+
+        var result = await controller.CreateUploadTickets(
+            albumId.ToString(),
+            new List<UploadTicketRequest>
+            {
+                new() { FileName = "DSC_RETRY.JPG", ContentType = "image/jpeg", Size = 2048 }
+            });
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
+        Assert.Empty(body.AlreadyComplete);
+        var ticket = Assert.Single(body.Tickets);
+        Assert.Equal("DSC_RETRY.JPG", ticket.FileName);
+        // The new ticket's PhotoId is a brand-new row, not the orphan.
+        Assert.NotEqual(orphanId.ToString(), ticket.PhotoId);
+
+        // Orphan row is gone and exactly one row remains.
+        var rows = await ctx.Photos.Where(p => p.AlbumId == albumId).ToListAsync();
+        var only = Assert.Single(rows);
+        Assert.NotEqual(orphanId, only.Id);
+        Assert.Equal(PhotoProcessingStatus.Uploading, only.ProcessingStatus);
+        // Orphan's ProcessingQueue is gone, new row has its own.
+        var queues = await ctx.ProcessingQueues.Where(q => q.PhotoId == orphanId).CountAsync();
+        Assert.Equal(0, queues);
 
         ctx.Dispose();
     }
@@ -340,10 +402,9 @@ public class Phase2DirectUploadTests
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
         Assert.Equal(3, body.Tickets.Count);
-        Assert.Equal(2, body.Rejected.Count);
-        Assert.All(body.Rejected, r => Assert.Equal("duplicate", r.Reason));
-        Assert.Contains(body.Rejected, r => r.FileName == "dup-a.jpg");
-        Assert.Contains(body.Rejected, r => r.FileName == "dup-b.jpg");
+        Assert.Equal(2, body.AlreadyComplete.Count);
+        Assert.Contains(body.AlreadyComplete, r => r.FileName == "dup-a.jpg");
+        Assert.Contains(body.AlreadyComplete, r => r.FileName == "dup-b.jpg");
         Assert.Contains(body.Tickets, t => t.FileName == "new-1.jpg");
         Assert.Contains(body.Tickets, t => t.FileName == "new-2.jpg");
         Assert.Contains(body.Tickets, t => t.FileName == "new-3.jpg");
@@ -361,24 +422,7 @@ public class Phase2DirectUploadTests
     }
 
     [Fact]
-    public async Task UploadTickets_SingleDuplicateReturns409()
-    {
-        const string userId = "owner-1";
-        var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId, "only.jpg");
-
-        var result = await controller.CreateUploadTickets(
-            albumId.ToString(),
-            new List<UploadTicketRequest>
-            {
-                new() { FileName = "only.jpg", ContentType = "image/jpeg", Size = 1000 }
-            });
-
-        Assert.IsType<ConflictObjectResult>(result.Result);
-        ctx.Dispose();
-    }
-
-    [Fact]
-    public async Task UploadTickets_DuplicateWithinSameBatch_RejectsSecondOccurrence()
+    public async Task UploadTickets_DuplicateWithinSameBatch_ReturnsAlreadyCompleteForSecondOccurrence()
     {
         const string userId = "owner-1";
         var (ctx, controller, albumId) = await SetupAlbumWithExistingPhotosAsync(userId);
@@ -393,8 +437,14 @@ public class Phase2DirectUploadTests
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var body = Assert.IsType<UploadTicketsResponse>(ok.Value);
-        Assert.Single(body.Tickets);
-        Assert.Single(body.Rejected);
+        // First occurrence creates the row + ticket; second occurrence is
+        // returned as AlreadyComplete pointing at the just-created row, so
+        // the SPA renders both rows as resolved (one uploads, one is skipped).
+        var ticket = Assert.Single(body.Tickets);
+        var done = Assert.Single(body.AlreadyComplete);
+        Assert.Equal("same.jpg", ticket.FileName);
+        Assert.Equal("same.jpg", done.FileName);
+        Assert.Equal(ticket.PhotoId, done.PhotoId);
         ctx.Dispose();
     }
 

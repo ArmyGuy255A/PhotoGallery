@@ -51,4 +51,22 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
             .ToListAsync();
         return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
     }
+    public async Task<Dictionary<string, ExistingPhotoSummary>> GetExistingPhotoSummariesByNameAsync(Guid albumId)
+    {
+        // Pull just the columns we need and project to the public record
+        // struct. OrdinalIgnoreCase mirrors GetExistingFileNamesAsync so both
+        // upload paths agree on what counts as a duplicate, regardless of the
+        // database collation. Last-write-wins on case-only collisions, which
+        // matches the behavior of the unique filtered index in
+        // UniquePhotoFileNamePerAlbum (case-insensitive collation in
+        // SqlServer; this client-side dedup keeps Sqlite consistent).
+        var rows = await _dbSet
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => new { p.FileName, p.Id, p.ProcessingStatus })
+            .ToListAsync();
+        var map = new Dictionary<string, ExistingPhotoSummary>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in rows)
+            map[r.FileName] = new ExistingPhotoSummary(r.Id, r.ProcessingStatus);
+        return map;
+    }
 }

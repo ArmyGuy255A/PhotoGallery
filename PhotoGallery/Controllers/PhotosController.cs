@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
 using PhotoGallery.Hubs;
@@ -124,16 +125,18 @@ public class PhotosController : ControllerBase
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
-        // Pull the existing filename set for this album in one query, then
-        // do the duplicate check in memory per request item. Includes rows
-        // in Uploading state on purpose: two concurrent tabs uploading the
-        // same name should collide cleanly here rather than create two
-        // ghost rows. Abandoned Uploading rows are reclaimed by the
-        // OrphanedBlobReaperService after Storage:OrphanReapGraceMinutes.
-        var existingNames = await _photoRepository.GetExistingFileNamesAsync(albumGuid);
+        // Pull existing photos keyed by filename so we can:
+        //   * recycle orphan Uploading rows (the SPA hit /upload-tickets, never
+        //     completed, and the user is re-trying) — delete and reissue.
+        //   * short-circuit any other status into the new AlreadyComplete
+        //     channel so the SPA can mark the row done without re-uploading.
+        // The OrphanedBlobReaperService still sweeps the genuinely abandoned
+        // Uploading rows on its own schedule — this just makes re-attempts
+        // friction-free for the user.
+        var existing = await _photoRepository.GetExistingPhotoSummariesByNameAsync(albumGuid);
 
         var tickets = new List<UploadTicketResponse>(files.Count);
-        var rejected = new List<RejectedUploadTicket>();
+        var alreadyComplete = new List<CompletedUploadTicket>();
 
         foreach (var file in files)
         {
@@ -145,22 +148,47 @@ public class PhotosController : ControllerBase
                     $"{file.FileName}: size {file.Size} bytes is outside the allowed range " +
                     $"(0, {MaxUploadBytes}]");
 
-            if (existingNames.Contains(file.FileName))
+            if (existing.TryGetValue(file.FileName, out var hit))
             {
-                rejected.Add(new RejectedUploadTicket
+                if (hit.Status == PhotoProcessingStatus.Uploading)
                 {
-                    FileName = file.FileName,
-                    Reason = "duplicate"
-                });
-                _logger.LogInformation(
-                    "Rejected upload ticket for duplicate filename {FileName} in album {AlbumId} for user {UserId}",
-                    file.FileName, albumGuid, userId);
-                continue;
+                    // Orphan from a prior failed ticket. Drop it (plus the
+                    // pending ProcessingQueue row created alongside it) and
+                    // fall through to issue a fresh ticket. ProcessingQueueItems
+                    // aren't created until /upload-complete, so we don't need
+                    // to scrub those here.
+                    var orphan = await _photoRepository.GetByIdAsync(hit.Id);
+                    if (orphan != null)
+                    {
+                        var staleQueues = await _queueRepository.GetAllAsync();
+                        foreach (var q in staleQueues.Where(q => q.PhotoId == hit.Id))
+                            await _queueRepository.DeleteAsync(q);
+                        await _photoRepository.DeleteAsync(orphan);
+                        await _photoRepository.SaveChangesAsync();
+                        _logger.LogInformation(
+                            "Recycled orphan Uploading photo {PhotoId} for filename {FileName} in album {AlbumId}",
+                            hit.Id, file.FileName, albumGuid);
+                    }
+                    existing.Remove(file.FileName);
+                    // fall through to ticket-minting below
+                }
+                else
+                {
+                    // Photo already present (any status other than Uploading).
+                    // Tell the SPA it's already done so the row renders as
+                    // queued/processing/complete without re-uploading.
+                    alreadyComplete.Add(new CompletedUploadTicket
+                    {
+                        PhotoId = hit.Id.ToString(),
+                        FileName = file.FileName
+                    });
+                    _logger.LogInformation(
+                        "Upload ticket short-circuited as AlreadyComplete for {FileName} " +
+                        "(existing photo {PhotoId}, status {Status}) in album {AlbumId} for user {UserId}",
+                        file.FileName, hit.Id, hit.Status, albumGuid, userId);
+                    continue;
+                }
             }
-
-            // Reserve the name in-process so a single batch containing the
-            // same filename twice rejects the second occurrence.
-            existingNames.Add(file.FileName);
 
             var photoId = Guid.NewGuid();
             var blobPath = $"photogallery/{albumGuid}/{photoId}/original.jpg";
@@ -189,6 +217,16 @@ public class PhotosController : ControllerBase
             // reconcile against.
             await _photoRepository.SaveChangesAsync();
 
+            // Reserve the name in the in-memory map under a non-Uploading
+            // sentinel so a SECOND occurrence of the same filename later in
+            // this batch is handled by the AlreadyComplete branch above
+            // rather than the orphan-recycle branch (which would delete the
+            // row we just created!). The DB row itself still has
+            // ProcessingStatus.Uploading — this is purely an in-memory hint
+            // to disambiguate "I just made this in the current request"
+            // from "a previous request left this orphaned in storage".
+            existing[file.FileName] = new ExistingPhotoSummary(photoId, PhotoProcessingStatus.Pending);
+
             var uploadUrl = await _storageProvider.GenerateWriteSasUrlAsync(blobPath, UploadSasTtl);
             var expiresAt = DateTime.UtcNow.Add(UploadSasTtl);
 
@@ -206,19 +244,11 @@ public class PhotosController : ControllerBase
                 photoId, file.FileName, file.Size, albumGuid, userId);
         }
 
-        var envelope = new UploadTicketsResponse
+        return Ok(new UploadTicketsResponse
         {
             Tickets = tickets,
-            Rejected = rejected
-        };
-
-        // Single-item batch where the only item is a duplicate: surface
-        // 409 Conflict so the SPA can render a clear error without having
-        // to inspect the partial-success envelope.
-        if (files.Count == 1 && rejected.Count == 1 && tickets.Count == 0)
-            return Conflict(envelope);
-
-        return Ok(envelope);
+            AlreadyComplete = alreadyComplete
+        });
     }
 
     /// <summary>
@@ -675,6 +705,23 @@ public class PhotosController : ControllerBase
                 prefix, photoId);
         }
 
+        // Scrub child rows whose FK uses ON DELETE RESTRICT before deleting
+        // the Photo itself. EF Core's cascade-configured children (PhotoFiles,
+        // PhotoVersions, PhotoVersionUrls) clean themselves up via the parent
+        // delete. These four (Downloads, UserCartItems, ProcessingQueueItems,
+        // ProcessingQueues) need explicit removal or the SaveChangesAsync
+        // below crashes with FK constraint errors.
+        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
+        var dependents = await ctx.Downloads.Where(d => d.PhotoId == photoId).ToListAsync();
+        if (dependents.Count > 0) ctx.Downloads.RemoveRange(dependents);
+        var cartItems = await ctx.UserCartItems.Where(c => c.PhotoId == photoId).ToListAsync();
+        if (cartItems.Count > 0) ctx.UserCartItems.RemoveRange(cartItems);
+        var queueItems = await ctx.ProcessingQueueItems.Where(i => i.PhotoId == photoId).ToListAsync();
+        if (queueItems.Count > 0) ctx.ProcessingQueueItems.RemoveRange(queueItems);
+        var queues = await ctx.ProcessingQueues.Where(q => q.PhotoId == photoId).ToListAsync();
+        if (queues.Count > 0) ctx.ProcessingQueues.RemoveRange(queues);
+        await ctx.SaveChangesAsync();
+
         await _photoRepository.DeleteAsync(photo);
         await _photoRepository.SaveChangesAsync();
 
@@ -830,28 +877,31 @@ public class UploadTicketResponse
 }
 
 /// <summary>
-/// Per-file rejection entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
-/// Today the only <see cref="Reason"/> is <c>"duplicate"</c> (the album
-/// already contains a photo with the same file name). The shape is open
-/// so additional reasons can be added without breaking the SPA contract.
+/// Per-file "already complete" entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// Returned when a duplicate filename already exists in the album in any
+/// non-<see cref="PhotoProcessingStatus.Uploading"/> status. The SPA treats
+/// each entry as a synthetic queued/complete row and skips the PUT + complete
+/// dance — the photo is already there with the given Id.
 /// </summary>
-public class RejectedUploadTicket
+public class CompletedUploadTicket
 {
+    public string PhotoId { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
-    public string Reason { get; set; } = string.Empty;
 }
 
 /// <summary>
 /// Envelope returned by <c>POST /api/photos/albums/{id}/upload-tickets</c>.
-/// A batch can produce a mix of <see cref="Tickets"/> (filenames that were
-/// new in the album) and <see cref="Rejected"/> (filenames already in use).
-/// A batch of size 1 whose only item is a duplicate is returned as
-/// HTTP 409 Conflict using this same envelope.
+/// Always 200 OK. <see cref="Tickets"/> covers files the SPA should upload
+/// directly to storage; <see cref="AlreadyComplete"/> covers duplicate
+/// filenames whose existing row is already at or past <c>Pending</c> — the
+/// SPA can render them as done immediately. Orphan rows in
+/// <see cref="PhotoProcessingStatus.Uploading"/> are silently recycled and
+/// show up as fresh entries in <see cref="Tickets"/>.
 /// </summary>
 public class UploadTicketsResponse
 {
     public List<UploadTicketResponse> Tickets { get; set; } = new();
-    public List<RejectedUploadTicket> Rejected { get; set; } = new();
+    public List<CompletedUploadTicket> AlreadyComplete { get; set; } = new();
 }
 
 /// <summary>

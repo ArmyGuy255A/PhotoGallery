@@ -85,50 +85,27 @@ interface UploadFile {
               <div class="flex-grow-1">
                 <small class="d-block mb-1 filename" data-testid="upload-item-filename">{{ item.file.name }}</small>
 
-                <!-- Dual Progress Bar -->
-                <div class="progress-container">
-                  <!-- Background: Upload progress (blue) -->
-                  <div class="progress progress-upload">
-                    <div
-                      class="progress-bar progress-bar-upload"
-                      [style.width.%]="item.uploadProgress"
-                      role="progressbar">
-                    </div>
-                  </div>
-                  <!-- Overlay: Processing progress (green) -->
-                  <div class="progress progress-processing">
-                    <div
-                      class="progress-bar progress-bar-processing"
-                      [style.width.%]="item.processingProgress"
-                      role="progressbar">
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Per-quality bars (one row per quality). Shown only once we
-                     have a photoId AND processing has started (any quality
-                     percent observed). Real-time-driven by PhotoProgressService. -->
-                <div *ngIf="item.status === 'processing' || item.status === 'complete'" class="quality-bars" data-testid="upload-item-quality-bars">
-                  <div *ngFor="let q of qualities" class="quality-bar-row" [attr.data-quality]="q">
-                    <small class="quality-label">{{ q }}</small>
-                    <div class="progress quality-progress">
-                      <div
-                        class="progress-bar quality-progress-bar"
-                        [style.width.%]="item.perQuality[q] || 0"
-                        role="progressbar"
-                        [attr.aria-valuenow]="item.perQuality[q] || 0"
-                        aria-valuemin="0"
-                        aria-valuemax="100">
-                      </div>
-                    </div>
-                    <small class="quality-percent">{{ item.perQuality[q] || 0 }}%</small>
+                <!-- Single progress bar: blue while uploading, yellow while
+                     processing. Width drives off uploadProgress during the
+                     upload phase, then processingProgress (aggregate of all
+                     SignalR per-quality updates) once the server is working
+                     on it. -->
+                <div class="progress single-progress">
+                  <div
+                    class="progress-bar"
+                    [class.progress-bar-upload]="item.status === 'uploading' || item.status === 'pending'"
+                    [class.progress-bar-processing]="item.status === 'processing'"
+                    [class.progress-bar-complete]="item.status === 'complete'"
+                    [class.progress-bar-error]="item.status === 'error'"
+                    [style.width.%]="getDisplayProgress(item)"
+                    role="progressbar">
                   </div>
                 </div>
 
                 <!-- Status text -->
                 <small class="status-text" data-testid="upload-item-status">
-                  <span *ngIf="item.status === 'uploading'">📤 Uploading...</span>
-                  <span *ngIf="item.status === 'processing'">🔄 Processing: {{ item.processingProgress }}%</span>
+                  <span *ngIf="item.status === 'uploading'">📤 Uploading {{ item.uploadProgress }}%</span>
+                  <span *ngIf="item.status === 'processing'">🔄 Processing {{ item.processingProgress }}%</span>
                   <span *ngIf="item.status === 'complete'">✅ Complete</span>
                   <span *ngIf="item.status === 'error'">❌ Error</span>
                 </small>
@@ -300,32 +277,18 @@ interface UploadFile {
       color: #999;
     }
 
-    /* Progress bars */
-    .progress-container {
-      position: relative;
-      margin: 6px 0;
-    }
-
-    .progress {
-      height: 24px;
+    /* Single progress bar (replaces the old dual-overlay scheme). */
+    .single-progress {
+      height: 18px;
       background: #e9ecef;
       border-radius: 4px;
       overflow: hidden;
-      position: absolute;
-      width: 100%;
-      top: 0;
-    }
-
-    .progress-upload {
-      z-index: 1;
-    }
-
-    .progress-processing {
-      z-index: 2;
+      margin: 6px 0;
     }
 
     .progress-bar {
-      transition: width 0.3s ease;
+      height: 100%;
+      transition: width 0.3s ease, background-color 0.3s ease;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -336,11 +299,19 @@ interface UploadFile {
     }
 
     .progress-bar-upload {
-      background: linear-gradient(90deg, #0d6efd, #0d6efd);
+      background: #0d6efd; /* blue */
     }
 
     .progress-bar-processing {
-      background: linear-gradient(90deg, rgba(40, 167, 69, 0.8), rgba(40, 167, 69, 0.8));
+      background: #f39c12; /* yellow / amber */
+    }
+
+    .progress-bar-complete {
+      background: #27ae60; /* green */
+    }
+
+    .progress-bar-error {
+      background: #e74c3c; /* red */
     }
 
     .filename {
@@ -478,42 +449,8 @@ interface UploadFile {
       color: #0c5460;
     }
 
-    /* Per-quality bars (Phase 3 SignalR) */
-    .quality-bars {
-      margin-top: 30px; /* clear the absolutely-positioned upload progress */
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .quality-bar-row {
-      display: grid;
-      grid-template-columns: 80px 1fr 40px;
-      gap: 8px;
-      align-items: center;
-    }
-    .quality-label {
-      text-transform: capitalize;
-      color: #555;
-      font-size: 0.75rem;
-    }
-    .quality-progress {
-      position: relative;
-      height: 8px;
-      background: #e9ecef;
-      border-radius: 2px;
-      overflow: hidden;
-      width: 100%;
-    }
-    .quality-progress-bar {
-      height: 100%;
-      background: #27ae60;
-      transition: width 0.3s ease;
-    }
-    .quality-percent {
-      color: #666;
-      font-size: 0.7rem;
-      text-align: right;
-    }
+    /* Quality-bars block removed — single-progress UI consumes the
+       SignalR per-quality data via getDisplayProgress(). */
     .retry-btn {
       margin-top: 4px;
       padding: 2px 10px;
@@ -576,6 +513,28 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
    * URL on the upload item swaps in the existing 📷 placeholder so the user
    * never sees the browser's broken-image icon.
    */
+  /**
+   * Drives the width of the single progress bar. Maps the row's lifecycle
+   * onto one 0-100 number:
+   *   - pending/uploading → upload byte progress
+   *   - processing        → aggregated SignalR per-quality progress
+   *   - complete          → 100
+   *   - error             → 100 (so the red bar fills the track)
+   */
+  getDisplayProgress(item: UploadFile): number {
+    switch (item.status) {
+      case 'complete':
+      case 'error':
+        return 100;
+      case 'processing':
+        return item.processingProgress || 0;
+      case 'uploading':
+      case 'pending':
+      default:
+        return item.uploadProgress || 0;
+    }
+  }
+
   onThumbnailError(item: UploadFile): void {
     console.warn('Upload thumbnail failed to load for', item.file.name, item.photoId);
     item.thumbnailUrl = undefined;

@@ -102,6 +102,14 @@ public class CartControllerTests
                 .Select(p => p.FileName).ToListAsync();
             return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
         }
+        public async Task<Dictionary<string, ExistingPhotoSummary>> GetExistingPhotoSummariesByNameAsync(Guid albumId)
+        {
+            var rows = await _context.Photos.Where(p => p.AlbumId == albumId)
+                .Select(p => new { p.FileName, p.Id, p.ProcessingStatus }).ToListAsync();
+            var map = new Dictionary<string, ExistingPhotoSummary>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in rows) map[r.FileName] = new ExistingPhotoSummary(r.Id, r.ProcessingStatus);
+            return map;
+        }
     }
 
     private class TestRepository<T> : Repository<T> where T : class

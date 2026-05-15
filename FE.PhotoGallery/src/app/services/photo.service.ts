@@ -65,6 +65,29 @@ export interface UploadTicketResponse {
   expiresAt: string;
 }
 
+/**
+ * Per-file "already complete" entry from <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+ * Returned when a duplicate filename already exists in the album in any
+ * non-Uploading status. The SPA renders the row as queued/done immediately
+ * and skips the PUT + upload-complete dance.
+ */
+export interface CompletedUploadTicket {
+  photoId: string;
+  fileName: string;
+}
+
+/**
+ * Envelope returned by <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+ * Always 200 OK. <see cref="tickets"/> are files the SPA should upload;
+ * <see cref="alreadyComplete"/> are duplicate filenames whose existing row
+ * is already past <c>Uploading</c> — skip the upload and surface the row as
+ * done.
+ */
+export interface UploadTicketsResponse {
+  tickets: UploadTicketResponse[];
+  alreadyComplete: CompletedUploadTicket[];
+}
+
 export interface UploadCompleteResponse {
   photoId: string;
   status: string;
@@ -132,10 +155,17 @@ export class PhotoService {
       //    the HTTP POST so a failure becomes an error event downstream.
       of<UploadProgress>({ phase: 'ticket' }),
       this.http
-        .post<UploadTicketResponse[]>(`${this.API_URL}/albums/${albumId}/upload-tickets`, [ticketReq])
+        .post<UploadTicketsResponse>(`${this.API_URL}/albums/${albumId}/upload-tickets`, [ticketReq])
         .pipe(
-          switchMap(tickets => {
-            const ticket = tickets?.[0];
+          switchMap(response => {
+            const done = response?.alreadyComplete?.[0];
+            if (done) {
+              // Duplicate of an existing non-Uploading photo. Surface a
+              // synthetic "queued" event so the SPA marks the row as done
+              // without doing the PUT + complete dance.
+              return of<UploadProgress>({ phase: 'queued', photoId: done.photoId });
+            }
+            const ticket = response?.tickets?.[0];
             if (!ticket) {
               return throwError(() => new Error('Upload ticket response was empty'));
             }
@@ -276,7 +306,11 @@ export class PhotoService {
   private errorMessage(err: unknown): string {
     if (!err) return 'Upload failed';
     if (typeof err === 'string') return err;
-    const e = err as { error?: { message?: string }; message?: string; statusText?: string };
+    const e = err as {
+      error?: { message?: string; code?: string };
+      message?: string;
+      statusText?: string;
+    };
     return e.error?.message || e.message || e.statusText || 'Upload failed';
   }
 
