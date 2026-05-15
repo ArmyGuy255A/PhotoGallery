@@ -89,6 +89,13 @@ interface Album {
               Both states are suppressed in the empty-state path (handled
               below by loader.isEmpty()) so the "No photos yet" copy still wins.
             -->
+            <!--
+              Initial-load spinner only. The previous "Loaded X of Y…" banner
+              was removed in favour of auto-trickle pagination: every page
+              loads in the background until all photos are present, so the
+              banner had nothing useful to convey. Empty-state copy still
+              wins via loader.isEmpty().
+            -->
             <div class="photos-loading-initial"
                  *ngIf="loader.isLoading() && !loader.hasLoadedFirstPage()"
                  data-testid="album-photos-loading-initial"
@@ -96,15 +103,6 @@ interface Album {
                  aria-live="polite">
               <div class="photos-spinner" aria-hidden="true"></div>
               <p class="photos-loading-copy">Loading photos…</p>
-            </div>
-
-            <div class="photos-loading-banner"
-                 *ngIf="loader.hasLoadedFirstPage() && (photos.length < loader.totalCount() || loader.isLoading()) && !loader.isEmpty()"
-                 data-testid="album-photos-loading-banner"
-                 role="status"
-                 aria-live="polite">
-              <span class="photos-spinner photos-spinner-inline" aria-hidden="true"></span>
-              <span>Loaded {{ photos.length }} of {{ loader.totalCount() }} photos…</span>
             </div>
 
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
@@ -339,20 +337,6 @@ interface Album {
     .photos-loading-copy {
       margin: 0;
       font-size: 16px;
-      font-weight: 500;
-    }
-
-    .photos-loading-banner {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 14px;
-      margin: 0 0 16px 0;
-      background: #eef4ff;
-      border: 1px solid #c9dcff;
-      border-radius: 999px;
-      color: #1d4ed8;
-      font-size: 14px;
       font-weight: 500;
     }
 
@@ -871,7 +855,11 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       // album's photos to the previous one's cache.
       this.loader.reset();
       this.loadAlbum();
-      this.loader.loadNext();
+      // Auto-trickle every page so the carousel + grid never get stuck
+      // waiting for the sentinel — all photos eventually appear without
+      // user scrolling. Sentinel + IntersectionObserver still attached
+      // as a redundant trigger; auto-load is additive.
+      this.loader.enableAutoLoad();
       this.loadAccessCodes();
       this.startPhotoStatusPolling();
     });

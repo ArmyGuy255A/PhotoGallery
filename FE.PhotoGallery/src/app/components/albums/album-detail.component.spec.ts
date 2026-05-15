@@ -407,7 +407,9 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Phase 7: initial spinner + "Loaded X of Y" banner during pagination.
+  // Phase 7: initial spinner only. The "Loaded X of Y" banner was removed
+  // in favour of auto-trickle pagination — every page loads in the
+  // background so the banner had nothing useful to convey.
   // -----------------------------------------------------------------------
   function loadingInitial() {
     return fixture.debugElement.query(By.css('[data-testid="album-photos-loading-initial"]'));
@@ -423,14 +425,14 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
     const initial = loadingInitial();
     expect(initial).withContext('initial spinner present during first fetch').toBeTruthy();
     expect(initial.nativeElement.textContent).toContain('Loading photos…');
-    expect(loadingBanner()).withContext('banner absent before first page lands').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element removed from template').toBeFalsy();
 
     // Stop the in-flight request so afterEach.verify() stays clean.
     httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
       .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
   });
 
-  it('shows the "Loaded X of Y photos…" banner after first page, while more remain', () => {
+  it('never renders the "Loaded X of Y photos…" banner (auto-trickle replaces it)', () => {
     component.loader.loadNext();
     httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
       .flush({
@@ -442,13 +444,10 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
     fixture.detectChanges();
 
     expect(loadingInitial()).withContext('initial spinner gone after first page').toBeFalsy();
-
-    const banner = loadingBanner();
-    expect(banner).withContext('pagination banner present while more remain').toBeTruthy();
-    expect(banner.nativeElement.textContent).toContain('Loaded 20 of 264 photos');
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
   });
 
-  it('hides both spinner and banner once photos.length === totalCount', () => {
+  it('hides the spinner once photos.length === totalCount', () => {
     component.loader.loadNext();
     httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
       .flush({
@@ -458,10 +457,10 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
     fixture.detectChanges();
 
     expect(loadingInitial()).withContext('initial spinner gone').toBeFalsy();
-    expect(loadingBanner()).withContext('banner gone when all photos loaded').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
   });
 
-  it('keeps the empty-state copy and suppresses both spinner+banner when the album is empty', () => {
+  it('keeps the empty-state copy and suppresses the spinner when the album is empty', () => {
     component.loader.loadNext();
     httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
       .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
@@ -469,7 +468,7 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
 
     expect(emptyMessage()).withContext('empty-state still wins').toBeTruthy();
     expect(loadingInitial()).withContext('initial spinner hidden in empty state').toBeFalsy();
-    expect(loadingBanner()).withContext('banner hidden in empty state').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
   });
 });
 

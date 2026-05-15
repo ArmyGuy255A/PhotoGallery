@@ -140,6 +140,14 @@ export class PhotoPageLoader<T> {
           this.hasLoadedFirstPage.set(true);
           this.onPageLoaded?.(items);
           this.onLoadCompleted?.();
+
+          // Auto-trickle: schedule the next page so all photos eventually
+          // land without needing the user to scroll or open a carousel
+          // beyond the loaded range. Bounded by hasMore so the recursion
+          // terminates on the server's last page.
+          if (this.autoLoadEnabled && this.hasMore()) {
+            setTimeout(() => this.loadNext(), this.autoLoadDelayMs);
+          }
         },
         error: () => {
           // Surface the failure as "not loading any more" without flipping
@@ -179,4 +187,28 @@ export class PhotoPageLoader<T> {
     this.destroy$.next();
     this.destroy$.complete();
   }
+
+  /**
+   * Auto-trickle mode: after each successful page load the loader schedules
+   * the next <c>loadNext</c> call automatically until the server reports
+   * <c>hasMore=false</c>. The small inter-page delay keeps the API call rate
+   * reasonable while the user is also interacting with the grid, and
+   * spaces out the page renders so the browser doesn't paint a 500-image
+   * grid in a single tick.
+   *
+   * Components that previously relied on the IntersectionObserver-driven
+   * pagination still work — auto-load is additive. The "Loaded X of Y"
+   * banner becomes unnecessary because every photo eventually appears on
+   * its own; components are free to drop it.
+   */
+  enableAutoLoad(delayMs: number = 200): void {
+    this.autoLoadEnabled = true;
+    this.autoLoadDelayMs = delayMs;
+    if (!this.isLoading() && this.hasMore()) {
+      this.loadNext();
+    }
+  }
+
+  private autoLoadEnabled = false;
+  private autoLoadDelayMs = 200;
 }

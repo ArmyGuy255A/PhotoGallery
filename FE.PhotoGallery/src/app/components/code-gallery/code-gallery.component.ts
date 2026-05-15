@@ -133,15 +133,6 @@ interface CodeValidation {
           <p class="photos-loading-copy">Loading photos…</p>
         </div>
 
-        <div class="photos-loading-banner"
-             *ngIf="loader.hasLoadedFirstPage() && (photos.length < loader.totalCount() || loader.isLoading()) && !loader.isEmpty()"
-             data-testid="code-photos-loading-banner"
-             role="status"
-             aria-live="polite">
-          <span class="photos-spinner photos-spinner-inline" aria-hidden="true"></span>
-          <span>Loaded {{ photos.length }} of {{ loader.totalCount() }} photos…</span>
-        </div>
-
         <div *ngIf="loader.isEmpty()" class="empty-message" data-testid="code-empty-photos">
           <p>No photos in this album yet.</p>
         </div>
@@ -352,19 +343,6 @@ interface CodeValidation {
     .photos-loading-copy {
       margin: 0;
       font-size: 16px;
-      font-weight: 500;
-    }
-    .photos-loading-banner {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 14px;
-      margin: 0 0 16px 0;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 999px;
-      color: #fff;
-      font-size: 14px;
       font-weight: 500;
     }
     .photos-spinner {
@@ -985,7 +963,10 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private loadPhotos(): void {
     this.loader.reset();
-    this.loader.loadNext();
+    // Auto-trickle every page in the background so the carousel + grid
+    // never get stuck waiting for the sentinel. The IntersectionObserver
+    // is still attached as a redundant trigger.
+    this.loader.enableAutoLoad();
     queueMicrotask(() => this.observeSentinelIfPresent());
   }
 
