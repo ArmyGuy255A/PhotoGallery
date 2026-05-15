@@ -117,6 +117,31 @@ interface CodeValidation {
           {{ toastMessage }}
         </div>
 
+        <!--
+          Phase 7 loading states (mirror album-detail).
+          - Initial spinner: first page hasn't landed yet.
+          - Pagination banner: at least one page is in, more pending.
+          Both guarded by !loader.isEmpty() so the "No photos" copy still wins
+          for genuinely-empty albums.
+        -->
+        <div class="photos-loading-initial"
+             *ngIf="loader.isLoading() && !loader.hasLoadedFirstPage()"
+             data-testid="code-photos-loading-initial"
+             role="status"
+             aria-live="polite">
+          <div class="photos-spinner" aria-hidden="true"></div>
+          <p class="photos-loading-copy">Loading photos…</p>
+        </div>
+
+        <div class="photos-loading-banner"
+             *ngIf="loader.hasLoadedFirstPage() && (photos.length < loader.totalCount() || loader.isLoading()) && !loader.isEmpty()"
+             data-testid="code-photos-loading-banner"
+             role="status"
+             aria-live="polite">
+          <span class="photos-spinner photos-spinner-inline" aria-hidden="true"></span>
+          <span>Loaded {{ photos.length }} of {{ loader.totalCount() }} photos…</span>
+        </div>
+
         <div *ngIf="loader.isEmpty()" class="empty-message" data-testid="code-empty-photos">
           <p>No photos in this album yet.</p>
         </div>
@@ -312,6 +337,55 @@ interface CodeValidation {
       text-align: center;
       padding: 60px 20px;
       color: #666;
+    }
+
+    /* Phase 7: loading-state spinner + pagination banner. */
+    .photos-loading-initial {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 48px 20px;
+      color: #ddd;
+    }
+    .photos-loading-copy {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+    .photos-loading-banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      margin: 0 0 16px 0;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 999px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .photos-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid rgba(255, 255, 255, 0.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: code-photos-spinner-rotate 0.9s linear infinite;
+    }
+    .photos-spinner-inline {
+      width: 14px;
+      height: 14px;
+      border-width: 2px;
+      display: inline-block;
+    }
+    @keyframes code-photos-spinner-rotate {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .photos-spinner { animation-duration: 3s; }
     }
 
     .error h2 {

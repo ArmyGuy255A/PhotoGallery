@@ -60,6 +60,19 @@ export class PhotoPageLoader<T> {
   readonly totalCount = signal<number>(0);
 
   /**
+   * Flipped to true the first time <c>loadNext</c> completes successfully
+   * (including an empty envelope). Stays false on errors, so a transient
+   * failure doesn't force the component into the "X of Y" banner without
+   * a real page result behind it.
+   *
+   * Drives the album header UX:
+   *   - false + isLoading → centred "Loading photos…" spinner
+   *   - true  + photos<total → inline "Loaded X of Y photos…" banner
+   *   - true  + photos===total → grid only
+   */
+  readonly hasLoadedFirstPage = signal<boolean>(false);
+
+  /**
    * Optional hook fired after every successful page load (after
    * <c>onPageLoaded</c>). Components use this to nudge an
    * IntersectionObserver into re-evaluating the sentinel — once the new page
@@ -124,6 +137,7 @@ export class PhotoPageLoader<T> {
           this.totalCount.set(envelope?.totalCount ?? this.photos().length);
           this.hasMore.set(!!envelope?.hasMore);
           this.isLoading.set(false);
+          this.hasLoadedFirstPage.set(true);
           this.onPageLoaded?.(items);
           this.onLoadCompleted?.();
         },
@@ -147,6 +161,7 @@ export class PhotoPageLoader<T> {
     this.hasMore.set(true);
     this.totalCount.set(0);
     this.isLoading.set(false);
+    this.hasLoadedFirstPage.set(false);
   }
 
   /**

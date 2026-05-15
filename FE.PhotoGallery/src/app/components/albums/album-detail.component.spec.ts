@@ -405,6 +405,72 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
     expect(req.request.urlWithParams).toContain('pageSize=20');
     req.flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
   });
+
+  // -----------------------------------------------------------------------
+  // Phase 7: initial spinner + "Loaded X of Y" banner during pagination.
+  // -----------------------------------------------------------------------
+  function loadingInitial() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-loading-initial"]'));
+  }
+  function loadingBanner() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-loading-banner"]'));
+  }
+
+  it('shows the centred "Loading photos…" spinner before the first page lands', () => {
+    component.loader.loadNext();
+    fixture.detectChanges();
+
+    const initial = loadingInitial();
+    expect(initial).withContext('initial spinner present during first fetch').toBeTruthy();
+    expect(initial.nativeElement.textContent).toContain('Loading photos…');
+    expect(loadingBanner()).withContext('banner absent before first page lands').toBeFalsy();
+
+    // Stop the in-flight request so afterEach.verify() stays clean.
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+  });
+
+  it('shows the "Loaded X of Y photos…" banner after first page, while more remain', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({
+        items: Array.from({ length: 20 }, (_, i) => ({
+          id: 'p' + i, fileName: 'p' + i + '.jpg', uploadDate: '2026-01-01T00:00:00Z'
+        })),
+        page: 1, pageSize: 20, totalCount: 264, hasMore: true
+      });
+    fixture.detectChanges();
+
+    expect(loadingInitial()).withContext('initial spinner gone after first page').toBeFalsy();
+
+    const banner = loadingBanner();
+    expect(banner).withContext('pagination banner present while more remain').toBeTruthy();
+    expect(banner.nativeElement.textContent).toContain('Loaded 20 of 264 photos');
+  });
+
+  it('hides both spinner and banner once photos.length === totalCount', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({
+        items: [{ id: 'p1', fileName: 'p1.jpg', uploadDate: '2026-01-01T00:00:00Z' }],
+        page: 1, pageSize: 20, totalCount: 1, hasMore: false
+      });
+    fixture.detectChanges();
+
+    expect(loadingInitial()).withContext('initial spinner gone').toBeFalsy();
+    expect(loadingBanner()).withContext('banner gone when all photos loaded').toBeFalsy();
+  });
+
+  it('keeps the empty-state copy and suppresses both spinner+banner when the album is empty', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+    fixture.detectChanges();
+
+    expect(emptyMessage()).withContext('empty-state still wins').toBeTruthy();
+    expect(loadingInitial()).withContext('initial spinner hidden in empty state').toBeFalsy();
+    expect(loadingBanner()).withContext('banner hidden in empty state').toBeFalsy();
+  });
 });
 
 

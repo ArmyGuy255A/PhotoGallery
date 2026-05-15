@@ -136,6 +136,62 @@ describe('PhotoPageLoader', () => {
     expect(loader.isLoading()).toBeFalse();
     expect(loader.hasMore()).toBeTrue();
     expect(loader.photos().length).toBe(0);
+    expect(loader.hasLoadedFirstPage()).toBeFalse();
+  });
+
+  // -----------------------------------------------------------------------
+  // hasLoadedFirstPage — drives the album-header "Loading photos…" vs
+  // "Loaded X of Y photos…" UX switch.
+  // -----------------------------------------------------------------------
+  describe('hasLoadedFirstPage', () => {
+    it('is false before any load', () => {
+      const loader = new PhotoPageLoader<FakePhoto>(() => of(envelope([], 1, 20, 0, false)));
+      expect(loader.hasLoadedFirstPage()).toBeFalse();
+    });
+
+    it('flips to true after the first envelope arrives (even when empty)', () => {
+      const loader = new PhotoPageLoader<FakePhoto>(() => of(envelope([], 1, 20, 0, false)));
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeTrue();
+    });
+
+    it('flips to true after a populated first page', () => {
+      const loader = new PhotoPageLoader<FakePhoto>(
+        () => of(envelope([{ id: 'p1', fileName: 'a.jpg' }], 1, 20, 1, false))
+      );
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeTrue();
+    });
+
+    it('stays true across subsequent page loads', () => {
+      const responses: PhotoPage<FakePhoto>[] = [
+        envelope([{ id: 'p1', fileName: 'a.jpg' }], 1, 1, 2, true),
+        envelope([{ id: 'p2', fileName: 'b.jpg' }], 2, 1, 2, false)
+      ];
+      const loader = new PhotoPageLoader<FakePhoto>((page) => of(responses[page - 1]), 1);
+
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeTrue();
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeTrue();
+    });
+
+    it('stays false on a request that errors', () => {
+      const loader = new PhotoPageLoader<FakePhoto>(() => throwError(() => new Error('boom')));
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeFalse();
+    });
+
+    it('reset clears it so a re-used loader shows the initial spinner again', () => {
+      const loader = new PhotoPageLoader<FakePhoto>(
+        () => of(envelope([{ id: 'p1', fileName: 'a.jpg' }], 1, 20, 1, false))
+      );
+      loader.loadNext();
+      expect(loader.hasLoadedFirstPage()).toBeTrue();
+
+      loader.reset();
+      expect(loader.hasLoadedFirstPage()).toBeFalse();
+    });
   });
 
   it('removeWhere strips matching photos from the cached list', () => {

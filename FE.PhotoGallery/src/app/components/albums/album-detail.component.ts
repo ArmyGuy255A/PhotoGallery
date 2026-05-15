@@ -78,6 +78,35 @@ interface Album {
               <h2 data-testid="photos-count">Photos ({{ photos.length }})</h2>
             </div>
 
+            <!--
+              Loading-state region (Phase 7).
+              - Initial spinner: loader is fetching the first page; no envelope
+                has come back yet. Centred CoreUI-style spinner + copy so the
+                user knows photos are pending.
+              - Pagination banner: at least one page has landed, but more
+                photos are still being fetched or aren't yet on screen. Shows
+                "Loaded X of Y photos…" with a tiny inline spinner.
+              Both states are suppressed in the empty-state path (handled
+              below by loader.isEmpty()) so the "No photos yet" copy still wins.
+            -->
+            <div class="photos-loading-initial"
+                 *ngIf="loader.isLoading() && !loader.hasLoadedFirstPage()"
+                 data-testid="album-photos-loading-initial"
+                 role="status"
+                 aria-live="polite">
+              <div class="photos-spinner" aria-hidden="true"></div>
+              <p class="photos-loading-copy">Loading photos…</p>
+            </div>
+
+            <div class="photos-loading-banner"
+                 *ngIf="loader.hasLoadedFirstPage() && (photos.length < loader.totalCount() || loader.isLoading()) && !loader.isEmpty()"
+                 data-testid="album-photos-loading-banner"
+                 role="status"
+                 aria-live="polite">
+              <span class="photos-spinner photos-spinner-inline" aria-hidden="true"></span>
+              <span>Loaded {{ photos.length }} of {{ loader.totalCount() }} photos…</span>
+            </div>
+
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
               <div *ngFor="let photo of photos; let i = index" class="photo-card" data-testid="photo-card"
                    [attr.data-photo-id]="photo.id"
@@ -294,6 +323,62 @@ interface Album {
       text-align: center;
       padding: 40px;
       color: #666;
+    }
+
+    /* Phase 7 loading states (initial spinner + pagination banner) */
+    .photos-loading-initial {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 48px 20px;
+      color: #555;
+    }
+
+    .photos-loading-copy {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .photos-loading-banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      margin: 0 0 16px 0;
+      background: #eef4ff;
+      border: 1px solid #c9dcff;
+      border-radius: 999px;
+      color: #1d4ed8;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .photos-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid #d0d0d0;
+      border-top-color: #0066cc;
+      border-radius: 50%;
+      animation: photos-spinner-rotate 0.9s linear infinite;
+    }
+
+    .photos-spinner-inline {
+      width: 14px;
+      height: 14px;
+      border-width: 2px;
+      border-top-color: #1d4ed8;
+      display: inline-block;
+    }
+
+    @keyframes photos-spinner-rotate {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .photos-spinner { animation-duration: 3s; }
     }
 
     .album-info {
