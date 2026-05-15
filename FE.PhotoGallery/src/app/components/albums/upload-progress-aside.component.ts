@@ -38,25 +38,27 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
           data-testid="upload-aside-dismiss">×</button>
       </header>
       <div class="aside-body" *ngIf="summary() as s">
-        <div class="row" *ngIf="s.photoStatus.uploading > 0">
+        <!-- 3 headline totals: Uploaded (finished hitting storage),
+             Processing (still being worked on), Complete (all variants done). -->
+        <div class="totals-grid">
+          <div class="total-item">
+            <span class="total-label">Uploaded</span>
+            <span class="total-value" data-testid="upload-aside-uploaded">{{ uploadedCount(s) }}</span>
+          </div>
+          <div class="total-item">
+            <span class="total-label">Processing</span>
+            <span class="total-value" data-testid="upload-aside-processing">{{ processingTotal(s) }}</span>
+          </div>
+          <div class="total-item">
+            <span class="total-label">Complete</span>
+            <span class="total-value" data-testid="upload-aside-complete">{{ s.photoStatus.complete }}</span>
+          </div>
+        </div>
+
+        <div class="row row-uploading" *ngIf="s.photoStatus.uploading > 0">
           <span class="dot dot-uploading"></span>
-          <span class="label">Uploading</span>
+          <span class="label">In-flight uploads</span>
           <span class="count" data-testid="upload-aside-uploading">{{ s.photoStatus.uploading }}</span>
-        </div>
-        <div class="row" *ngIf="s.photoStatus.pending > 0">
-          <span class="dot dot-pending"></span>
-          <span class="label">Queued</span>
-          <span class="count" data-testid="upload-aside-pending">{{ s.photoStatus.pending }}</span>
-        </div>
-        <div class="row" *ngIf="s.photoStatus.processing > 0">
-          <span class="dot dot-processing"></span>
-          <span class="label">Processing</span>
-          <span class="count" data-testid="upload-aside-processing">{{ s.photoStatus.processing }}</span>
-        </div>
-        <div class="row row-summary" *ngIf="s.photoStatus.complete > 0">
-          <span class="dot dot-complete"></span>
-          <span class="label">Complete</span>
-          <span class="count" data-testid="upload-aside-complete">{{ s.photoStatus.complete }} / {{ s.totalPhotos }}</span>
         </div>
         <div class="row row-error" *ngIf="s.photoStatus.failed > 0">
           <span class="dot dot-failed"></span>
@@ -65,20 +67,13 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
         </div>
 
         <div class="quality-section" *ngIf="hasQualityWork(s)">
-          <small class="section-title">Variants pending</small>
+          <small class="section-title">Variants (priority order)</small>
           <div class="quality-row" *ngIf="anyQualityWork(s.byQuality.thumbnail)">
             <span class="quality-label">Thumbnail</span>
             <span class="quality-bar">
               <span class="quality-fill" [style.width.%]="pctComplete(s.byQuality.thumbnail)"></span>
             </span>
             <span class="quality-count">{{ s.byQuality.thumbnail.complete }} / {{ qualityTotal(s.byQuality.thumbnail) }}</span>
-          </div>
-          <div class="quality-row" *ngIf="anyQualityWork(s.byQuality.low)">
-            <span class="quality-label">Low</span>
-            <span class="quality-bar">
-              <span class="quality-fill" [style.width.%]="pctComplete(s.byQuality.low)"></span>
-            </span>
-            <span class="quality-count">{{ s.byQuality.low.complete }} / {{ qualityTotal(s.byQuality.low) }}</span>
           </div>
           <div class="quality-row" *ngIf="anyQualityWork(s.byQuality.medium)">
             <span class="quality-label">Medium</span>
@@ -94,9 +89,28 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
             </span>
             <span class="quality-count">{{ s.byQuality.high.complete }} / {{ qualityTotal(s.byQuality.high) }}</span>
           </div>
+          <div class="quality-row" *ngIf="anyQualityWork(s.byQuality.low)">
+            <span class="quality-label">Low</span>
+            <span class="quality-bar">
+              <span class="quality-fill" [style.width.%]="pctComplete(s.byQuality.low)"></span>
+            </span>
+            <span class="quality-count">{{ s.byQuality.low.complete }} / {{ qualityTotal(s.byQuality.low) }}</span>
+          </div>
         </div>
       </div>
     </aside>
+
+    <!-- Re-show pill when the user dismissed the aside but work is still
+         in flight. One click brings the full panel back. -->
+    <button
+      *ngIf="visible() && dismissed()"
+      type="button"
+      class="upload-reshow-pill"
+      data-testid="upload-progress-reshow"
+      (click)="dismissed.set(false)"
+      [attr.aria-label]="'Show album activity (' + activeCount(summary()) + ' in progress)'">
+      📥 Album activity ({{ activeCount(summary()) }})
+    </button>
   `,
   styles: [`
     .upload-aside {
@@ -132,7 +146,50 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
       padding: 0 4px;
     }
     .aside-dismiss:hover { color: #111827; }
-    .aside-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+    .aside-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+
+    .totals-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #f0f1f3;
+    }
+    .total-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .total-label {
+      color: #6b7280;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .total-value {
+      color: #111827;
+      font-size: 22px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .upload-reshow-pill {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1500;
+      padding: 10px 16px;
+      background: #1f2937;
+      color: #ffffff;
+      border: none;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    }
+    .upload-reshow-pill:hover { background: #111827; }
     .row {
       display: grid;
       grid-template-columns: 14px 1fr auto;
@@ -146,8 +203,15 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
     .dot {
       width: 10px;
       height: 10px;
+      min-width: 10px;
+      max-width: 10px;
+      min-height: 10px;
+      max-height: 10px;
       border-radius: 50%;
       display: inline-block;
+      align-self: center;
+      justify-self: start;
+      flex-shrink: 0;
     }
     .dot-uploading { background: #0d6efd; }
     .dot-pending { background: #9ca3af; }
@@ -220,14 +284,37 @@ export class UploadProgressAsideComponent implements OnInit, OnDestroy {
         const inflight =
           s.photoStatus.uploading + s.photoStatus.pending + s.photoStatus.processing;
         const failedRecent = s.photoStatus.failed > 0;
-        this.visible.set(inflight > 0 || failedRecent);
-        if (!this.visible()) this.dismissed.set(false); // re-arm for next batch
+        const wasVisible = this.visible();
+        const nowVisible = inflight > 0 || failedRecent;
+        this.visible.set(nowVisible);
+        // Re-arm the dismiss state ONLY on the visible -> hidden edge so a
+        // user-dismissed panel comes back automatically the next time work
+        // shows up, but doesn't bounce back during an active batch.
+        if (wasVisible && !nowVisible) {
+          this.dismissed.set(false);
+        }
       });
   }
 
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  /** Photos that finished hitting storage (total minus still-uploading). */
+  uploadedCount(s: AlbumProcessingSummary): number {
+    return Math.max(0, s.totalPhotos - s.photoStatus.uploading);
+  }
+
+  /** Photos still being worked on by the server (pending + processing). */
+  processingTotal(s: AlbumProcessingSummary): number {
+    return s.photoStatus.pending + s.photoStatus.processing;
+  }
+
+  /** Aggregate active count for the re-show pill. */
+  activeCount(s: AlbumProcessingSummary | null): number {
+    if (!s) return 0;
+    return s.photoStatus.uploading + s.photoStatus.pending + s.photoStatus.processing + s.photoStatus.failed;
   }
 
   anyQualityWork(q: { pending: number; processing: number; complete: number; failed: number }): boolean {

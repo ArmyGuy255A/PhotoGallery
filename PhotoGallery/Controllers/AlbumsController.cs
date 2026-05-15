@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
@@ -195,6 +196,29 @@ public class AlbumsController : ControllerBase
         // Admins can manage any album — see UpdateAlbum comment.
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
+
+        // EF Core cascades Album -> Photo + AccessCode automatically, but the
+        // photo-level RESTRICT-FK children (Downloads, UserCartItems,
+        // ProcessingQueueItems, ProcessingQueues) block the cascade with
+        // FK constraint errors. Scrub them in album scope first, mirroring
+        // what DeletePhoto does for a single photo.
+        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
+        var photoIds = await ctx.Photos
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => p.Id)
+            .ToListAsync();
+        if (photoIds.Count > 0)
+        {
+            var downloads = await ctx.Downloads.Where(d => photoIds.Contains(d.PhotoId)).ToListAsync();
+            if (downloads.Count > 0) ctx.Downloads.RemoveRange(downloads);
+            var cartItems = await ctx.UserCartItems.Where(c => photoIds.Contains(c.PhotoId)).ToListAsync();
+            if (cartItems.Count > 0) ctx.UserCartItems.RemoveRange(cartItems);
+            var queueItems = await ctx.ProcessingQueueItems.Where(i => photoIds.Contains(i.PhotoId)).ToListAsync();
+            if (queueItems.Count > 0) ctx.ProcessingQueueItems.RemoveRange(queueItems);
+            var queues = await ctx.ProcessingQueues.Where(q => photoIds.Contains(q.PhotoId)).ToListAsync();
+            if (queues.Count > 0) ctx.ProcessingQueues.RemoveRange(queues);
+            await ctx.SaveChangesAsync();
+        }
 
         await _albumRepository.DeleteAsync(album);
         await _albumRepository.SaveChangesAsync();
