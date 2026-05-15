@@ -365,6 +365,21 @@ export class PhotoService {
   }
 
   /**
+   * Defense-in-depth batch status fetch. ONE HTTP call regardless of how
+   * many photos are passed, so a periodic 10s timer is safe regardless of
+   * batch size. Used by photo-upload.component as the fallback path when
+   * SignalR progress events drop. The per-file <see cref="getPhotoProcessingStatus"/>
+   * may NOT be used on a timer.
+   */
+  getBatchProcessingStatus(photoIds: string[]): Observable<ProcessingStatus[]> {
+    if (!photoIds.length) return of([] as ProcessingStatus[]);
+    const qs = encodeURIComponent(photoIds.join(','));
+    return this.http.get<ProcessingStatus[]>(
+      `${this.API_URL}/batch-status?photoIds=${qs}`
+    );
+  }
+
+  /**
    * Get thumbnail URL for a photo.
    *
    * Browser-initiated image requests (``<img src=...>``) cannot carry the

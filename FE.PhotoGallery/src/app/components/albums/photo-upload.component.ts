@@ -2,7 +2,7 @@ import { Component, Input, Output, EventEmitter, OnInit, OnDestroy, effect, inje
 import { CommonModule } from '@angular/common';
 import { PhotoService, UploadProgress } from '../../services/photo.service';
 import { PhotoProgressService, QUALITIES, Quality } from '../../services/photo-progress.service';
-import { Subject } from 'rxjs';
+import { Subject, interval, takeUntil } from 'rxjs';
 
 interface UploadFile {
   file: File;
@@ -511,13 +511,56 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     // Open the SignalR hub once for the lifetime of the upload view. Errors
-    // are non-fatal: progress updates simply won't arrive (the upload row
-    // will sit at "Processing" until the user navigates away). The polling
-    // fallback was DoS'ing the browser at scale, so we explicitly do not
-    // restore it.
+    // are non-fatal: the batch-status fallback below will catch up the UI
+    // even if events never arrive. The per-file polling fallback was DoS'ing
+    // the browser at scale, so we explicitly do not restore it.
     this.progressService.start().catch(err =>
       console.error('[PhotoUpload] PhotoProgressService failed to start', err)
     );
+
+    // Defense-in-depth: every 10s, if any file is still in 'processing'
+    // status, batch-poll the BE for the current state of all in-flight
+    // photos. ONE HTTP call regardless of batch size, so this scales
+    // cleanly to hundreds of files. SignalR remains the primary push
+    // channel; this only catches dropped events / silent connection loss.
+    interval(10000).pipe(takeUntil(this.destroy$)).subscribe(() => {
+      this.runBatchStatusFallback();
+    });
+  }
+
+  private runBatchStatusFallback(): void {
+    const inflight = this.uploadFiles.filter(
+      f => f.status === 'processing' && !!f.photoId
+    );
+    if (inflight.length === 0) return;
+    const ids = inflight.map(f => f.photoId!) as string[];
+    this.photoService.getBatchProcessingStatus(ids).subscribe({
+      next: snapshots => {
+        for (const snap of snapshots) {
+          const item = this.uploadFiles.find(f => f.photoId === snap.photoId);
+          if (!item || item.status !== 'processing') continue;
+          // Map server's 4-version progress (25/50/75/100) onto the
+          // single bar. Only goes up — never regresses.
+          const pct = snap.percentComplete ?? 0;
+          if (pct > (item.processingProgress ?? 0)) {
+            item.processingProgress = pct;
+          }
+          if (snap.status === 'Complete' && item.status === 'processing') {
+            item.status = 'complete';
+            item.processingProgress = 100;
+            item.thumbnailUrl = this.photoService.getThumbnailUrl(snap.photoId);
+            item.completeTime = new Date();
+            this.processingCount = Math.max(0, this.processingCount - 1);
+            this.successCount++;
+            item.effectRef?.destroy();
+            item.effectRef = undefined;
+            this.checkUploadComplete();
+            setTimeout(() => this.removeCompletedItem(item), 5000);
+          }
+        }
+      },
+      error: err => console.warn('[PhotoUpload] batch-status poll failed', err)
+    });
   }
 
   ngOnDestroy() {

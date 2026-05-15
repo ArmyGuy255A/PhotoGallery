@@ -648,6 +648,81 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
+    /// Batch processing-status fetch — one round-trip for many photos.
+    /// Used as a defense-in-depth fallback by the SPA when SignalR events
+    /// for newly-uploaded photos are dropped (silent network failure,
+    /// auth-on-handshake hiccup, FE effect race). One HTTP call regardless
+    /// of how many files are in flight, so it is safe to call on a small
+    /// timer (10s in the SPA today) without re-introducing the per-file
+    /// polling DoS we removed in PR #131.
+    /// </summary>
+    [Authorize]
+    [HttpGet("batch-status")]
+    public async Task<ActionResult<IEnumerable<ProcessingStatusDto>>> GetBatchProcessingStatus(
+        [FromQuery] string photoIds)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(photoIds))
+            return Ok(Array.Empty<ProcessingStatusDto>());
+
+        var guids = photoIds
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => Guid.TryParse(s, out var g) ? (Guid?)g : null)
+            .Where(g => g.HasValue)
+            .Select(g => g!.Value)
+            .Distinct()
+            .Take(200) // sanity cap; SPA batches above that should be very rare
+            .ToList();
+
+        if (guids.Count == 0) return Ok(Array.Empty<ProcessingStatusDto>());
+
+        var isAdmin = User.IsInRole("Admin");
+        var allPhotos = await _photoRepository.GetAllAsync();
+        var photos = allPhotos.Where(p => guids.Contains(p.Id)).ToList();
+        // Filter to photos the caller can see (own uploads or admin).
+        var visible = photos.Where(p => isAdmin || p.UploadedBy == userId).ToList();
+        var visibleIds = visible.Select(p => p.Id).ToHashSet();
+
+        var allItems = await _queueItemRepository.GetAllAsync();
+        var byPhoto = allItems
+            .Where(i => visibleIds.Contains(i.PhotoId))
+            .GroupBy(i => i.PhotoId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var result = new List<ProcessingStatusDto>(visible.Count);
+        foreach (var photo in visible)
+        {
+            byPhoto.TryGetValue(photo.Id, out var items);
+            items ??= new List<ProcessingQueueItem>();
+            var completed = items.Where(i => i.Status == ProcessingStatus.Complete).ToList();
+            var hasThumbnail = completed.Any(i => i.Quality == QualityType.Thumbnail);
+            var hasLow = completed.Any(i => i.Quality == QualityType.Low);
+            var hasMedium = completed.Any(i => i.Quality == QualityType.Medium);
+            var hasHigh = completed.Any(i => i.Quality == QualityType.High);
+            var completedVersions = (hasThumbnail ? 1 : 0) + (hasLow ? 1 : 0) + (hasMedium ? 1 : 0) + (hasHigh ? 1 : 0);
+            var status = completedVersions == 4 ? "Complete" : "Processing";
+            result.Add(new ProcessingStatusDto
+            {
+                PhotoId = photo.Id.ToString(),
+                Status = status,
+                CompletedVersions = completedVersions,
+                TotalVersions = 4,
+                PercentComplete = completedVersions * 25,
+                ProcessingStartedAt = photo.ProcessingStartedAt,
+                ProcessingCompletedAt = completedVersions == 4 ? DateTime.UtcNow : null,
+                HasThumbnail = hasThumbnail,
+                HasLow = hasLow,
+                HasMedium = hasMedium,
+                HasHigh = hasHigh
+            });
+        }
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Delete a single photo (owner or admin only).
     /// Removes every storage object under <c>photogallery/{albumId}/{photoId}/</c>
     /// (originals, every quality variant, watermarked variants) and then deletes
