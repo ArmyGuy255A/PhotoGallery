@@ -98,18 +98,22 @@ export interface UploadCompleteResponse {
  * upload. Components subscribe to a stream of these to drive the per-file
  * progress bar and final "queued for processing" state.
  *
- *   ticket     → /upload-tickets request in flight
- *   uploading  → PUT to storage in flight (bytesSent/bytesTotal tracks progress)
- *   completing → /upload-complete request in flight
- *   queued     → server accepted; processing has been scheduled
- *   error      → terminal failure at any step (message + optional photoId so
- *                the component can mark which row failed)
+ *   ticket           → /upload-tickets request in flight
+ *   uploading        → PUT to storage in flight (bytesSent/bytesTotal tracks progress)
+ *   completing       → /upload-complete request in flight
+ *   queued           → server accepted; processing has been scheduled
+ *   alreadyComplete  → duplicate filename; server returned the existing
+ *                      photoId, no PUT happened. UI should mark the row as
+ *                      "already in album, skipped" rather than success.
+ *   error            → terminal failure at any step (message + optional photoId so
+ *                      the component can mark which row failed)
  */
 export type UploadProgress =
   | { phase: 'ticket' }
   | { phase: 'uploading'; photoId: string; bytesSent: number; bytesTotal: number }
   | { phase: 'completing'; photoId: string }
   | { phase: 'queued'; photoId: string }
+  | { phase: 'alreadyComplete'; photoId: string; fileName: string }
   | { phase: 'error'; photoId?: string; message: string };
 
 /** Max in-flight direct-to-blob PUTs for a batched <see cref="PhotoService.uploadPhotos"/> call. */
@@ -161,9 +165,13 @@ export class PhotoService {
             const done = response?.alreadyComplete?.[0];
             if (done) {
               // Duplicate of an existing non-Uploading photo. Surface a
-              // synthetic "queued" event so the SPA marks the row as done
-              // without doing the PUT + complete dance.
-              return of<UploadProgress>({ phase: 'queued', photoId: done.photoId });
+              // distinct alreadyComplete event so the UI can render the row
+              // as "skipped, already in album" rather than a fresh success.
+              return of<UploadProgress>({
+                phase: 'alreadyComplete',
+                photoId: done.photoId,
+                fileName: done.fileName
+              });
             }
             const ticket = response?.tickets?.[0];
             if (!ticket) {

@@ -137,7 +137,7 @@ describe('PhotoService — SAS upload flow', () => {
     expect(last.phase).toBe('error');
   });
 
-  it('emits queued (no PUT) when the server reports the file as already complete', () => {
+  it('emits alreadyComplete (no PUT) when the server reports the file as already complete', () => {
     const file = makeFile();
     const events: UploadProgress[] = [];
     let completed = false;
@@ -157,12 +157,13 @@ describe('PhotoService — SAS upload flow', () => {
 
     expect(completed).toBeTrue();
     const phases = events.map(e => e.phase);
-    expect(phases).toEqual(['ticket', 'queued']);
-    const queued = events[1];
-    if (queued.phase === 'queued') {
-      expect(queued.photoId).toBe('existing-photo-id');
+    expect(phases).toEqual(['ticket', 'alreadyComplete']);
+    const done = events[1];
+    if (done.phase === 'alreadyComplete') {
+      expect(done.photoId).toBe('existing-photo-id');
+      expect(done.fileName).toBe(file.name);
     } else {
-      fail('expected queued event');
+      fail('expected alreadyComplete event');
     }
   });
 

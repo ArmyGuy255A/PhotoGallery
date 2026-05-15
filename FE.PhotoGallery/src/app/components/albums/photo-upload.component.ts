@@ -9,7 +9,7 @@ interface UploadFile {
   uploadProgress: number;
   processingProgress: number;
   perQuality: Partial<Record<Quality, number>>;
-  status: 'pending' | 'uploading' | 'complete' | 'error' | 'processing';
+  status: 'pending' | 'uploading' | 'complete' | 'error' | 'processing' | 'duplicate';
   errorMessage?: string;
   photoId?: string;
   processingStatus?: string;
@@ -86,16 +86,17 @@ interface UploadFile {
                 <small class="d-block mb-1 filename" data-testid="upload-item-filename">{{ item.file.name }}</small>
 
                 <!-- Single progress bar: blue while uploading, yellow while
-                     processing. Width drives off uploadProgress during the
-                     upload phase, then processingProgress (aggregate of all
-                     SignalR per-quality updates) once the server is working
-                     on it. -->
+                     processing, orange "skipped" stripe for already-in-album
+                     duplicates. Width drives off uploadProgress during the
+                     upload phase, processingProgress once the server is
+                     working on it, and 100 for terminal states. -->
                 <div class="progress single-progress">
                   <div
                     class="progress-bar"
                     [class.progress-bar-upload]="item.status === 'uploading' || item.status === 'pending'"
                     [class.progress-bar-processing]="item.status === 'processing'"
                     [class.progress-bar-complete]="item.status === 'complete'"
+                    [class.progress-bar-duplicate]="item.status === 'duplicate'"
                     [class.progress-bar-error]="item.status === 'error'"
                     [style.width.%]="getDisplayProgress(item)"
                     role="progressbar">
@@ -107,6 +108,7 @@ interface UploadFile {
                   <span *ngIf="item.status === 'uploading'">📤 Uploading {{ item.uploadProgress }}%</span>
                   <span *ngIf="item.status === 'processing'">🔄 Processing {{ item.processingProgress }}%</span>
                   <span *ngIf="item.status === 'complete'">✅ Complete</span>
+                  <span *ngIf="item.status === 'duplicate'">⚠️ Already in album — skipped</span>
                   <span *ngIf="item.status === 'error'">❌ Error</span>
                 </small>
                 <small *ngIf="item.errorMessage" class="error-message">{{ item.errorMessage }}</small>
@@ -127,6 +129,13 @@ interface UploadFile {
                   class="badge bg-success"
                 >
                   ✓
+                </span>
+                <span
+                  *ngIf="item.status === 'duplicate'"
+                  class="badge bg-warning"
+                  title="Already in album"
+                >
+                  ⚠
                 </span>
                 <span
                   *ngIf="item.status === 'error'"
@@ -154,6 +163,7 @@ interface UploadFile {
           <p class="mb-0">
             {{ successCount }} photo(s) uploaded successfully,
             {{ processingCount }} processing,
+            {{ duplicateCount }} already in album,
             {{ errorCount }} failed
           </p>
         </div>
@@ -312,6 +322,16 @@ interface UploadFile {
 
     .progress-bar-error {
       background: #e74c3c; /* red */
+    }
+
+    .progress-bar-duplicate {
+      background: repeating-linear-gradient(
+        45deg,
+        #f39c12,
+        #f39c12 8px,
+        #e67e22 8px,
+        #e67e22 16px
+      );
     }
 
     .filename {
@@ -481,6 +501,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
   successCount = 0;
   processingCount = 0;
   errorCount = 0;
+  duplicateCount = 0;
   private destroy$ = new Subject<void>();
 
   private readonly progressService = inject(PhotoProgressService);
@@ -524,6 +545,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
   getDisplayProgress(item: UploadFile): number {
     switch (item.status) {
       case 'complete':
+      case 'duplicate':
       case 'error':
         return 100;
       case 'processing':
@@ -593,6 +615,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
     this.successCount = 0;
     this.processingCount = 0;
     this.errorCount = 0;
+    this.duplicateCount = 0;
 
     // Upload files in parallel
     this.uploadFiles.forEach((item, index) => {
@@ -634,8 +657,34 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
             this.processingCount++;
             if (item.photoId) {
               this.subscribeToProcessing(item);
+              // Nudge the SignalR hub to push the current snapshot for this
+              // photoId. If processing finished in the brief window between
+              // /upload-complete and our effect() subscription, the snapshot
+              // tells us so without us needing to wait for an event that
+              // already fired. One round-trip per upload — no polling DoS.
+              this.progressService.requestStatus(item.photoId).catch(err =>
+                console.warn('[PhotoUpload] RequestStatus failed', item.photoId, err)
+              );
             }
             this.checkUploadComplete();
+            break;
+          case 'alreadyComplete':
+            // Duplicate of an existing non-Uploading photo. Don't run the
+            // processing subscription — there's nothing in flight for this
+            // file in this session. Mark the row with a distinct status so
+            // the user sees "skipped, already in album" instead of mistaking
+            // it for a fresh upload.
+            item.photoId = progress.photoId;
+            item.uploadProgress = 100;
+            item.processingProgress = 100;
+            item.status = 'duplicate';
+            this.duplicateCount++;
+            // Surface the existing thumbnail since the photo really is there.
+            item.thumbnailUrl = this.photoService.getThumbnailUrl(progress.photoId);
+            item.completeTime = new Date();
+            this.checkUploadComplete();
+            // Auto-clear like the success path.
+            setTimeout(() => this.removeCompletedItem(item), 5000);
             break;
           case 'error':
             console.log(`[PhotoUpload] Upload error for ${item.file.name}:`, progress.message);
@@ -761,7 +810,7 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
 
   private checkUploadComplete() {
     const allDone = this.uploadFiles.every(
-      f => f.status === 'complete' || f.status === 'error'
+      f => f.status === 'complete' || f.status === 'error' || f.status === 'duplicate'
     );
     if (allDone && this.uploadFiles.length > 0) {
       this.isUploading = false;
@@ -769,7 +818,8 @@ export class PhotoUploadComponent implements OnInit, OnDestroy {
       this.uploadComplete.emit({
         successCount: this.successCount,
         processingCount: this.processingCount,
-        errorCount: this.errorCount
+        errorCount: this.errorCount,
+        duplicateCount: this.duplicateCount
       });
     }
   }
