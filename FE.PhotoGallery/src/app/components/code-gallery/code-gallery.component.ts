@@ -185,6 +185,30 @@ interface CodeValidation {
         </div>
 
         <!--
+          Pagination banner. The loader auto-trickles pages in the background,
+          but on a large album that means the visitor sees the first 20 photos
+          and no further indication that more are arriving. This banner reads
+          the loader's totalCount + photos.length to show "Showing X of Y
+          photos…" with a tiny spinner while more pages are pending. Hidden
+          once everything is loaded.
+        -->
+        <div *ngIf="photos.length > 0 && loader.totalCount() > photos.length"
+             class="photos-loading-more"
+             data-testid="code-photos-loading-more"
+             role="status"
+             aria-live="polite">
+          <div class="photos-spinner small" aria-hidden="true"></div>
+          <p class="photos-loading-copy">
+            Loading photos… <strong>{{ photos.length | number }}</strong> of
+            <strong>{{ loader.totalCount() | number }}</strong>
+          </p>
+          <div class="photos-progress-track" aria-hidden="true">
+            <div class="photos-progress-fill"
+                 [style.width.%]="(photos.length / loader.totalCount()) * 100"></div>
+          </div>
+        </div>
+
+        <!--
           Phase 6 sentinel: an empty div the IntersectionObserver watches.
           When it scrolls into view the next page is fetched. Rendered only
           while the server still has more to send.

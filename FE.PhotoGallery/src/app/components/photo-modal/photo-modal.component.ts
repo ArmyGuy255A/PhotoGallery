@@ -155,6 +155,14 @@ export interface ModalPhoto {
       line-height: 1;
       padding: 0;
       font-family: Arial, sans-serif;
+      /* Same fix as .close-btn: without an explicit z-index, the absolute
+         image inside .modal-content paints on top of the nav buttons on
+         mobile (no separate stacking context). Lift the nav buttons above
+         the content so they remain tappable. */
+      z-index: 2;
+      /* Disable iOS double-tap-to-zoom on the buttons so a fast tap fires
+         the click handler immediately. */
+      touch-action: manipulation;
     }
 
     .nav-btn:hover {
@@ -164,6 +172,19 @@ export interface ModalPhoto {
 
     .nav-prev { left: 24px; }
     .nav-next { right: 24px; }
+
+    /* Mobile: smaller, hug the edge, ensure they sit on top of the image. */
+    @media (max-width: 640px) {
+      .nav-btn {
+        width: 44px;
+        height: 44px;
+        font-size: 26px;
+        border-width: 1.5px;
+        background: rgba(0, 0, 0, 0.65);
+      }
+      .nav-prev { left: 8px; }
+      .nav-next { right: 8px; }
+    }
 
     .modal-content {
       max-width: 90vw;
