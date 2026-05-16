@@ -48,7 +48,7 @@ public record PhotoExport
 public record AccessCodeExport
 {
     public Guid Id { get; init; }
-    public Guid AlbumId { get; init; }
+    public Guid? AlbumId { get; init; }
     public string Code { get; init; } = string.Empty;
     public DateTime CreatedDate { get; init; }
     public DateTime? ExpirationDate { get; init; }

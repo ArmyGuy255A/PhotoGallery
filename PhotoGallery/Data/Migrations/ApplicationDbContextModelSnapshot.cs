@@ -155,7 +155,7 @@ namespace PhotoGallery.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("AlbumId")
+                    b.Property<Guid?>("AlbumId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Code")
@@ -171,8 +171,18 @@ namespace PhotoGallery.Data.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DeletedAlbumTitle")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("ExpirationDate")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("INTEGER");
 
                     b.Property<byte[]>("RowVersion")
                         .IsRequired()
@@ -190,6 +200,8 @@ namespace PhotoGallery.Data.Migrations
                     b.HasIndex("CreatedBy");
 
                     b.HasIndex("ExpirationDate");
+
+                    b.HasIndex("IsDeleted");
 
                     b.ToTable("AccessCodes");
                 });
@@ -856,8 +868,7 @@ namespace PhotoGallery.Data.Migrations
                     b.HasOne("PhotoGallery.Models.Album", "Album")
                         .WithMany("AccessCodes")
                         .HasForeignKey("AlbumId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("PhotoGallery.Models.User", null)
                         .WithMany("AccessCodes")

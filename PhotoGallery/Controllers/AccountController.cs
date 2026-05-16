@@ -44,8 +44,11 @@ public class AccountController : ControllerBase
             .OrderByDescending(s => s.SavedAt)
             .ToListAsync();
 
+        // Filter out soft-deleted access codes (album was deleted by its
+        // owner). Saved entries stay in the table for analytics but they
+        // disappear from the user's Shared Albums view.
         var result = rows
-            .Where(s => s.AccessCode != null)
+            .Where(s => s.AccessCode != null && !s.AccessCode.IsDeleted)
             .Select(ToDto)
             .ToList();
 

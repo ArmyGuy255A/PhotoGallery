@@ -29,10 +29,21 @@ public class AccessCodeConfiguration : IEntityTypeConfiguration<AccessCode>
         builder.Property(ac => ac.RowVersion)
             .HasDefaultValue(new byte[] { 1 });
 
+        // Snapshot of the album title at the moment of soft-delete. 200 char
+        // ceiling matches AlbumConfiguration's title max length.
+        builder.Property(ac => ac.DeletedAlbumTitle)
+            .HasMaxLength(200);
+
+        // Album FK is nullable + SetNull on delete: when an admin / owner
+        // hard-deletes an album, the SetNull cascade lets the AccessCode row
+        // survive for analytics. The AlbumsController.DeleteAlbum path also
+        // sets IsDeleted / DeletedAt / DeletedAlbumTitle on each code in
+        // the same transaction so the analytics view still has a name.
         builder.HasOne(ac => ac.Album)
             .WithMany(a => a.AccessCodes)
             .HasForeignKey(ac => ac.AlbumId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.SetNull)
+            .IsRequired(false);
 
         builder.HasMany(ac => ac.UserAccessLogs)
             .WithOne(ual => ual.AccessCode)
@@ -42,5 +53,6 @@ public class AccessCodeConfiguration : IEntityTypeConfiguration<AccessCode>
         builder.HasIndex(ac => ac.Code).IsUnique();
         builder.HasIndex(ac => ac.AlbumId);
         builder.HasIndex(ac => ac.ExpirationDate);
+        builder.HasIndex(ac => ac.IsDeleted);
     }
 }

@@ -37,7 +37,7 @@ public class AlbumConfiguration : IEntityTypeConfiguration<Album>
         builder.HasMany(a => a.AccessCodes)
             .WithOne(ac => ac.Album)
             .HasForeignKey(ac => ac.AlbumId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(a => a.OwnerId);
         builder.HasIndex(a => a.CreatedDate);

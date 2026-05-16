@@ -12,6 +12,7 @@ on:
 permissions:
   contents: write       # create tag, push tag, create release
   pull-requests: read   # read labels of the merging PR
+  actions: write        # dispatch release.yml after creating the release
 
 jobs:
   cut-release:
@@ -129,3 +130,24 @@ jobs:
             --target "${{ github.sha }}" \
             --title "$TAG" \
             --generate-notes
+
+      # Dispatch the Release Deploy workflow explicitly. The `release:
+      # published` event from `gh release create` above does NOT cascade
+      # to other workflows because the GITHUB_TOKEN that created the
+      # release is restricted from triggering downstream events (GitHub
+      # security policy — prevents action-runaway loops). The
+      # workflow_dispatch API call below DOES fire downstream as long as
+      # the job grants `actions: write` (see permissions block above).
+      # See DESIGN_DECISIONS.md D016 → "GITHUB_TOKEN cascade limitation".
+      - name: Dispatch Release Deploy
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching Release Deploy for $TAG"
+          gh workflow run "Release Deploy" \
+            --repo "${{ github.repository }}" \
+            --ref "main" \
+            -f tag="$TAG"
