@@ -144,11 +144,10 @@ resource "azurerm_container_app" "this" {
       }
     }
 
-    # KEDA MSSQL custom scaler — wake from zero and scale out the worker
-    # replica based on queue depth. Polls Azure SQL every ~30s; when the
-    # row count exceeds activation_value the app scales from 0 → 1, and
-    # the replica count grows proportionally to target_value. When the
-    # queue drains, scales back to 0 (idle cost ≈ $0).
+    # KEDA MSSQL custom scaler (deprecated path, see variables.tf). Kept
+    # as a dynamic block so existing callers that still pass it don't break,
+    # but the runtime authentication failure makes this a no-op for our
+    # AAD-only SQL server. New callers should use cpu_scale_rule below.
     dynamic "custom_scale_rule" {
       for_each = var.queue_depth_scale_rule != null ? [var.queue_depth_scale_rule] : []
       content {
@@ -162,6 +161,22 @@ resource "azurerm_container_app" "this" {
         authentication {
           secret_name       = custom_scale_rule.value.secret_name
           trigger_parameter = "connectionString"
+        }
+      }
+    }
+
+    # CPU-based scaler — scales up once average container CPU across
+    # current replicas exceeds the configured percentage. Uses ACA's
+    # built-in metrics (no DB credentials needed), so it works fine
+    # against our AAD-only SQL server.
+    dynamic "custom_scale_rule" {
+      for_each = var.cpu_scale_rule != null ? [var.cpu_scale_rule] : []
+      content {
+        name             = "cpu-utilization"
+        custom_rule_type = "cpu"
+        metadata = {
+          type  = "Utilization"
+          value = var.cpu_scale_rule.utilization
         }
       }
     }

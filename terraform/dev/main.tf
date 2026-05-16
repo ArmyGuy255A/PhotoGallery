@@ -332,13 +332,12 @@ module "compute" {
     "Storage__Provider"  = "AzureBlob"
     "Database__Provider" = "SqlServer"
 
-    # Workers run on the API replica too — this is the steady-state
-    # MVP path before the worker app spins up. Keep parallelism low so
-    # image processing doesn't starve the request thread pool on the
-    # 0.5 vCPU box. Admin can hot-reload these via /admin/settings.
-    "WorkersEnabled"                        = "true"
-    "PhotoProcessing__WorkerParallelism"    = "2"
-    "PhotoProcessing__LeaseBatchMultiplier" = "2"
+    # The API container app is ingress-only. It NEVER processes photos —
+    # ImageSharp + the 0.5 vCPU container starves Kestrel's request thread
+    # pool, killing response times (observed in trial). The sibling worker
+    # app (min=1) owns 100% of background processing. The API still serves
+    # /upload-tickets, /upload-complete, /api/photos/... etc.
+    "WorkersEnabled" = "false"
 
     # Storage (non-secret config) — AccountUrl is also seeded in KV for
     # rotatability, but resolving it from a plain env var is the default
@@ -423,14 +422,31 @@ module "compute_worker" {
 
   ingress_enabled                = false
   http_scale_concurrent_requests = 0
-  min_replicas                   = 0
-  max_replicas                   = 3
 
-  queue_depth_scale_rule = {
-    secret_name      = "connectionstrings-defaultconnection"
-    query            = "SELECT COUNT(*) FROM ProcessingQueueItems WHERE Status IN (0, 1)"
-    target_value     = "10"
-    activation_value = "10"
+  # min=1 keeps one worker always on so newly-uploaded photos start
+  # processing within seconds (no 30-60s cold start). max=3 caps blast
+  # radius. Steady-state cost is one ~0.25 vCPU-seconds-billed replica
+  # idling between ticks; bulk uploads scale to 3 within ~30s of the CPU
+  # crossing the threshold below.
+  min_replicas = 1
+  max_replicas = 3
+
+  # Bump worker to 1.0 vCPU / 2 GiB. The previous 0.5 vCPU / 1 GiB combo
+  # was hitting OOMKilled (exit 137) during bulk uploads — ImageSharp
+  # decoded high-quality variants in parallel and blew past 1 GiB. The
+  # next supported ACA Consumption pair is 1.0/2Gi, which gives us
+  # ~2x the working set without changing pricing tier.
+  cpu    = 1.0
+  memory = "2Gi"
+
+  # CPU-based autoscaler. KEDA's MSSQL scaler can't authenticate against
+  # our AAD-only SQL server (it runs outside the container, so no UAMI
+  # access), and was failing with "Login failed for user ''". CPU
+  # utilization is a clean proxy here because workers are entirely
+  # CPU-bound during image resize. 70% triggers a scale-out before the
+  # current replica is saturated.
+  cpu_scale_rule = {
+    utilization = "70"
   }
 
   container_registry_server = module.acr.login_server
@@ -456,10 +472,11 @@ module "compute_worker" {
     "Storage__AzureBlob__ContainerName" = module.storage.container_name
     "KeyVault__Uri"                     = module.keyvault.vault_uri
     "WorkersEnabled"                    = "true"
-    # Workers here have a whole 0.5 vCPU to themselves (no request thread
-    # pool to share with) so we can crank parallelism higher than the API
-    # replica. Admin can hot-reload via /admin/settings.
-    "PhotoProcessing__WorkerParallelism"    = "4"
+    # Drop parallelism to 2: at 4 we were OOMing on 1Gi, and even with
+    # 2Gi headroom keeping parallelism conservative lets us bursty-grow
+    # replicas (1→2→3) when CPU rises rather than packing more threads
+    # into a single replica.
+    "PhotoProcessing__WorkerParallelism"    = "2"
     "PhotoProcessing__LeaseBatchMultiplier" = "4"
   }
 

@@ -101,24 +101,38 @@ variable "http_scale_concurrent_requests" {
 
 variable "queue_depth_scale_rule" {
   description = <<-EOT
-    Optional KEDA MSSQL custom scaler driven by a queue-depth query.
-    When non-null, a custom_scale_rule named "queue-depth" is added that
-    polls Azure SQL on the supplied connection-string secret and scales the
-    replica count based on the row count returned by `query`.
+    DEPRECATED — KEDA's MSSQL scaler runs outside the container and cannot use
+    AAD/UAMI auth, so against our AAD-only SQL server it fails with
+    "Login failed for user ''" and the worker never scales up. Replaced by
+    `cpu_scale_rule` below, which uses ACA's container-level metrics and
+    needs no DB credentials.
 
-    Typical worker shape:
-      {
-        secret_name      = "connectionstrings-defaultconnection"  # must exist in kv_secret_ids
-        query            = "SELECT COUNT(*) FROM ProcessingQueueItems WHERE Status IN (0,1)"
-        target_value     = "5"   # scale up so each replica handles ~5 pending rows
-        activation_value = "1"   # don't wake from 0 until at least 1 row pending
-      }
+    Left here for backwards compat and to document why we don't use it.
+    Pass `null` to skip (the default).
   EOT
   type = object({
     secret_name      = string
     query            = string
     target_value     = string
     activation_value = string
+  })
+  default = null
+}
+
+variable "cpu_scale_rule" {
+  description = <<-EOT
+    Optional CPU-based scaler. When set, the container app scales up once
+    average CPU across replicas exceeds `utilization` percent. Uses ACA's
+    built-in container metrics, so it works regardless of DB auth scheme
+    and doesn't need any external credentials.
+
+    Shape:
+      {
+        utilization = "70"   # scale-up threshold (percent, 1-100)
+      }
+  EOT
+  type = object({
+    utilization = string
   })
   default = null
 }
