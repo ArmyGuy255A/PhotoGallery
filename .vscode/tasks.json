@@ -128,7 +128,7 @@
           "WorkersEnabled": "true",
           // Kestrel still starts; bind to a random free port so a second
           // worker run doesn't fight the first one (or the API) over 5105.
-          "ASPNETCORE_URLS": "http://localhost:0",
+          "ASPNETCORE_URLS": "http://127.0.0.1:0",
           // Unique replica id so the worker appears as its own row on the
           // admin Service Health page (grouped by InstanceId). Bump the
           // suffix when starting a 2nd / 3rd / Nth worker.
