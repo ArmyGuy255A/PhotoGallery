@@ -301,7 +301,7 @@ public class OrphanedBlobReaperServiceTests
         var controller = new PhotosController(
             imageProcessor: Mock.Of<IImageProcessor>(),
             storageProvider: _mockStorage.Object,
-            photoRepository: Mock.Of<IRepository<Photo>>(),
+            photoRepository: Mock.Of<IPhotoRepository>(),
             albumRepository: Mock.Of<IRepository<Album>>(),
             photoVersionRepository: Mock.Of<IRepository<PhotoVersion>>(),
             queueRepository: Mock.Of<IRepository<ProcessingQueue>>(),

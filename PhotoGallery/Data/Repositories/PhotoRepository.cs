@@ -36,4 +36,37 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
             .Where(p => !p.ProcessingComplete)
             .ToListAsync();
     }
+
+    public async Task<HashSet<string>> GetExistingFileNamesAsync(Guid albumId)
+    {
+        // Case-sensitive HashSet to match the storage layer; the duplicate
+        // check intentionally uses OrdinalIgnoreCase on the caller side so
+        // we don't depend on the database collation. Includes Uploading
+        // rows so concurrent tabs cannot both reserve the same name. The
+        // orphan reaper releases names from abandoned tickets after the
+        // grace window expires.
+        var names = await _dbSet
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => p.FileName)
+            .ToListAsync();
+        return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+    }
+    public async Task<Dictionary<string, ExistingPhotoSummary>> GetExistingPhotoSummariesByNameAsync(Guid albumId)
+    {
+        // Pull just the columns we need and project to the public record
+        // struct. OrdinalIgnoreCase mirrors GetExistingFileNamesAsync so both
+        // upload paths agree on what counts as a duplicate, regardless of the
+        // database collation. Last-write-wins on case-only collisions, which
+        // matches the behavior of the unique filtered index in
+        // UniquePhotoFileNamePerAlbum (case-insensitive collation in
+        // SqlServer; this client-side dedup keeps Sqlite consistent).
+        var rows = await _dbSet
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => new { p.FileName, p.Id, p.ProcessingStatus })
+            .ToListAsync();
+        var map = new Dictionary<string, ExistingPhotoSummary>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in rows)
+            map[r.FileName] = new ExistingPhotoSummary(r.Id, r.ProcessingStatus);
+        return map;
+    }
 }

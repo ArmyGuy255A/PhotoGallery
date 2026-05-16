@@ -301,7 +301,8 @@ public class CartController : ControllerBase
             items: validated,
             output: Response.Body,
             accessCodeId: null,
-            remoteIp: remoteIp);
+            remoteIp: remoteIp,
+            userId: userId);
 
         // Issue #111: previously the server kept every cart row after streaming
         // the ZIP, so the next add → download cycle re-shipped the prior items.

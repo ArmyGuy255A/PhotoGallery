@@ -25,6 +25,15 @@ public class Download
     /// </summary>
     public Guid? AccessCodeId { get; set; }
 
+    /// <summary>
+    /// Foreign key to the authenticated User who triggered the download (cart
+    /// purchase, owner-direct download, admin download). Null for anonymous
+    /// downloads via the public access-code flow — those are traceable via
+    /// <see cref="AccessCodeId"/> instead. Drives the Admin user-downloads
+    /// drill-down view.
+    /// </summary>
+    public string? UserId { get; set; }
+
     /// <summary>Quality version that was downloaded</summary>
     public QualityType Quality { get; set; }
 

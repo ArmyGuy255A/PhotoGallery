@@ -29,7 +29,8 @@ public interface ICartZipService
         IReadOnlyList<CartZipItem> items,
         Stream output,
         Guid? accessCodeId,
-        string? remoteIp);
+        string? remoteIp,
+        string? userId = null);
 }
 
 /// <summary>

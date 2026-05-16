@@ -117,6 +117,22 @@ interface CodeValidation {
           {{ toastMessage }}
         </div>
 
+        <!--
+          Phase 7 loading states (mirror album-detail).
+          - Initial spinner: first page hasn't landed yet.
+          - Pagination banner: at least one page is in, more pending.
+          Both guarded by !loader.isEmpty() so the "No photos" copy still wins
+          for genuinely-empty albums.
+        -->
+        <div class="photos-loading-initial"
+             *ngIf="loader.isLoading() && !loader.hasLoadedFirstPage()"
+             data-testid="code-photos-loading-initial"
+             role="status"
+             aria-live="polite">
+          <div class="photos-spinner" aria-hidden="true"></div>
+          <p class="photos-loading-copy">Loading photos…</p>
+        </div>
+
         <div *ngIf="loader.isEmpty()" class="empty-message" data-testid="code-empty-photos">
           <p>No photos in this album yet.</p>
         </div>
@@ -312,6 +328,42 @@ interface CodeValidation {
       text-align: center;
       padding: 60px 20px;
       color: #666;
+    }
+
+    /* Phase 7: loading-state spinner + pagination banner. */
+    .photos-loading-initial {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 48px 20px;
+      color: #ddd;
+    }
+    .photos-loading-copy {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+    .photos-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid rgba(255, 255, 255, 0.25);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: code-photos-spinner-rotate 0.9s linear infinite;
+    }
+    .photos-spinner-inline {
+      width: 14px;
+      height: 14px;
+      border-width: 2px;
+      display: inline-block;
+    }
+    @keyframes code-photos-spinner-rotate {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .photos-spinner { animation-duration: 3s; }
     }
 
     .error h2 {
@@ -649,6 +701,22 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }, { rootMargin: '200px' });
     this.observeSentinelIfPresent();
+    // Phase 6 progressive-load bug fix: once the new page is appended the
+    // sentinel often remains in the viewport (rootMargin: '200px' guarantees
+    // it for any page that doesn't fill at least one screen). The observer
+    // only fires on intersection-state *transitions*, so "still visible"
+    // never re-triggers loadNext. Re-observing the same element forces a
+    // fresh evaluation that fires again if the sentinel is still
+    // intersecting — which is exactly the trigger we want for "the user is
+    // still at the bottom, give them the next page."
+    this.loader.onLoadCompleted = () => this.reobserveSentinel();
+  }
+
+  private reobserveSentinel(): void {
+    const el = this.sentinelRef?.nativeElement;
+    if (!this.intersectionObserver || !el) return;
+    this.intersectionObserver.unobserve(el);
+    this.intersectionObserver.observe(el);
   }
 
   private observeSentinelIfPresent(): void {
@@ -895,7 +963,10 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private loadPhotos(): void {
     this.loader.reset();
-    this.loader.loadNext();
+    // Auto-trickle every page in the background so the carousel + grid
+    // never get stuck waiting for the sentinel. The IntersectionObserver
+    // is still attached as a redundant trigger.
+    this.loader.enableAutoLoad();
     queueMicrotask(() => this.observeSentinelIfPresent());
   }
 

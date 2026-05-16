@@ -47,5 +47,21 @@ public class PhotoConfiguration : IEntityTypeConfiguration<Photo>
         builder.HasIndex(p => p.AlbumId);
         builder.HasIndex(p => p.StorageKey).IsUnique();
         builder.HasIndex(p => p.ProcessingStatus);
+
+        // Defence-in-depth: even if the controller-level duplicate check
+        // is bypassed (race between two requests, future code path that
+        // forgets to call it), the database refuses a second photo with
+        // the same FileName in the same AlbumId. The filter excludes
+        // PhotoProcessingStatus.Uploading (=4) so an abandoned ticket
+        // does not permanently block re-attempts of the same name. The
+        // OrphanedBlobReaperService eventually deletes those rows.
+        //
+        // SqlServer honours the HasFilter clause as a filtered unique
+        // index. Sqlite ignores HasFilter and applies the index over all
+        // rows; that is acceptable for the local-dev path because the
+        // controller-level check is the primary line of defence.
+        builder.HasIndex(p => new { p.AlbumId, p.FileName })
+            .IsUnique()
+            .HasFilter("[ProcessingStatus] <> 4");
     }
 }

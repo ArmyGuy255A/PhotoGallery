@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { HttpClient } from '@angular/common/http';
 import { environment } from '../../../environments/environment';
 import { PhotoUploadComponent } from './photo-upload.component';
+import { UploadProgressAsideComponent } from './upload-progress-aside.component';
 import { AccessCodeFormComponent } from './access-code-form.component';
 import { PhotoModalComponent, ModalPhoto } from '../photo-modal/photo-modal.component';
 import { Subject, interval, Observable } from 'rxjs';
@@ -29,6 +30,8 @@ interface AccessCode {
   code: string;
   expirationDate: string | null;
   createdDate: string;
+  createdBy?: string;
+  createdByDisplayName?: string;
 }
 
 interface Album {
@@ -37,13 +40,14 @@ interface Album {
   description: string;
   createdDate: string;
   createdBy: string;
+  createdByDisplayName?: string;
   ownerId: string;
 }
 
 @Component({
   selector: 'app-album-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, PhotoUploadComponent, AccessCodeFormComponent, PhotoModalComponent, BackToDashboardComponent],
+  imports: [CommonModule, FormsModule, PhotoUploadComponent, UploadProgressAsideComponent, AccessCodeFormComponent, PhotoModalComponent, BackToDashboardComponent],
   template: `
     <div class="album-detail-container" data-testid="album-detail">
       <header class="detail-header">
@@ -59,7 +63,7 @@ interface Album {
         <div *ngIf="!isLoading && album">
           <section class="album-info">
             <p class="description">{{ album.description || 'No description' }}</p>
-            <p class="meta">Created on {{ (album.createdDate | date: 'short') }} by {{ album.createdBy }}</p>
+            <p class="meta">Created on {{ (album.createdDate | date: 'short') }} by {{ album.createdByDisplayName || album.createdBy }}</p>
           </section>
 
           <!-- Photo Upload Section -->
@@ -73,6 +77,33 @@ interface Album {
           <section class="photos-section">
             <div class="section-header">
               <h2 data-testid="photos-count">Photos ({{ photos.length }})</h2>
+            </div>
+
+            <!--
+              Loading-state region (Phase 7).
+              - Initial spinner: loader is fetching the first page; no envelope
+                has come back yet. Centred CoreUI-style spinner + copy so the
+                user knows photos are pending.
+              - Pagination banner: at least one page has landed, but more
+                photos are still being fetched or aren't yet on screen. Shows
+                "Loaded X of Y photos…" with a tiny inline spinner.
+              Both states are suppressed in the empty-state path (handled
+              below by loader.isEmpty()) so the "No photos yet" copy still wins.
+            -->
+            <!--
+              Initial-load spinner only. The previous "Loaded X of Y…" banner
+              was removed in favour of auto-trickle pagination: every page
+              loads in the background until all photos are present, so the
+              banner had nothing useful to convey. Empty-state copy still
+              wins via loader.isEmpty().
+            -->
+            <div class="photos-loading-initial"
+                 *ngIf="loader.isLoading() && !loader.hasLoadedFirstPage()"
+                 data-testid="album-photos-loading-initial"
+                 role="status"
+                 aria-live="polite">
+              <div class="photos-spinner" aria-hidden="true"></div>
+              <p class="photos-loading-copy">Loading photos…</p>
             </div>
 
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
@@ -249,6 +280,12 @@ interface Album {
         (closed)="modalOpen = false"
         (cartAction)="onModalCartAction($event)">
       </app-photo-modal>
+
+      <app-upload-progress-aside
+        *ngIf="album?.id"
+        [albumId]="album!.id"
+        (summaryChanged)="onAlbumActivityChanged($event)">
+      </app-upload-progress-aside>
     </div>
   `,
   styles: [`
@@ -291,6 +328,48 @@ interface Album {
       text-align: center;
       padding: 40px;
       color: #666;
+    }
+
+    /* Phase 7 loading states (initial spinner + pagination banner) */
+    .photos-loading-initial {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 48px 20px;
+      color: #555;
+    }
+
+    .photos-loading-copy {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .photos-spinner {
+      width: 36px;
+      height: 36px;
+      border: 4px solid #d0d0d0;
+      border-top-color: #0066cc;
+      border-radius: 50%;
+      animation: photos-spinner-rotate 0.9s linear infinite;
+    }
+
+    .photos-spinner-inline {
+      width: 14px;
+      height: 14px;
+      border-width: 2px;
+      border-top-color: #1d4ed8;
+      display: inline-block;
+    }
+
+    @keyframes photos-spinner-rotate {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .photos-spinner { animation-duration: 3s; }
     }
 
     .album-info {
@@ -783,10 +862,44 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       // album's photos to the previous one's cache.
       this.loader.reset();
       this.loadAlbum();
-      this.loader.loadNext();
+      // Auto-trickle every page so the carousel + grid never get stuck
+      // waiting for the sentinel — all photos eventually appear without
+      // user scrolling. Sentinel + IntersectionObserver still attached
+      // as a redundant trigger; auto-load is additive.
+      this.loader.enableAutoLoad();
       this.loadAccessCodes();
       this.startPhotoStatusPolling();
     });
+
+    // Deep-link: /albums/:id?photoId=:guid opens the carousel directly to
+    // the requested photo. The admin "top downloaded photos" table and the
+    // per-user downloads modal both pass this query param. We re-evaluate
+    // on every page-load tick so the modal opens as soon as the loader
+    // pulls in the page that contains the target photoId. Some test
+    // doubles for ActivatedRoute omit queryParams — guard against it.
+    if (this.route.queryParams) {
+      this.route.queryParams.pipe(takeUntil(this.destroy$)).subscribe(qp => {
+        this.pendingPhotoId = qp['photoId'] || null;
+        this.tryOpenPendingPhoto();
+      });
+    }
+    this.loader.onLoadCompleted = () => {
+      // Re-attached on each ngOnInit because reset() doesn't clear it;
+      // safe to overwrite — the sentinel observer setup also assigns it.
+      this.tryOpenPendingPhoto();
+    };
+  }
+
+  /** Set by ?photoId=… query param; cleared after we've opened the modal. */
+  private pendingPhotoId: string | null = null;
+
+  private tryOpenPendingPhoto(): void {
+    if (!this.pendingPhotoId) return;
+    const idx = this.photos.findIndex(p => p.id === this.pendingPhotoId);
+    if (idx >= 0) {
+      this.openModal(idx);
+      this.pendingPhotoId = null;
+    }
   }
 
   ngAfterViewInit(): void {
@@ -821,6 +934,23 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }, { rootMargin: '200px' });
     this.observeSentinelIfPresent();
+    // Phase 6 progressive-load bug fix: re-evaluate the sentinel after each
+    // successful page load. IntersectionObserver only fires on intersection-
+    // state *transitions* — when the appended page doesn't push the sentinel
+    // out of the viewport it stays "intersecting" silently, and the user's
+    // scroll never reloads. Re-observing the same element forces a fresh
+    // evaluation that fires loadNext again if the sentinel is still visible.
+    this.loader.onLoadCompleted = () => {
+      this.reobserveSentinel();
+      this.tryOpenPendingPhoto();
+    };
+  }
+
+  private reobserveSentinel(): void {
+    const el = this.sentinelRef?.nativeElement;
+    if (!this.intersectionObserver || !el) return;
+    this.intersectionObserver.unobserve(el);
+    this.intersectionObserver.observe(el);
   }
 
   private observeSentinelIfPresent(): void {
@@ -1086,6 +1216,21 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
     } else {
       this.onAddToCart(photo);
     }
+  }
+
+  /**
+   * The floating Album Activity aside fires this whenever the server reports
+   * either a new photo landing in the album or a freshly-completed photo's
+   * variants finishing — both cases require the on-screen grid to refresh
+   * so the new thumbnails appear without the user reloading. We re-arm the
+   * paged loader from scratch and let auto-trickle re-paginate the album;
+   * for an album of N photos at 20 per page that's N/20 fast HTTP calls
+   * spaced 200ms apart, comfortably less work than the server-side processing
+   * cycle that triggered it.
+   */
+  onAlbumActivityChanged(_summary: unknown): void {
+    this.loader.reset();
+    this.loader.enableAutoLoad();
   }
 
   getStatusClass(photo: Photo): string {

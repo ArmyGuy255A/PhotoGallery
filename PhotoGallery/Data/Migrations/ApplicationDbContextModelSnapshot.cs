@@ -302,6 +302,9 @@ namespace PhotoGallery.Data.Migrations
                     b.Property<int>("Quality")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("UserId")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AccessCodeId");
@@ -388,6 +391,10 @@ namespace PhotoGallery.Data.Migrations
                         .IsUnique();
 
                     b.HasIndex("UserId");
+
+                    b.HasIndex("AlbumId", "FileName")
+                        .IsUnique()
+                        .HasFilter("[ProcessingStatus] <> 4");
 
                     b.ToTable("Photos");
                 });
@@ -668,6 +675,9 @@ namespace PhotoGallery.Data.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("LastName")
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
@@ -677,6 +687,9 @@ namespace PhotoGallery.Data.Migrations
 
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("LoginCount")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
@@ -731,6 +744,9 @@ namespace PhotoGallery.Data.Migrations
 
                     b.Property<string>("IpAddress")
                         .HasMaxLength(45)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserAgent")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("UserId")

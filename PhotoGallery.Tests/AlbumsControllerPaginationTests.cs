@@ -59,6 +59,20 @@ public class AlbumsControllerPaginationTests
             _context.Photos.Include(p => p.PhotoVersions).FirstOrDefaultAsync(p => p.Id == photoId);
         public Task<List<Photo>> GetUnprocessedPhotosAsync() =>
             _context.Photos.Where(p => !p.ProcessingComplete).ToListAsync();
+        public async Task<HashSet<string>> GetExistingFileNamesAsync(Guid albumId)
+        {
+            var names = await _context.Photos.Where(p => p.AlbumId == albumId)
+                .Select(p => p.FileName).ToListAsync();
+            return new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        }
+        public async Task<Dictionary<string, ExistingPhotoSummary>> GetExistingPhotoSummariesByNameAsync(Guid albumId)
+        {
+            var rows = await _context.Photos.Where(p => p.AlbumId == albumId)
+                .Select(p => new { p.FileName, p.Id, p.ProcessingStatus }).ToListAsync();
+            var map = new Dictionary<string, ExistingPhotoSummary>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in rows) map[r.FileName] = new ExistingPhotoSummary(r.Id, r.ProcessingStatus);
+            return map;
+        }
     }
 
     private class TestRepository<T> : Repository<T> where T : class
@@ -77,8 +91,19 @@ public class AlbumsControllerPaginationTests
 
         var codeRepo = new Mock<IAccessCodeRepository>();
 
+        var displayNames = new Mock<IUserDisplayNameResolver>();
+        displayNames.Setup(r => r.ResolveAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UserDisplayNameResolver.DefaultDisplayName);
+        displayNames.Setup(r => r.ResolveManyAsync(It.IsAny<IEnumerable<string?>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IEnumerable<string?> ids, CancellationToken _) =>
+                (IReadOnlyDictionary<string, string>)new Dictionary<string, string>());
+
+        var storage = new Mock<PhotoGallery.Services.Storage.IStorageProvider>();
+
         var controller = new AlbumsController(
             albumRepo.Object, photoRepo, codeRepo.Object, NewUrlService(),
+            displayNames.Object,
+            storage.Object,
             NullLogger<AlbumsController>.Instance);
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };

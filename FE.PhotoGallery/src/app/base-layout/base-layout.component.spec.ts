@@ -44,10 +44,10 @@ describe('BaseLayoutComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('renders the global navbar, sidenav, and footer', () => {
+  it('renders the global navbar and sidenav (footer removed)', () => {
     expect(fixture.debugElement.query(By.css('app-navbar'))).toBeTruthy();
     expect(fixture.debugElement.query(By.css('app-sidenav'))).toBeTruthy();
-    expect(fixture.debugElement.query(By.css('app-footer'))).toBeTruthy();
+    expect(fixture.debugElement.query(By.css('app-footer'))).toBeFalsy();
   });
 
   it('mounts the global cart drawer inside .main-container', () => {
