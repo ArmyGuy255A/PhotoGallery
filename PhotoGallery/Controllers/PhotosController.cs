@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using PhotoGallery.Data;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
 using PhotoGallery.Hubs;
@@ -47,6 +48,7 @@ public class PhotosController : ControllerBase
     private readonly StorageConsistencyService _storageConsistencyService;
     private readonly IHubContext<PhotoProgressHub> _progressHub;
     private readonly OrphanedBlobReaperService _orphanedBlobReaperService;
+    private readonly ApplicationDbContext _ctx;
     private readonly ILogger<PhotosController> _logger;
 
     // Single-file upload ceiling for direct-to-blob tickets. Picked to match
@@ -72,6 +74,7 @@ public class PhotosController : ControllerBase
         StorageConsistencyService storageConsistencyService,
         IHubContext<PhotoProgressHub> progressHub,
         OrphanedBlobReaperService orphanedBlobReaperService,
+        ApplicationDbContext ctx,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -84,6 +87,7 @@ public class PhotosController : ControllerBase
         _storageConsistencyService = storageConsistencyService;
         _orphanedBlobReaperService = orphanedBlobReaperService;
         _progressHub = progressHub;
+        _ctx = ctx;
         _logger = logger;
     }
 
@@ -921,24 +925,9 @@ public class PhotosController : ControllerBase
     /// </summary>
     [HttpPost("admin/reconcile-storage")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ReconcileStorage(CancellationToken cancellationToken)
+    public async Task<IActionResult> ReconcileStorage()
     {
-        try
-        {
-            _logger.LogInformation("Admin {User} triggered storage reconciliation", User.Identity?.Name);
-            var report = await _storageConsistencyService.RunOnceAsync(cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("Admin storage reconciliation was cancelled");
-            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Admin storage reconciliation failed");
-            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
-        }
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReconcileStorage, albumId: null);
     }
 
     /// <summary>
@@ -951,7 +940,7 @@ public class PhotosController : ControllerBase
     /// Returns a JSON ConsistencyReport with counters (requeued, backFilled, ...).
     /// </summary>
     [HttpPost("albums/{albumId:guid}/reconcile-storage")]
-    public async Task<IActionResult> ReconcileAlbumStorage(Guid albumId, CancellationToken cancellationToken)
+    public async Task<IActionResult> ReconcileAlbumStorage(Guid albumId)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
@@ -962,23 +951,7 @@ public class PhotosController : ControllerBase
         var isAdmin = User.IsInRole("Admin");
         if (!isAdmin && album.OwnerId != userId) return Forbid();
 
-        try
-        {
-            _logger.LogInformation(
-                "User {User} triggered album storage reconciliation for {AlbumId}",
-                User.Identity?.Name, albumId);
-            var report = await _storageConsistencyService.RunForAlbumAsync(albumId, cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
-        {
-            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Album storage reconciliation failed for {AlbumId}", albumId);
-            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
-        }
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReconcileAlbumStorage, albumId);
     }
 
     /// <summary>    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
@@ -998,24 +971,80 @@ public class PhotosController : ControllerBase
     /// </summary>
     [HttpPost("admin/reap-orphans")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ReapOrphans(CancellationToken cancellationToken)
+    public async Task<IActionResult> ReapOrphans()
     {
-        try
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReapOrphans, albumId: null);
+    }
+
+    /// <summary>
+    /// Shared helper: insert an AdminJob row + return 202 Accepted with the
+    /// row's Id so the FE can poll for completion. The API never runs these
+    /// jobs itself — a worker drains them at the top of its next tick (~5s).
+    /// </summary>
+    private async Task<IActionResult> EnqueueAdminJobAsync(string jobType, Guid? albumId)
+    {
+        var job = new AdminJob
         {
-            _logger.LogInformation("Admin {User} triggered orphaned-blob reap", User.Identity?.Name);
-            var report = await _orphanedBlobReaperService.RunOnceAsync(cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
+            Id            = Guid.NewGuid(),
+            JobType       = jobType,
+            AlbumId       = albumId,
+            Status        = AdminJobStatuses.Pending,
+            RequestedAt   = DateTime.UtcNow,
+            RequestedBy   = User.Identity?.Name
+        };
+        _ctx.AdminJobs.Add(job);
+        await _ctx.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Enqueued AdminJob {JobId} ({JobType}, album={AlbumId}) by {User}",
+            job.Id, job.JobType, job.AlbumId, job.RequestedBy);
+
+        return Accepted(new
         {
-            _logger.LogInformation("Admin orphaned-blob reap was cancelled");
-            return StatusCode(499, new { message = "Reap cancelled by client" });
-        }
-        catch (Exception ex)
+            jobId       = job.Id,
+            jobType     = job.JobType,
+            albumId     = job.AlbumId,
+            status      = job.Status,
+            requestedAt = job.RequestedAt,
+            statusUrl   = $"/api/photos/admin/jobs/{job.Id}"
+        });
+    }
+
+    /// <summary>
+    /// Poll endpoint for the FE to learn when an enqueued admin job
+    /// completes. Returns the full row including the worker-written
+    /// ResultJson (a ConsistencyReport / OrphanReapReport) when done.
+    /// </summary>
+    [HttpGet("admin/jobs/{jobId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> GetAdminJob(Guid jobId)
+    {
+        var job = await _ctx.AdminJobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId);
+        if (job == null) return NotFound();
+
+        // Per-album reconcile is owner-or-admin; the other job types are admin-only
+        // and the [Authorize] on the controller handles that.
+        if (job.JobType == AdminJobTypes.ReconcileAlbumStorage && job.AlbumId.HasValue)
         {
-            _logger.LogError(ex, "Admin orphaned-blob reap failed");
-            return StatusCode(500, new { message = "Reap failed", error = ex.Message });
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var album  = await _albumRepository.GetByIdAsync(job.AlbumId.Value);
+            if (album != null && album.OwnerId != userId && !User.IsInRole("Admin")) return Forbid();
         }
+
+        return Ok(new
+        {
+            jobId                 = job.Id,
+            jobType               = job.JobType,
+            albumId               = job.AlbumId,
+            status                = job.Status,
+            requestedAt           = job.RequestedAt,
+            requestedBy           = job.RequestedBy,
+            startedAt             = job.StartedAt,
+            completedAt           = job.CompletedAt,
+            completedByInstanceId = job.CompletedByInstanceId,
+            result                = job.ResultJson == null ? (System.Text.Json.JsonElement?)null : System.Text.Json.JsonDocument.Parse(job.ResultJson).RootElement,
+            error                 = job.ErrorMessage
+        });
     }
 }
 

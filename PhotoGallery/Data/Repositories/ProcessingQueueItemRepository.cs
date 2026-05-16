@@ -149,8 +149,12 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                     -- Status 0 = Pending, 1 = Processing (orphaned by a dead worker — recover if lease expired),
                     -- 3 = Error (retry due). Without orphan recovery, an OOM-killed worker leaves Processing
                     -- rows with an expired lease that NEVER drain — observed in trial as 808 stuck items.
+                    -- Status 0 = Pending, 1 = Processing (orphaned if lease is NULL or expired),
+                    -- 3 = Error (retry due). The NULL-lease branch catches rows where a worker hit
+                    -- OperationCanceledException and called ReleaseLeaseAsync (which nulls the lease but
+                    -- doesn't reset the status) — without this we observed 41 stuck items in trial.
                     WHERE (Status = 0
-                           OR (Status = 1 AND LeaseExpiresAt IS NOT NULL AND LeaseExpiresAt < GETUTCDATE())
+                           OR (Status = 1 AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE()))
                            OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
                       AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE())
                     ORDER BY
@@ -193,7 +197,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
         var candidates = await _dbSet
             .Where(item =>
                 (item.Status == ProcessingStatus.Pending ||
-                 (item.Status == ProcessingStatus.Processing && item.LeaseExpiresAt != null && item.LeaseExpiresAt < now) ||
+                 (item.Status == ProcessingStatus.Processing && (item.LeaseExpiresAt == null || item.LeaseExpiresAt < now)) ||
                  (item.Status == ProcessingStatus.Error &&
                   (item.NextRetryTime == null || item.NextRetryTime <= now)))
                 && (item.LeaseExpiresAt == null || item.LeaseExpiresAt < now))

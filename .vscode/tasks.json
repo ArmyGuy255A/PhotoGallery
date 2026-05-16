@@ -1,0 +1,530 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "workerSuffix",
+      "type": "promptString",
+      "description": "Suffix for this worker's InstanceId (e.g. 1, 2, alpha). Run the task multiple times with different suffixes to spin up parallel workers, each visible as its own row on the admin Service Health page.",
+      "default": "1"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "Backend: Build",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "-c",
+        "Debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/PhotoGallery"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Backend: Run (Port 5105)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "PhotoGallery/PhotoGallery.csproj"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "WorkersEnabled": "false",
+          "CONTAINER_APP_REPLICA_NAME": "local-api"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application started.*",
+          "endsPattern": "^.*Application started.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": false
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "detail": "Starts the API in ingress-only mode (WorkersEnabled=false). Pair with 'Backend: Run as Worker' for the production split topology locally."
+    },
+    {
+      "label": "Backend: Run with Watch",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "watch",
+        "--project",
+        "PhotoGallery/PhotoGallery.csproj",
+        "run"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "WorkersEnabled": "false",
+          "CONTAINER_APP_REPLICA_NAME": "local-api"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application started.*",
+          "endsPattern": "^.*Application started.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true
+      },
+      "detail": "API with hot-reload via dotnet watch. WorkersEnabled=false; pair with the worker task."
+    },
+    {
+      "label": "Backend: Run as Worker",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "PhotoGallery/PhotoGallery.csproj",
+        "--no-launch-profile"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          // WorkersEnabled=true is the only thing that flips this same image
+          // from API-mode into worker-mode. The four hosted services
+          // (PhotoProcessingWorker / OrphanedBlobReaperWorker /
+          // StorageConsistencyWorker / PhotoVersionUrlRefreshWorker) only
+          // register when this flag is true.
+          "WorkersEnabled": "true",
+          // Kestrel still starts; bind to a random free port so a second
+          // worker run doesn't fight the first one (or the API) over 5105.
+          "ASPNETCORE_URLS": "http://localhost:0",
+          // Unique replica id so the worker appears as its own row on the
+          // admin Service Health page (grouped by InstanceId). Bump the
+          // suffix when starting a 2nd / 3rd / Nth worker.
+          "CONTAINER_APP_REPLICA_NAME": "local-worker-${input:workerSuffix}"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application started.*",
+          "endsPattern": "^.*Application started.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": false,
+        "group": "workers"
+      },
+      "detail": "Starts a background worker (WorkersEnabled=true, no ingress, random Kestrel port). Re-run this task with a different InstanceId suffix to spin up additional workers — each will appear as its own row under 'Service Health' on the admin page."
+    },
+    {
+      "label": "Frontend: Install Dependencies",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "install"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Frontend: Build",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "group": {
+        "kind": "build"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Frontend: Dev Server (Port 4300)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "start"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*",
+          "endsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": false
+      }
+    },
+    {
+      "label": "Frontend: Lint",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "lint"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Tests: Backend Unit Tests",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "test",
+        "PhotoGallery.Tests/PhotoGallery.Tests.csproj",
+        "-v",
+        "q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "test"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "Tests: Backend Unit Tests (Watch Mode)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "watch",
+        "--project",
+        "PhotoGallery.Tests/PhotoGallery.Tests.csproj",
+        "test",
+        "-v",
+        "q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Running.*",
+          "endsPattern": "^.*passed|failed.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Tests: Frontend E2E (Playwright)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "e2e"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "group": {
+        "kind": "test"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Runs Playwright specs against http://localhost:4200 (config auto-starts ng serve). Requires backend at http://localhost:5105 with DISABLE_AUTH=true."
+    },
+    {
+      "label": "Tests: Frontend E2E UI Mode (Playwright)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "e2e:ui"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Opens Playwright's interactive UI Mode for debugging E2E specs."
+    },
+    {
+      "label": "Tests: Frontend E2E Headed (Playwright)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "e2e:headed"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Runs Playwright specs with a visible browser (useful when watching the upload flow)."
+    },
+    {
+      "label": "Database: Apply Migrations",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "ef",
+        "database",
+        "update"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/PhotoGallery"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Docker: Start Services (MinIO, PostgreSQL)",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "up",
+        "-d"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Docker: Stop Services",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "down"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Docker: View Logs",
+      "type": "shell",
+      "command": "docker-compose",
+      "args": [
+        "logs",
+        "-f"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Full Stack: API + Worker + Frontend",
+      "type": "shell",
+      "command": "echo",
+      "args": [
+        "🚀 Starting split-topology dev stack (API + 1 worker + Frontend)..."
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Backend: Run with Watch",
+        "Backend: Run as Worker",
+        "Frontend: Dev Server (Port 4300)"
+      ],
+      "detail": "Mirrors the production ACA split: API replica (no workers) + one background worker. Run 'Backend: Run as Worker' again with a different InstanceId suffix to add more workers — each becomes its own row on Service Health."
+    },
+    {
+      "label": "Full Stack: Start All Services",
+      "type": "shell",
+      "command": "echo",
+      "args": [
+        "🚀 Starting all services (Docker → Backend → Frontend)..."
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Docker: Start Services (MinIO, PostgreSQL)",
+        "Database: Apply Migrations",
+        "Backend: Run with Watch",
+        "Frontend: Dev Server (Port 4200)"
+      ]
+    },
+    {
+      "label": "Backend + Frontend: Development",
+      "type": "shell",
+      "command": "echo",
+      "args": [
+        "🔧 Starting Backend & Frontend (assuming Docker services running)..."
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Backend: Run with Watch",
+        "Frontend: Dev Server (Port 4200)"
+      ]
+    },
+    {
+      "label": "Quick Start: Backend Only",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "PhotoGallery/PhotoGallery.csproj"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DISABLE_AUTH": "false",
+          "WorkersEnabled": "false",
+          "CONTAINER_APP_REPLICA_NAME": "local-api"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application started.*",
+          "endsPattern": "^.*Application started.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": true
+      }
+    },
+    {
+      "label": "Quick Start: Frontend Only",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "start"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*",
+          "endsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET Core: PhotoGallery",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "Backend: Build",
+      "program": "${workspaceFolder}/PhotoGallery/bin/Debug/net9.0/PhotoGallery.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/PhotoGallery",
+      "stopAtEntry": false,
+      "serverReadyAction": {
+        "pattern": "\\bNow listening on:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    },
+    {
+      "name": ".NET Core: Unit Tests",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "Backend: Build",
+      "program": "${workspaceFolder}/PhotoGallery.Tests/bin/Debug/net9.0/PhotoGallery.Tests.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack Debug",
+      "configurations": [
+        ".NET Core: PhotoGallery"
+      ],
+      "preLaunchTask": "Full Stack: Start All Services",
+      "presentation": {
+        "hidden": false,
+        "group": "1_build"
+      }
+    }
+  ]
+}

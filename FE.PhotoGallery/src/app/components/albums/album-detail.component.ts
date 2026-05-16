@@ -1335,27 +1335,23 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
   runReconcile(): void {
     if (this.reconcileState === 'running') return;
     this.reconcileState = 'running';
-    this.reconcileMessage = null;
+    this.reconcileMessage = 'Queued for worker — picking up shortly…';
     const apiUrl = environment.apiUrl || '';
-    this.http.post<ReconcileReport>(`${apiUrl}/api/photos/albums/${this.albumId}/reconcile-storage`, {})
+    // The endpoint is now async: returns 202 Accepted with a jobId, the
+    // worker drains it within ~5s, and we poll the status endpoint until
+    // it transitions to complete/error. The API replica never runs the
+    // job itself — keeps it responsive to other client traffic during a
+    // big reconcile pass.
+    this.http.post<AdminJobEnqueued>(`${apiUrl}/api/photos/albums/${this.albumId}/reconcile-storage`, {})
       .pipe(takeUntil(this.destroy$))
       .subscribe({
-        next: (report) => {
-          this.reconcileState = 'success';
-          const parts: string[] = [];
-          if (report.photosScanned != null) parts.push(`${report.photosScanned} scanned`);
-          if (report.itemsRequeued)        parts.push(`${report.itemsRequeued} requeued`);
-          if (report.itemsBackFilledComplete) parts.push(`${report.itemsBackFilledComplete} back-filled`);
-          if (report.itemsCreatedPending)  parts.push(`${report.itemsCreatedPending} new pending`);
-          if (report.originalsMissing)     parts.push(`${report.originalsMissing} originals missing`);
-          if (report.urlsInvalidated)      parts.push(`${report.urlsInvalidated} URLs invalidated`);
-          this.reconcileMessage = parts.length
-            ? `Reconcile complete: ${parts.join(', ')}. Worker will regenerate any pending items within ~5s.`
-            : 'Reconcile complete: nothing to fix.';
-          // Refresh the grid so newly-regenerated thumbnails appear once the
-          // worker finishes (refreshLoaded merges by id so the visible scroll
-          // position is preserved).
-          this.loader.refreshLoaded(p => p.id);
+        next: (enqueued) => {
+          if (!enqueued?.jobId) {
+            this.reconcileState = 'error';
+            this.reconcileMessage = 'Reconcile request failed: no jobId returned.';
+            return;
+          }
+          this.pollAdminJob(enqueued.jobId);
         },
         error: (err) => {
           this.reconcileState = 'error';
@@ -1366,7 +1362,89 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       });
   }
 
+  /**
+   * Poll an enqueued admin job every 2 seconds until it terminates. Stops
+   * after 5 minutes — by then either the worker is dead (operator should
+   * investigate via Service Health) or the job is genuinely huge and the
+   * operator can re-poll later.
+   */
+  private pollAdminJob(jobId: string, attempt: number = 0): void {
+    if (attempt > 150) {  // 150 * 2s = 5 minutes
+      this.reconcileState = 'error';
+      this.reconcileMessage = 'Reconcile timed out after 5 minutes. Check the admin Service Health page to see worker status.';
+      return;
+    }
+    const apiUrl = environment.apiUrl || '';
+    this.http.get<AdminJobStatus>(`${apiUrl}/api/photos/admin/jobs/${jobId}`)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (job) => {
+          if (job.status === 'complete') {
+            this.reconcileState = 'success';
+            const r: ReconcileReport = job.result || {};
+            const parts: string[] = [];
+            if (r.photosScanned != null)          parts.push(`${r.photosScanned} scanned`);
+            if (r.itemsRequeued)                  parts.push(`${r.itemsRequeued} requeued`);
+            if (r.itemsBackFilledComplete)        parts.push(`${r.itemsBackFilledComplete} back-filled`);
+            if (r.itemsCreatedPending)            parts.push(`${r.itemsCreatedPending} new pending`);
+            if (r.uploadingPromotedToPending)     parts.push(`${r.uploadingPromotedToPending} uploads promoted`);
+            if (r.uploadingMarkedFailed)          parts.push(`${r.uploadingMarkedFailed} stale uploads failed`);
+            if (r.originalsMissing)               parts.push(`${r.originalsMissing} originals missing`);
+            if (r.urlsInvalidated)                parts.push(`${r.urlsInvalidated} URLs invalidated`);
+            const replica = job.completedByInstanceId ? ` (handled by ${job.completedByInstanceId})` : '';
+            this.reconcileMessage = parts.length
+              ? `Reconcile complete${replica}: ${parts.join(', ')}. Image-processing worker will regenerate any pending items shortly.`
+              : `Reconcile complete${replica}: nothing to fix.`;
+            this.loader.refreshLoaded(p => p.id);
+            return;
+          }
+          if (job.status === 'error') {
+            this.reconcileState = 'error';
+            this.reconcileMessage = job.error
+              ? `Reconcile failed on worker: ${job.error}`
+              : 'Reconcile failed on worker.';
+            return;
+          }
+          // pending / running — keep polling
+          this.reconcileMessage = job.status === 'running'
+            ? `Worker is reconciling${job.completedByInstanceId ? ` on ${job.completedByInstanceId}` : ''}…`
+            : 'Queued for worker — picking up shortly…';
+          setTimeout(() => this.pollAdminJob(jobId, attempt + 1), 2000);
+        },
+        error: () => {
+          // Transient — back off and retry. After 5 consecutive failures, bail.
+          if (attempt > 5) {
+            this.reconcileState = 'error';
+            this.reconcileMessage = 'Lost contact with the API while waiting for the worker. Try again in a moment.';
+            return;
+          }
+          setTimeout(() => this.pollAdminJob(jobId, attempt + 1), 3000);
+        }
+      });
+  }
+
   /** Photos transformed for the PhotoModalComponent. (single definition — see Cart integration block) */
+}
+
+interface AdminJobEnqueued {
+  jobId: string;
+  jobType: string;
+  status: string;
+  requestedAt: string;
+  statusUrl?: string;
+}
+
+interface AdminJobStatus {
+  jobId: string;
+  jobType: string;
+  status: 'pending' | 'running' | 'complete' | 'error';
+  requestedAt: string;
+  requestedBy?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  completedByInstanceId?: string | null;
+  result?: ReconcileReport | null;
+  error?: string | null;
 }
 
 interface ReconcileReport {
@@ -1377,4 +1455,6 @@ interface ReconcileReport {
   originalsMissing?: number;
   queuesCreated?: number;
   urlsInvalidated?: number;
+  uploadingPromotedToPending?: number;
+  uploadingMarkedFailed?: number;
 }

@@ -1,3 +1,5 @@
+using PhotoGallery.Models;
+using PhotoGallery.Services;
 namespace PhotoGallery.Services.Processing;
 
 /// <summary>
@@ -79,6 +81,19 @@ public sealed class OrphanedBlobReaperWorker : BackgroundService
                 {
                     _logger.LogDebug(ex, "Failed to resolve live settings; using defaults");
                 }
+
+                // Drain any admin-queued reap jobs FIRST.
+                try
+                {
+                    var dispatcher = _serviceProvider.GetRequiredService<AdminJobDispatcher>();
+                    var drained = await dispatcher.DrainAsync(new[] { AdminJobTypes.ReapOrphans }, stoppingToken);
+                    if (drained > 0)
+                    {
+                        _logger.LogInformation("OrphanedBlobReaperWorker drained {Count} admin jobs", drained);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger.LogError(ex, "AdminJobDispatcher drain failed"); }
 
                 if (enabled)
                 {

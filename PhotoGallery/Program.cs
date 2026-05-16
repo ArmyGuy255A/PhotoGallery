@@ -276,6 +276,7 @@ if (workersEnabled)
 }
 builder.Services.AddSingleton<WorkerScheduleRegistry>();
 builder.Services.AddSingleton<WorkerHeartbeatWriter>();
+builder.Services.AddSingleton<AdminJobDispatcher>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
 builder.Services.AddMemoryCache();
 

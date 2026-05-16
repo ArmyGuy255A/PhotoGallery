@@ -120,6 +120,20 @@ interface WorkerStatus {
   lastRanAt?: string | null;
   nextRunAt?: string | null;
   canTrigger: boolean;
+  instanceId?: string | null;
+  isAlive?: boolean;
+  itemsProcessedTotal?: number;
+  itemsInFlight?: number;
+  lastError?: string | null;
+}
+
+/** Replica-centric grouping returned by the BE: one entry per hostname, jobs nested. */
+interface ReplicaWorkerStatus {
+  instanceId: string;
+  isAlive: boolean;
+  /** 'api-only', 'worker', or 'api+worker'. */
+  role: string;
+  jobs: WorkerStatus[];
 }
 
 interface ReplicaInfo {
@@ -148,6 +162,7 @@ interface ServiceHealth {
     byQuality: Record<string, number>;
   };
   workers: WorkerStatus[];
+  replicas: ReplicaWorkerStatus[];
 }
 type UserSortKey = 'email' | 'name' | 'lastLogin' | 'loginCount' | 'downloads' | 'albums' | 'created';
 type SortDir = 'asc' | 'desc';
@@ -1115,18 +1130,53 @@ export class AdminSettingsComponent {
     this.reapState.set('running');
     this.reapReport.set(null);
     this.reapError.set(null);
-    this.http.post<OrphanReapReport>(`${environment.apiUrl}/api/photos/admin/reap-orphans`, {})
+    this.http.post<{ jobId: string }>(`${environment.apiUrl}/api/photos/admin/reap-orphans`, {})
       .pipe(catchError(err => { this.reapState.set('error'); this.reapError.set(this.extractErrorMessage(err)); return of(null); }))
-      .subscribe(report => { if (!report) return; this.reapState.set('success'); this.reapReport.set(report); });
+      .subscribe(env => {
+        if (!env?.jobId) { this.reapState.set('idle'); return; }
+        this.pollAdminJob(env.jobId, 0,
+          report => { this.reapState.set('success'); this.reapReport.set(report as OrphanReapReport); },
+          err    => { this.reapState.set('error');   this.reapError.set(err); });
+      });
   }
 
   runReconcile(): void {
     this.reconcileState.set('running');
     this.reconcileReport.set(null);
     this.reconcileError.set(null);
-    this.http.post<ReconcileReport>(`${environment.apiUrl}/api/photos/admin/reconcile-storage`, {})
+    this.http.post<{ jobId: string }>(`${environment.apiUrl}/api/photos/admin/reconcile-storage`, {})
       .pipe(catchError(err => { this.reconcileState.set('error'); this.reconcileError.set(this.extractErrorMessage(err)); return of(null); }))
-      .subscribe(report => { if (!report) return; this.reconcileState.set('success'); this.reconcileReport.set(report); });
+      .subscribe(env => {
+        if (!env?.jobId) { this.reconcileState.set('idle'); return; }
+        this.pollAdminJob(env.jobId, 0,
+          report => { this.reconcileState.set('success'); this.reconcileReport.set(report as ReconcileReport); },
+          err    => { this.reconcileState.set('error');   this.reconcileError.set(err); });
+      });
+  }
+
+  /**
+   * Generic admin-job poller used by Reap + Reconcile. Both endpoints now
+   * return 202 Accepted with a jobId; the worker drains the queue and writes
+   * back ResultJson. Polls every 2s for up to 5 minutes.
+   */
+  private pollAdminJob(
+    jobId: string,
+    attempt: number,
+    onComplete: (report: unknown) => void,
+    onError: (msg: string) => void
+  ): void {
+    if (attempt > 150) {
+      onError('Timed out after 5 minutes waiting for a worker.');
+      return;
+    }
+    this.http.get<any>(`${environment.apiUrl}/api/photos/admin/jobs/${jobId}`)
+      .pipe(catchError(() => of(null)))
+      .subscribe(job => {
+        if (!job) { setTimeout(() => this.pollAdminJob(jobId, attempt + 1, onComplete, onError), 3000); return; }
+        if (job.status === 'complete') { onComplete(job.result || {}); return; }
+        if (job.status === 'error')    { onError(job.error || 'Worker reported error'); return; }
+        setTimeout(() => this.pollAdminJob(jobId, attempt + 1, onComplete, onError), 2000);
+      });
   }
 
   // ---- Users ---------------------------------------------------------------

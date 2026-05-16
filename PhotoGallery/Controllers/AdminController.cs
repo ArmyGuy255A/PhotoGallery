@@ -702,6 +702,55 @@ public class AdminController : ControllerBase
 
         var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var workersEnabled = cfg.GetValue("WorkersEnabled", true);
+        var localInstanceForReplicas = WorkerScheduleRegistry.InstanceId;
+
+        // Build the replica-centric view the FE actually shows: one row per
+        // physical replica (hostname like ca-photogallery-worker-dev--0000003-…),
+        // each row enumerates the jobs that replica is running. Groups the
+        // merged-workers list by InstanceId so a replica running 4 worker types
+        // collapses into a single row with 4 nested jobs.
+        var replicas = workers
+            .GroupBy(w => w.InstanceId ?? localInstanceForReplicas, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var jobs = g.OrderBy(j => j.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+                var anyAlive = jobs.Any(j => j.IsAlive);
+                var isLocal = string.Equals(g.Key, localInstanceForReplicas, StringComparison.OrdinalIgnoreCase);
+                // Heuristic role label: a replica that's running PhotoProcessing
+                // alongside the others is the worker app; a replica with no
+                // workers at all is api-only. Mixed (legacy single-replica) shows
+                // as api+worker.
+                var hasPhotoProc = jobs.Any(j => string.Equals(j.Name, "PhotoProcessing", StringComparison.OrdinalIgnoreCase));
+                var role = jobs.Count == 0
+                    ? "api-only"
+                    : (isLocal && workersEnabled) || hasPhotoProc
+                        ? (isLocal ? "api+worker" : "worker")
+                        : "api+worker";
+                return new ReplicaWorkerStatusDto
+                {
+                    InstanceId = g.Key,
+                    IsAlive    = anyAlive || jobs.Count == 0 && isLocal, // local replica is "alive" even with no workers
+                    Role       = role,
+                    Jobs       = jobs
+                };
+            })
+            .OrderByDescending(r => r.IsAlive)
+            .ThenBy(r => r.InstanceId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Guarantee the API replica appears even if it has no local workers and
+        // no heartbeat row yet (cold start).
+        if (!replicas.Any(r => string.Equals(r.InstanceId, localInstanceForReplicas, StringComparison.OrdinalIgnoreCase)))
+        {
+            replicas.Insert(0, new ReplicaWorkerStatusDto
+            {
+                InstanceId = localInstanceForReplicas,
+                IsAlive    = true,
+                Role       = workersEnabled ? "api+worker" : "api-only",
+                Jobs       = new List<WorkerStatusDto>()
+            });
+        }
+
         return Ok(new ServiceHealthDto
         {
             GeneratedAt = DateTime.UtcNow,
@@ -729,7 +778,8 @@ public class AdminController : ControllerBase
                 Error = queueFor(PhotoGallery.Models.ProcessingStatus.Error),
                 ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
             },
-            Workers = workers
+            Workers = workers,
+            Replicas = replicas
         });
     }
 
@@ -814,6 +864,17 @@ public class ServiceHealthDto
     public PhotoCountsDto Photos { get; set; } = new();
     public QueueCountsDto Queue { get; set; } = new();
     public List<WorkerStatusDto> Workers { get; set; } = new();
+    /// <summary>Replica-centric view: one entry per physical replica (hostname), with the jobs it's running nested inside.</summary>
+    public List<ReplicaWorkerStatusDto> Replicas { get; set; } = new();
+}
+
+public class ReplicaWorkerStatusDto
+{
+    public string InstanceId { get; set; } = string.Empty;
+    public bool IsAlive { get; set; }
+    /// <summary>Role label: `api-only`, `worker`, or `api+worker`.</summary>
+    public string Role { get; set; } = string.Empty;
+    public List<WorkerStatusDto> Jobs { get; set; } = new();
 }
 
 public class ReplicaInfoDto

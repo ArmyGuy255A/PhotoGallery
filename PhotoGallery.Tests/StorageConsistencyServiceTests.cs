@@ -400,8 +400,11 @@ public class StorageConsistencyServiceTests
     // ---- Edge: in-flight Processing items are never touched ----
 
     [Fact]
-    public async Task RunOnceAsync_Should_Skip_Items_In_Processing_State()
+    public async Task RunOnceAsync_Should_Skip_Processing_Items_With_Active_Lease()
     {
+        // An active lease means a worker is currently doing the work — the
+        // reconciler must NOT touch the row. (The orphan path — null or
+        // expired lease — is exercised by a separate test below.)
         var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
         var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Processing };
 
@@ -409,7 +412,15 @@ public class StorageConsistencyServiceTests
         var presentKeys = new List<string> { KeyFor(photo, "original"), KeyFor(photo, "low"), KeyFor(photo, "medium"), KeyFor(photo, "high") };
         SetupStorage(PrefixFor(photo), presentKeys);
 
-        var thumbItem = new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Thumbnail, Status = ProcessingStatus.Processing, ProcessingQueueId = queue.Id };
+        var thumbItem = new ProcessingQueueItem
+        {
+            PhotoId = photo.Id,
+            Quality = QualityType.Thumbnail,
+            Status = ProcessingStatus.Processing,
+            ProcessingQueueId = queue.Id,
+            // Active lease — 5 minutes in the future.
+            LeaseExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
         _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
         _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
         _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[] { thumbItem });
@@ -418,6 +429,36 @@ public class StorageConsistencyServiceTests
 
         Assert.Equal(ProcessingStatus.Processing, thumbItem.Status);
         _mockItemRepository.Verify(r => r.UpdateAsync(thumbItem), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_Should_Reset_Orphaned_Processing_Item_With_Null_Lease()
+    {
+        // ReleaseLeaseAsync nulls the lease but doesn't reset the status.
+        // If the caller then crashed, the row is stuck at Processing with
+        // no lease — the reconciler must treat it as an orphan and reset
+        // to Pending. (41 stuck items in trial traced to this path.)
+        var photo = MakePhoto(Guid.NewGuid(), Guid.NewGuid());
+        var queue = new ProcessingQueue { Id = Guid.NewGuid(), PhotoId = photo.Id, Status = ProcessingStatus.Processing };
+        var presentKeys = new List<string> { KeyFor(photo, "original"), KeyFor(photo, "low"), KeyFor(photo, "medium"), KeyFor(photo, "high") };
+        SetupStorage(PrefixFor(photo), presentKeys);
+
+        var thumbItem = new ProcessingQueueItem
+        {
+            PhotoId = photo.Id,
+            Quality = QualityType.Thumbnail,
+            Status = ProcessingStatus.Processing,
+            ProcessingQueueId = queue.Id,
+            LeaseExpiresAt = null  // <-- orphan signal
+        };
+        _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
+        _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
+        _mockItemRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(new[] { thumbItem });
+
+        await BuildService().RunOnceAsync(CancellationToken.None);
+
+        Assert.Equal(ProcessingStatus.Pending, thumbItem.Status);
+        _mockItemRepository.Verify(r => r.UpdateAsync(thumbItem), Times.Once);
     }
 
     // ---- Phase 4 §1: dead-letter behaviour removed — every Error item must retry forever ----
