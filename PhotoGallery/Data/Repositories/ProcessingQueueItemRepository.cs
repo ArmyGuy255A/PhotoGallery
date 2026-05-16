@@ -118,14 +118,34 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
 
         if (isSqlServer)
         {
-            // SQL Server-only atomic claim. The OUTPUT clause hands back exactly the ids
-            // this worker captured; concurrent callers see disjoint rows.
+                        // SQL Server-only atomic claim with priority ordering. The
+            // UPDATE-against-CTE shape lets us combine TOP (@batch) with
+            // ORDER BY — plain UPDATE TOP doesn't honour an ORDER BY clause.
+            // Priority: Thumbnail -> Medium -> High -> Low -> Watermark, so the
+            // user-visible variants (thumbnails for the grid, medium for the
+            // modal) land first when a large batch lands together.
+            // CreatedAt is the tiebreaker so within a priority bucket the
+            // queue still drains FIFO.
             var sql = @"
-                UPDATE TOP (@batch) ProcessingQueueItems
+                ;WITH leasable AS (
+                    SELECT TOP (@batch) Id, LeaseExpiresAt
+                    FROM ProcessingQueueItems WITH (UPDLOCK, READPAST)
+                    WHERE (Status = 0 OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
+                      AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE())
+                    ORDER BY
+                        CASE Quality
+                            WHEN 0 THEN 0
+                            WHEN 2 THEN 1
+                            WHEN 3 THEN 2
+                            WHEN 1 THEN 3
+                            WHEN 5 THEN 4
+                            ELSE 5
+                        END,
+                        CreatedAt
+                )
+                UPDATE leasable
                 SET LeaseExpiresAt = DATEADD(SECOND, @leaseSeconds, GETUTCDATE())
-                OUTPUT inserted.Id
-                WHERE (Status = 0 OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
-                  AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE())";
+                OUTPUT inserted.Id;";
 
             var ids = await _context.Database
                 .SqlQueryRaw<Guid>(

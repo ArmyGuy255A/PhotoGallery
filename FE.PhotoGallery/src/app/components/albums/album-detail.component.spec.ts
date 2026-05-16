@@ -208,6 +208,23 @@ describe('AlbumDetailComponent', () => {
   });
 
   afterEach(() => {
+    // The floating UploadProgressAsideComponent fires a periodic
+    // processing-summary fetch on mount. The spec doesn't care about it,
+    // so drain any pending matches before verify() to keep assertions
+    // focused on the test's own HTTP traffic.
+    const asideRequests = httpMock.match(r => r.url.includes('/processing-summary'));
+    asideRequests.forEach(r => r.flush({
+      albumId: 'album-1',
+      totalPhotos: 0,
+      photoStatus: { uploading: 0, pending: 0, processing: 0, complete: 0, failed: 0 },
+      byQuality: {
+        thumbnail: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        low: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        medium: { pending: 0, processing: 0, complete: 0, failed: 0 },
+        high: { pending: 0, processing: 0, complete: 0, failed: 0 }
+      },
+      updatedAt: '2026-05-15T00:00:00Z'
+    }));
     httpMock.verify();
   });
 
@@ -405,5 +422,136 @@ describe('AlbumDetailComponent — Phase 6 progressive grid', () => {
     expect(req.request.urlWithParams).toContain('pageSize=20');
     req.flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
   });
+
+  // -----------------------------------------------------------------------
+  // Phase 7: initial spinner only. The "Loaded X of Y" banner was removed
+  // in favour of auto-trickle pagination — every page loads in the
+  // background so the banner had nothing useful to convey.
+  // -----------------------------------------------------------------------
+  function loadingInitial() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-loading-initial"]'));
+  }
+  function loadingBanner() {
+    return fixture.debugElement.query(By.css('[data-testid="album-photos-loading-banner"]'));
+  }
+
+  it('shows the centred "Loading photos…" spinner before the first page lands', () => {
+    component.loader.loadNext();
+    fixture.detectChanges();
+
+    const initial = loadingInitial();
+    expect(initial).withContext('initial spinner present during first fetch').toBeTruthy();
+    expect(initial.nativeElement.textContent).toContain('Loading photos…');
+    expect(loadingBanner()).withContext('banner element removed from template').toBeFalsy();
+
+    // Stop the in-flight request so afterEach.verify() stays clean.
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+  });
+
+  it('never renders the "Loaded X of Y photos…" banner (auto-trickle replaces it)', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({
+        items: Array.from({ length: 20 }, (_, i) => ({
+          id: 'p' + i, fileName: 'p' + i + '.jpg', uploadDate: '2026-01-01T00:00:00Z'
+        })),
+        page: 1, pageSize: 20, totalCount: 264, hasMore: true
+      });
+    fixture.detectChanges();
+
+    expect(loadingInitial()).withContext('initial spinner gone after first page').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
+  });
+
+  it('hides the spinner once photos.length === totalCount', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({
+        items: [{ id: 'p1', fileName: 'p1.jpg', uploadDate: '2026-01-01T00:00:00Z' }],
+        page: 1, pageSize: 20, totalCount: 1, hasMore: false
+      });
+    fixture.detectChanges();
+
+    expect(loadingInitial()).withContext('initial spinner gone').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
+  });
+
+  it('keeps the empty-state copy and suppresses the spinner when the album is empty', () => {
+    component.loader.loadNext();
+    httpMock.expectOne(r => r.url.includes('/api/albums/A1/photos'))
+      .flush({ items: [], page: 1, pageSize: 20, totalCount: 0, hasMore: false });
+    fixture.detectChanges();
+
+    expect(emptyMessage()).withContext('empty-state still wins').toBeTruthy();
+    expect(loadingInitial()).withContext('initial spinner hidden in empty state').toBeFalsy();
+    expect(loadingBanner()).withContext('banner element no longer in template').toBeFalsy();
+  });
 });
 
+
+// ---------------------------------------------------------------------------
+// Owner display-name on album header (resolves GUID -> friendly name)
+// ---------------------------------------------------------------------------
+describe('AlbumDetailComponent — owner display name', () => {
+  let fixture: ComponentFixture<AlbumDetailComponent>;
+  let httpMock: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AlbumDetailComponent],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: CartService, useValue: new CartServiceStub() },
+        { provide: AuthService, useClass: AuthServiceStub },
+        { provide: ActivatedRoute, useValue: { params: of({ id: 'A1' }) } }
+      ]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AlbumDetailComponent);
+    fixture.detectChanges();
+    httpMock = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    try { httpMock.verify(); } catch { /* polling timer may have queued one */ }
+  });
+
+  it('renders the resolved display name instead of the raw GUID when present', () => {
+    const guid = '08a0e965-50e9-4cac-bc5d-e88b72d9a9f7';
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1`).flush({
+      id: 'A1', title: 'My Album', description: '',
+      createdDate: new Date().toISOString(),
+      createdBy: guid,
+      createdByDisplayName: 'Phillip Dieppa',
+      ownerId: 'u1'
+    });
+    httpMock.expectOne(r => r.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`))
+      .flush({ items: [], totalCount: 0, page: 1, pageSize: 20, hasMore: false });
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1/access-codes`).flush([]);
+    fixture.detectChanges();
+
+    const meta: HTMLElement = fixture.debugElement.query(By.css('p.meta')).nativeElement;
+    expect(meta.textContent).toContain('by Phillip Dieppa');
+    expect(meta.textContent).not.toContain(guid);
+  });
+
+  it('falls back to the raw createdBy value when display name is missing', () => {
+    const guid = '08a0e965-50e9-4cac-bc5d-e88b72d9a9f7';
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1`).flush({
+      id: 'A1', title: 'My Album', description: '',
+      createdDate: new Date().toISOString(),
+      createdBy: guid,
+      ownerId: 'u1'
+    });
+    httpMock.expectOne(r => r.url.startsWith(`${environment.apiUrl}/api/albums/A1/photos`))
+      .flush({ items: [], totalCount: 0, page: 1, pageSize: 20, hasMore: false });
+    httpMock.expectOne(`${environment.apiUrl}/api/albums/A1/access-codes`).flush([]);
+    fixture.detectChanges();
+
+    const meta: HTMLElement = fixture.debugElement.query(By.css('p.meta')).nativeElement;
+    expect(meta.textContent).toContain(`by ${guid}`);
+  });
+});

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
 using PhotoGallery.Hubs;
@@ -38,7 +39,7 @@ public class PhotosController : ControllerBase
 {
     private readonly IImageProcessor _imageProcessor;
     private readonly IStorageProvider _storageProvider;
-    private readonly IRepository<Photo> _photoRepository;
+    private readonly IPhotoRepository _photoRepository;
     private readonly IRepository<Album> _albumRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
     private readonly IRepository<ProcessingQueue> _queueRepository;
@@ -63,7 +64,7 @@ public class PhotosController : ControllerBase
     public PhotosController(
         IImageProcessor imageProcessor,
         IStorageProvider storageProvider,
-        IRepository<Photo> photoRepository,
+        IPhotoRepository photoRepository,
         IRepository<Album> albumRepository,
         IRepository<PhotoVersion> photoVersionRepository,
         IRepository<ProcessingQueue> queueRepository,
@@ -103,7 +104,7 @@ public class PhotosController : ControllerBase
     /// </summary>
     [Authorize]
     [HttpPost("albums/{albumId}/upload-tickets")]
-    public async Task<ActionResult<List<UploadTicketResponse>>> CreateUploadTickets(
+    public async Task<ActionResult<UploadTicketsResponse>> CreateUploadTickets(
         string albumId,
         [FromBody] List<UploadTicketRequest> files)
     {
@@ -124,7 +125,18 @@ public class PhotosController : ControllerBase
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
-        var responses = new List<UploadTicketResponse>(files.Count);
+        // Pull existing photos keyed by filename so we can:
+        //   * recycle orphan Uploading rows (the SPA hit /upload-tickets, never
+        //     completed, and the user is re-trying) — delete and reissue.
+        //   * short-circuit any other status into the new AlreadyComplete
+        //     channel so the SPA can mark the row done without re-uploading.
+        // The OrphanedBlobReaperService still sweeps the genuinely abandoned
+        // Uploading rows on its own schedule — this just makes re-attempts
+        // friction-free for the user.
+        var existing = await _photoRepository.GetExistingPhotoSummariesByNameAsync(albumGuid);
+
+        var tickets = new List<UploadTicketResponse>(files.Count);
+        var alreadyComplete = new List<CompletedUploadTicket>();
 
         foreach (var file in files)
         {
@@ -135,6 +147,48 @@ public class PhotosController : ControllerBase
                 return BadRequest(
                     $"{file.FileName}: size {file.Size} bytes is outside the allowed range " +
                     $"(0, {MaxUploadBytes}]");
+
+            if (existing.TryGetValue(file.FileName, out var hit))
+            {
+                if (hit.Status == PhotoProcessingStatus.Uploading)
+                {
+                    // Orphan from a prior failed ticket. Drop it (plus the
+                    // pending ProcessingQueue row created alongside it) and
+                    // fall through to issue a fresh ticket. ProcessingQueueItems
+                    // aren't created until /upload-complete, so we don't need
+                    // to scrub those here.
+                    var orphan = await _photoRepository.GetByIdAsync(hit.Id);
+                    if (orphan != null)
+                    {
+                        var staleQueues = await _queueRepository.GetAllAsync();
+                        foreach (var q in staleQueues.Where(q => q.PhotoId == hit.Id))
+                            await _queueRepository.DeleteAsync(q);
+                        await _photoRepository.DeleteAsync(orphan);
+                        await _photoRepository.SaveChangesAsync();
+                        _logger.LogInformation(
+                            "Recycled orphan Uploading photo {PhotoId} for filename {FileName} in album {AlbumId}",
+                            hit.Id, file.FileName, albumGuid);
+                    }
+                    existing.Remove(file.FileName);
+                    // fall through to ticket-minting below
+                }
+                else
+                {
+                    // Photo already present (any status other than Uploading).
+                    // Tell the SPA it's already done so the row renders as
+                    // queued/processing/complete without re-uploading.
+                    alreadyComplete.Add(new CompletedUploadTicket
+                    {
+                        PhotoId = hit.Id.ToString(),
+                        FileName = file.FileName
+                    });
+                    _logger.LogInformation(
+                        "Upload ticket short-circuited as AlreadyComplete for {FileName} " +
+                        "(existing photo {PhotoId}, status {Status}) in album {AlbumId} for user {UserId}",
+                        file.FileName, hit.Id, hit.Status, albumGuid, userId);
+                    continue;
+                }
+            }
 
             var photoId = Guid.NewGuid();
             var blobPath = $"photogallery/{albumGuid}/{photoId}/original.jpg";
@@ -163,15 +217,26 @@ public class PhotosController : ControllerBase
             // reconcile against.
             await _photoRepository.SaveChangesAsync();
 
+            // Reserve the name in the in-memory map under a non-Uploading
+            // sentinel so a SECOND occurrence of the same filename later in
+            // this batch is handled by the AlreadyComplete branch above
+            // rather than the orphan-recycle branch (which would delete the
+            // row we just created!). The DB row itself still has
+            // ProcessingStatus.Uploading — this is purely an in-memory hint
+            // to disambiguate "I just made this in the current request"
+            // from "a previous request left this orphaned in storage".
+            existing[file.FileName] = new ExistingPhotoSummary(photoId, PhotoProcessingStatus.Pending);
+
             var uploadUrl = await _storageProvider.GenerateWriteSasUrlAsync(blobPath, UploadSasTtl);
             var expiresAt = DateTime.UtcNow.Add(UploadSasTtl);
 
-            responses.Add(new UploadTicketResponse
+            tickets.Add(new UploadTicketResponse
             {
                 PhotoId = photoId.ToString(),
                 UploadUrl = uploadUrl,
                 BlobPath = blobPath,
-                ExpiresAt = expiresAt
+                ExpiresAt = expiresAt,
+                FileName = file.FileName
             });
 
             _logger.LogInformation(
@@ -179,7 +244,11 @@ public class PhotosController : ControllerBase
                 photoId, file.FileName, file.Size, albumGuid, userId);
         }
 
-        return Ok(responses);
+        return Ok(new UploadTicketsResponse
+        {
+            Tickets = tickets,
+            AlreadyComplete = alreadyComplete
+        });
     }
 
     /// <summary>
@@ -334,6 +403,11 @@ public class PhotosController : ControllerBase
         var uploadedPhotos = new List<PhotoUploadInfo>();
         var errors = new List<string>();
 
+        // Cache the album's existing filename set so the per-file duplicate
+        // check is a memory lookup. Includes Uploading rows (see
+        // CreateUploadTickets for the trade-off rationale).
+        var existingNames = await _photoRepository.GetExistingFileNamesAsync(albumGuid);
+
         foreach (var file in files)
         {
             try
@@ -343,6 +417,16 @@ public class PhotosController : ControllerBase
                     errors.Add($"{file.FileName}: File is empty");
                     continue;
                 }
+
+                if (existingNames.Contains(file.FileName))
+                {
+                    errors.Add($"{file.FileName}: A photo with this name already exists in the album. Delete the existing photo first.");
+                    _logger.LogInformation(
+                        "Rejected multipart upload for duplicate filename {FileName} in album {AlbumId} for user {UserId}",
+                        file.FileName, albumGuid, userId);
+                    continue;
+                }
+                existingNames.Add(file.FileName);
 
                 // Allowed image formats
                 var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/webp", "application/octet-stream" };
@@ -564,6 +648,183 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
+    /// Aggregate processing summary for an album. Returns counts per
+    /// <see cref="PhotoProcessingStatus"/> across photos and per-quality
+    /// counts across queue items, so the SPA can render a single floating
+    /// "X uploading, Y processing thumbnails, Z complete" widget instead
+    /// of per-photo progress bars. This is the recommended endpoint to
+    /// drive any in-flight progress UI at scale — one query returns the
+    /// whole album's state regardless of how many photos are in flight.
+    /// </summary>
+    [Authorize]
+    [HttpGet("albums/{albumId:guid}/processing-summary")]
+    public async Task<ActionResult<AlbumProcessingSummary>> GetAlbumProcessingSummary(Guid albumId)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var album = await _albumRepository.GetByIdAsync(albumId);
+        if (album == null)
+            return NotFound();
+
+        var isAdmin = User.IsInRole("Admin");
+        if (!isAdmin && album.OwnerId != userId)
+            return Forbid();
+
+        var allPhotos = await _photoRepository.GetAlbumPhotosAsync(albumId);
+        // GetAlbumPhotosAsync filters out Uploading status — re-include them
+        // for the summary so the user sees pending-upload work.
+        var uploadingPhotos = (await _photoRepository.GetAllAsync())
+            .Where(p => p.AlbumId == albumId && p.ProcessingStatus == PhotoProcessingStatus.Uploading)
+            .ToList();
+        var photos = allPhotos.Concat(uploadingPhotos).ToList();
+        var photoIds = photos.Select(p => p.Id).ToHashSet();
+
+        // Per-quality queue items are the source of truth for processing
+        // state — Photo.ProcessingStatus only transitions Uploading->Pending
+        // in the upload-complete controller, never to Processing/Complete.
+        // We classify each non-Uploading photo by aggregating its queue items
+        // so the aside counters actually move as work drains.
+        var items = (await _queueItemRepository.GetAllAsync())
+            .Where(i => photoIds.Contains(i.PhotoId))
+            .ToList();
+        var itemsByPhoto = items.GroupBy(i => i.PhotoId).ToDictionary(g => g.Key, g => g.ToList());
+
+        var statusCounts = new PhotoStatusCounts
+        {
+            Uploading = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Uploading),
+            Pending = 0,
+            Processing = 0,
+            Complete = 0,
+            Failed = 0
+        };
+        // The four base qualities the SPA tracks (Watermark is not
+        // user-facing and lands as a follow-up enqueue after all four).
+        const int baseQualities = 4;
+        foreach (var p in photos.Where(p => p.ProcessingStatus != PhotoProcessingStatus.Uploading))
+        {
+            itemsByPhoto.TryGetValue(p.Id, out var its);
+            its ??= new List<ProcessingQueueItem>();
+            var basis = its.Where(i =>
+                i.Quality == QualityType.Thumbnail || i.Quality == QualityType.Low ||
+                i.Quality == QualityType.Medium    || i.Quality == QualityType.High).ToList();
+
+            var completeCount = basis.Count(i => i.Status == ProcessingStatus.Complete);
+            var processingCount = basis.Count(i => i.Status == ProcessingStatus.Processing);
+            var errorCount = basis.Count(i => i.Status == ProcessingStatus.Error);
+
+            if (basis.Count == baseQualities && completeCount == baseQualities)
+                statusCounts.Complete++;
+            else if (errorCount > 0 && processingCount == 0 && completeCount + errorCount == basis.Count)
+                statusCounts.Failed++;
+            else if (processingCount > 0 || completeCount > 0)
+                statusCounts.Processing++;
+            else
+                statusCounts.Pending++;
+        }
+
+        QualityCounts CountFor(QualityType q) => new()
+        {
+            Pending = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Pending),
+            Processing = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Processing),
+            Complete = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Complete),
+            Failed = items.Count(i => i.Quality == q && i.Status == ProcessingStatus.Error)
+        };
+
+        return Ok(new AlbumProcessingSummary
+        {
+            AlbumId = albumId.ToString(),
+            TotalPhotos = photos.Count,
+            PhotoStatus = statusCounts,
+            ByQuality = new ByQualityCounts
+            {
+                Thumbnail = CountFor(QualityType.Thumbnail),
+                Low = CountFor(QualityType.Low),
+                Medium = CountFor(QualityType.Medium),
+                High = CountFor(QualityType.High)
+            },
+            UpdatedAt = DateTime.UtcNow
+        });
+    }
+
+    /// <summary>
+    /// Batch processing-status fetch — one round-trip for many photos.
+    /// Used as a defense-in-depth fallback by the SPA when SignalR events
+    /// for newly-uploaded photos are dropped (silent network failure,
+    /// auth-on-handshake hiccup, FE effect race). Switched from GET-with-
+    /// query-string to POST-with-body because real-world batches hit the
+    /// ~2KB URL ceiling once you cross ~50 GUIDs; the SPA chunks at 100
+    /// per call to keep the request body small and parallelizes across
+    /// the chunks. Server still caps the per-request id list at 200 as a
+    /// sanity guard.
+    /// </summary>
+    [Authorize]
+    [HttpPost("batch-status")]
+    public async Task<ActionResult<IEnumerable<ProcessingStatusDto>>> GetBatchProcessingStatus(
+        [FromBody] BatchStatusRequest request)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        if (request?.PhotoIds == null || request.PhotoIds.Count == 0)
+            return Ok(Array.Empty<ProcessingStatusDto>());
+
+        var guids = request.PhotoIds
+            .Select(s => Guid.TryParse(s, out var g) ? (Guid?)g : null)
+            .Where(g => g.HasValue)
+            .Select(g => g!.Value)
+            .Distinct()
+            .Take(200) // sanity cap; SPA chunks at 100 in practice
+            .ToList();
+
+        if (guids.Count == 0) return Ok(Array.Empty<ProcessingStatusDto>());
+
+        var isAdmin = User.IsInRole("Admin");
+        var allPhotos = await _photoRepository.GetAllAsync();
+        var photos = allPhotos.Where(p => guids.Contains(p.Id)).ToList();
+        // Filter to photos the caller can see (own uploads or admin).
+        var visible = photos.Where(p => isAdmin || p.UploadedBy == userId).ToList();
+        var visibleIds = visible.Select(p => p.Id).ToHashSet();
+
+        var allItems = await _queueItemRepository.GetAllAsync();
+        var byPhoto = allItems
+            .Where(i => visibleIds.Contains(i.PhotoId))
+            .GroupBy(i => i.PhotoId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var result = new List<ProcessingStatusDto>(visible.Count);
+        foreach (var photo in visible)
+        {
+            byPhoto.TryGetValue(photo.Id, out var items);
+            items ??= new List<ProcessingQueueItem>();
+            var completed = items.Where(i => i.Status == ProcessingStatus.Complete).ToList();
+            var hasThumbnail = completed.Any(i => i.Quality == QualityType.Thumbnail);
+            var hasLow = completed.Any(i => i.Quality == QualityType.Low);
+            var hasMedium = completed.Any(i => i.Quality == QualityType.Medium);
+            var hasHigh = completed.Any(i => i.Quality == QualityType.High);
+            var completedVersions = (hasThumbnail ? 1 : 0) + (hasLow ? 1 : 0) + (hasMedium ? 1 : 0) + (hasHigh ? 1 : 0);
+            var status = completedVersions == 4 ? "Complete" : "Processing";
+            result.Add(new ProcessingStatusDto
+            {
+                PhotoId = photo.Id.ToString(),
+                Status = status,
+                CompletedVersions = completedVersions,
+                TotalVersions = 4,
+                PercentComplete = completedVersions * 25,
+                ProcessingStartedAt = photo.ProcessingStartedAt,
+                ProcessingCompletedAt = completedVersions == 4 ? DateTime.UtcNow : null,
+                HasThumbnail = hasThumbnail,
+                HasLow = hasLow,
+                HasMedium = hasMedium,
+                HasHigh = hasHigh
+            });
+        }
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Delete a single photo (owner or admin only).
     /// Removes every storage object under <c>photogallery/{albumId}/{photoId}/</c>
     /// (originals, every quality variant, watermarked variants) and then deletes
@@ -620,6 +881,23 @@ public class PhotosController : ControllerBase
                 "Failed to list storage objects under {Prefix} while deleting photo {PhotoId} (continuing — orphans will be picked up by the consistency sweep)",
                 prefix, photoId);
         }
+
+        // Scrub child rows whose FK uses ON DELETE RESTRICT before deleting
+        // the Photo itself. EF Core's cascade-configured children (PhotoFiles,
+        // PhotoVersions, PhotoVersionUrls) clean themselves up via the parent
+        // delete. These four (Downloads, UserCartItems, ProcessingQueueItems,
+        // ProcessingQueues) need explicit removal or the SaveChangesAsync
+        // below crashes with FK constraint errors.
+        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
+        var dependents = await ctx.Downloads.Where(d => d.PhotoId == photoId).ToListAsync();
+        if (dependents.Count > 0) ctx.Downloads.RemoveRange(dependents);
+        var cartItems = await ctx.UserCartItems.Where(c => c.PhotoId == photoId).ToListAsync();
+        if (cartItems.Count > 0) ctx.UserCartItems.RemoveRange(cartItems);
+        var queueItems = await ctx.ProcessingQueueItems.Where(i => i.PhotoId == photoId).ToListAsync();
+        if (queueItems.Count > 0) ctx.ProcessingQueueItems.RemoveRange(queueItems);
+        var queues = await ctx.ProcessingQueues.Where(q => q.PhotoId == photoId).ToListAsync();
+        if (queues.Count > 0) ctx.ProcessingQueues.RemoveRange(queues);
+        await ctx.SaveChangesAsync();
 
         await _photoRepository.DeleteAsync(photo);
         await _photoRepository.SaveChangesAsync();
@@ -772,6 +1050,35 @@ public class UploadTicketResponse
     public string UploadUrl { get; set; } = string.Empty;
     public string BlobPath { get; set; } = string.Empty;
     public DateTime ExpiresAt { get; set; }
+    public string FileName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Per-file "already complete" entry for <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// Returned when a duplicate filename already exists in the album in any
+/// non-<see cref="PhotoProcessingStatus.Uploading"/> status. The SPA treats
+/// each entry as a synthetic queued/complete row and skips the PUT + complete
+/// dance — the photo is already there with the given Id.
+/// </summary>
+public class CompletedUploadTicket
+{
+    public string PhotoId { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Envelope returned by <c>POST /api/photos/albums/{id}/upload-tickets</c>.
+/// Always 200 OK. <see cref="Tickets"/> covers files the SPA should upload
+/// directly to storage; <see cref="AlreadyComplete"/> covers duplicate
+/// filenames whose existing row is already at or past <c>Pending</c> — the
+/// SPA can render them as done immediately. Orphan rows in
+/// <see cref="PhotoProcessingStatus.Uploading"/> are silently recycled and
+/// show up as fresh entries in <see cref="Tickets"/>.
+/// </summary>
+public class UploadTicketsResponse
+{
+    public List<UploadTicketResponse> Tickets { get; set; } = new();
+    public List<CompletedUploadTicket> AlreadyComplete { get; set; } = new();
 }
 
 /// <summary>
@@ -789,4 +1096,55 @@ public class UploadCompleteResponse
 {
     public string PhotoId { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Body for <c>POST /api/photos/batch-status</c>. Used instead of a query
+/// string because real-world batches (~456 GUIDs in the field) bust the
+/// ~2KB URL ceiling.
+/// </summary>
+public class BatchStatusRequest
+{
+    public List<string> PhotoIds { get; set; } = new();
+}
+
+/// <summary>
+/// Response from <c>GET /api/photos/albums/{albumId}/processing-summary</c>.
+/// Drives the floating in-flight progress aside on the album page. One
+/// query gives the SPA the whole album's processing state regardless of
+/// how many photos are in flight — the recommended primitive for any
+/// progress UI past ~50 photos.
+/// </summary>
+public class AlbumProcessingSummary
+{
+    public string AlbumId { get; set; } = string.Empty;
+    public int TotalPhotos { get; set; }
+    public PhotoStatusCounts PhotoStatus { get; set; } = new();
+    public ByQualityCounts ByQuality { get; set; } = new();
+    public DateTime UpdatedAt { get; set; }
+}
+
+public class PhotoStatusCounts
+{
+    public int Uploading { get; set; }
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Failed { get; set; }
+}
+
+public class ByQualityCounts
+{
+    public QualityCounts Thumbnail { get; set; } = new();
+    public QualityCounts Low { get; set; } = new();
+    public QualityCounts Medium { get; set; } = new();
+    public QualityCounts High { get; set; } = new();
+}
+
+public class QualityCounts
+{
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Failed { get; set; }
 }

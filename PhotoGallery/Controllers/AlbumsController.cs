@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
+using PhotoGallery.Services.Storage;
 using System.Security.Claims;
 
 namespace PhotoGallery.Controllers;
@@ -19,6 +21,8 @@ public class AlbumsController : ControllerBase
     private readonly IPhotoRepository _photoRepository;
     private readonly IAccessCodeRepository _accessCodeRepository;
     private readonly PhotoVersionUrlService _urlService;
+    private readonly IUserDisplayNameResolver _displayNames;
+    private readonly IStorageProvider _storageProvider;
     private readonly ILogger<AlbumsController> _logger;
 
     public AlbumsController(
@@ -26,12 +30,16 @@ public class AlbumsController : ControllerBase
         IPhotoRepository photoRepository,
         IAccessCodeRepository accessCodeRepository,
         PhotoVersionUrlService urlService,
+        IUserDisplayNameResolver displayNames,
+        IStorageProvider storageProvider,
         ILogger<AlbumsController> logger)
     {
         _albumRepository = albumRepository;
         _photoRepository = photoRepository;
         _accessCodeRepository = accessCodeRepository;
         _urlService = urlService;
+        _displayNames = displayNames;
+        _storageProvider = storageProvider;
         _logger = logger;
     }
 
@@ -53,6 +61,11 @@ public class AlbumsController : ControllerBase
             ? allAlbums.ToList()
             : allAlbums.Where(a => a.OwnerId == userId).ToList();
 
+        // Resolve CreatedBy ids -> display names in one batched pass. Listing
+        // N albums by the same uploader does 1 DB lookup, not N.
+        var displayNames = await _displayNames.ResolveManyAsync(
+            userAlbums.Select(a => a.CreatedBy));
+
         var result = userAlbums.Select(a => new AlbumListDto
         {
             Id = a.Id.ToString(),
@@ -60,6 +73,8 @@ public class AlbumsController : ControllerBase
             Description = a.Description ?? string.Empty,
             CreatedDate = a.CreatedDate,
             OwnerId = a.OwnerId,
+            CreatedBy = a.CreatedBy,
+            CreatedByDisplayName = LookupDisplayName(displayNames, a.CreatedBy),
             CanManage = a.OwnerId == userId || User.IsInRole("Admin")
         }).ToList();
 
@@ -97,7 +112,7 @@ public class AlbumsController : ControllerBase
 
         await _albumRepository.SaveChangesAsync();
 
-        return CreatedAtAction(nameof(GetAlbumById), new { id = album.Id }, MapToDetailDto(album));
+        return CreatedAtAction(nameof(GetAlbumById), new { id = album.Id }, await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -123,7 +138,7 @@ public class AlbumsController : ControllerBase
             return Forbid();
 
         _logger.LogInformation("Album {AlbumId} retrieved by {UserId}", albumId, userId);
-        return Ok(MapToDetailDto(album));
+        return Ok(await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -162,7 +177,7 @@ public class AlbumsController : ControllerBase
         await _albumRepository.SaveChangesAsync();
         _logger.LogInformation("Album {AlbumId} updated by {UserId}", albumId, userId);
 
-        return Ok(MapToDetailDto(album));
+        return Ok(await MapToDetailDtoAsync(album));
     }
 
     /// <summary>
@@ -185,6 +200,61 @@ public class AlbumsController : ControllerBase
         // Admins can manage any album — see UpdateAlbum comment.
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
+
+        // Best-effort storage cleanup BEFORE the DB delete — list everything
+        // under photogallery/{albumId}/ (every photo's originals + variants
+        // + watermarks) and delete each key. Mirrors the per-photo cleanup
+        // in PhotosController.DeletePhoto. Failures are logged and the DB
+        // delete still proceeds; orphaned blobs are reclaimed by
+        // OrphanedBlobReaperService on its next sweep.
+        var prefix = $"photogallery/{albumId}/";
+        try
+        {
+            var keys = await _storageProvider.ListAsync(prefix);
+            var keyList = keys?.ToList() ?? new List<string>();
+            foreach (var key in keyList)
+            {
+                try { await _storageProvider.DeleteAsync(key); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to delete storage object {Key} while deleting album {AlbumId} (continuing)",
+                        key, albumId);
+                }
+            }
+            _logger.LogInformation(
+                "Deleted {Count} storage object(s) under {Prefix} for album {AlbumId}",
+                keyList.Count, prefix, albumId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to list storage objects under {Prefix} while deleting album {AlbumId} (continuing — orphan reaper will reclaim)",
+                prefix, albumId);
+        }
+
+        // EF Core cascades Album -> Photo + AccessCode automatically, but the
+        // photo-level RESTRICT-FK children (Downloads, UserCartItems,
+        // ProcessingQueueItems, ProcessingQueues) block the cascade with
+        // FK constraint errors. Scrub them in album scope first, mirroring
+        // what DeletePhoto does for a single photo.
+        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
+        var photoIds = await ctx.Photos
+            .Where(p => p.AlbumId == albumId)
+            .Select(p => p.Id)
+            .ToListAsync();
+        if (photoIds.Count > 0)
+        {
+            var downloads = await ctx.Downloads.Where(d => photoIds.Contains(d.PhotoId)).ToListAsync();
+            if (downloads.Count > 0) ctx.Downloads.RemoveRange(downloads);
+            var cartItems = await ctx.UserCartItems.Where(c => photoIds.Contains(c.PhotoId)).ToListAsync();
+            if (cartItems.Count > 0) ctx.UserCartItems.RemoveRange(cartItems);
+            var queueItems = await ctx.ProcessingQueueItems.Where(i => photoIds.Contains(i.PhotoId)).ToListAsync();
+            if (queueItems.Count > 0) ctx.ProcessingQueueItems.RemoveRange(queueItems);
+            var queues = await ctx.ProcessingQueues.Where(q => photoIds.Contains(q.PhotoId)).ToListAsync();
+            if (queues.Count > 0) ctx.ProcessingQueues.RemoveRange(queues);
+            await ctx.SaveChangesAsync();
+        }
 
         await _albumRepository.DeleteAsync(album);
         await _albumRepository.SaveChangesAsync();
@@ -319,8 +389,12 @@ public class AlbumsController : ControllerBase
             return Forbid();
 
         var allCodes = await _accessCodeRepository.GetAllAsync();
-        var albumCodes = allCodes
-            .Where(c => c.AlbumId == albumGuid)
+        var albumCodesEntities = allCodes.Where(c => c.AlbumId == albumGuid).ToList();
+
+        var codeDisplayNames = await _displayNames.ResolveManyAsync(
+            albumCodesEntities.Select(c => c.CreatedBy));
+
+        var albumCodes = albumCodesEntities
             .Select(c => new AccessCodeListDto
             {
                 Id = c.Id.ToString(),
@@ -328,6 +402,7 @@ public class AlbumsController : ControllerBase
                 ExpirationDate = c.ExpirationDate,
                 CreatedDate = c.CreatedDate,
                 CreatedBy = c.CreatedBy,
+                CreatedByDisplayName = LookupDisplayName(codeDisplayNames, c.CreatedBy),
                 IsExpired = c.ExpirationDate.HasValue && c.ExpirationDate < DateTime.UtcNow
             })
             .ToList();
@@ -416,6 +491,7 @@ public class AlbumsController : ControllerBase
             ExpirationDate = accessCode.ExpirationDate,
             CreatedDate = accessCode.CreatedDate,
             CreatedBy = accessCode.CreatedBy,
+            CreatedByDisplayName = await _displayNames.ResolveAsync(accessCode.CreatedBy),
             IsExpired = false
         });
     }
@@ -456,7 +532,7 @@ public class AlbumsController : ControllerBase
         return NoContent();
     }
 
-    private AlbumDetailDto MapToDetailDto(Album album)
+    private async Task<AlbumDetailDto> MapToDetailDtoAsync(Album album)
     {
         return new AlbumDetailDto
         {
@@ -465,8 +541,18 @@ public class AlbumsController : ControllerBase
             Description = album.Description ?? string.Empty,
             OwnerId = album.OwnerId,
             CreatedDate = album.CreatedDate,
-            CreatedBy = album.CreatedBy
+            CreatedBy = album.CreatedBy,
+            CreatedByDisplayName = await _displayNames.ResolveAsync(album.CreatedBy)
         };
+    }
+
+    private static string LookupDisplayName(IReadOnlyDictionary<string, string> map, string? key)
+    {
+        if (!string.IsNullOrWhiteSpace(key) && map.TryGetValue(key, out var name))
+        {
+            return name;
+        }
+        return UserDisplayNameResolver.DefaultDisplayName;
     }
 
     private static string GenerateAccessCode()
@@ -490,6 +576,10 @@ public class AlbumListDto
     public string Description { get; set; } = string.Empty;
     public DateTime CreatedDate { get; set; }
     public string OwnerId { get; set; } = string.Empty;
+    /// <summary>Raw uploader user id; kept for clients that need the GUID.</summary>
+    public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name (e.g. "Phillip Dieppa") for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool CanManage { get; set; }
 }
 
@@ -504,6 +594,8 @@ public class AlbumDetailDto
     public string OwnerId { get; set; } = string.Empty;
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name (e.g. "Phillip Dieppa") for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -561,6 +653,8 @@ public class AccessCodeListDto
     public DateTime? ExpirationDate { get; set; }
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool IsExpired { get; set; }
 }
 
@@ -574,6 +668,8 @@ public class AccessCodeDetailDto
     public DateTime? ExpirationDate { get; set; }
     public DateTime CreatedDate { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
+    /// <summary>Resolved display name for FE rendering.</summary>
+    public string CreatedByDisplayName { get; set; } = string.Empty;
     public bool IsExpired { get; set; }
 }
 

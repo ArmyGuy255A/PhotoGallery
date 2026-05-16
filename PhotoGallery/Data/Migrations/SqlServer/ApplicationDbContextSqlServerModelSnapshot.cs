@@ -308,6 +308,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                     b.Property<int>("Quality")
                         .HasColumnType("int");
 
+                    b.Property<string>("UserId")
+                        .HasColumnType("nvarchar(max)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AccessCodeId");
@@ -394,6 +397,10 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                         .IsUnique();
 
                     b.HasIndex("UserId");
+
+                    b.HasIndex("AlbumId", "FileName")
+                        .IsUnique()
+                        .HasFilter("[ProcessingStatus] <> 4");
 
                     b.ToTable("Photos");
                 });
@@ -674,6 +681,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("LastName")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
@@ -683,6 +693,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
 
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("LoginCount")
+                        .HasColumnType("int");
 
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
@@ -739,6 +752,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                     b.Property<string>("IpAddress")
                         .HasMaxLength(45)
                         .HasColumnType("nvarchar(45)");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("UserId")
                         .HasColumnType("nvarchar(450)");

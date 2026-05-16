@@ -122,6 +122,13 @@ export interface ModalPhoto {
       line-height: 1;
       padding: 0;
       font-family: Arial, sans-serif;
+      /* Mobile fix: the image inside .modal-content was painting on top of
+         the close/nav buttons because all three are positioned children of
+         the same flex backdrop with no explicit stacking context. Give the
+         controls a higher z-index than the image-bearing content so they
+         remain tappable on small viewports where the image fills the
+         screen. */
+      z-index: 2;
     }
 
     .close-btn:hover {

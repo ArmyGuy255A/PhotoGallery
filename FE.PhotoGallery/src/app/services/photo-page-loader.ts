@@ -60,6 +60,35 @@ export class PhotoPageLoader<T> {
   readonly totalCount = signal<number>(0);
 
   /**
+   * Flipped to true the first time <c>loadNext</c> completes successfully
+   * (including an empty envelope). Stays false on errors, so a transient
+   * failure doesn't force the component into the "X of Y" banner without
+   * a real page result behind it.
+   *
+   * Drives the album header UX:
+   *   - false + isLoading → centred "Loading photos…" spinner
+   *   - true  + photos<total → inline "Loaded X of Y photos…" banner
+   *   - true  + photos===total → grid only
+   */
+  readonly hasLoadedFirstPage = signal<boolean>(false);
+
+  /**
+   * Optional hook fired after every successful page load (after
+   * <c>onPageLoaded</c>). Components use this to nudge an
+   * IntersectionObserver into re-evaluating the sentinel — once the new page
+   * is appended the sentinel often remains within the viewport (especially
+   * with a generous <c>rootMargin</c>), and IntersectionObserver only fires on
+   * intersection-state transitions, so "still visible" by itself never
+   * triggers another load. The conventional fix is for the consumer to
+   * <c>unobserve(sentinel); observe(sentinel);</c> which forces a fresh
+   * evaluation against the now-shorter page.
+   *
+   * Plain mutable property rather than a constructor arg so the wiring can be
+   * attached *after* the observer is created in <c>ngAfterViewInit</c>.
+   */
+  onLoadCompleted?: () => void;
+
+  /**
    * Convenience signal: true exactly when the loader has finished loading,
    * accumulated zero photos, and the server confirmed there are no more pages.
    * This is the trigger for the "No photos yet" empty-state copy — never just
@@ -108,7 +137,17 @@ export class PhotoPageLoader<T> {
           this.totalCount.set(envelope?.totalCount ?? this.photos().length);
           this.hasMore.set(!!envelope?.hasMore);
           this.isLoading.set(false);
+          this.hasLoadedFirstPage.set(true);
           this.onPageLoaded?.(items);
+          this.onLoadCompleted?.();
+
+          // Auto-trickle: schedule the next page so all photos eventually
+          // land without needing the user to scroll or open a carousel
+          // beyond the loaded range. Bounded by hasMore so the recursion
+          // terminates on the server's last page.
+          if (this.autoLoadEnabled && this.hasMore()) {
+            setTimeout(() => this.loadNext(), this.autoLoadDelayMs);
+          }
         },
         error: () => {
           // Surface the failure as "not loading any more" without flipping
@@ -130,6 +169,7 @@ export class PhotoPageLoader<T> {
     this.hasMore.set(true);
     this.totalCount.set(0);
     this.isLoading.set(false);
+    this.hasLoadedFirstPage.set(false);
   }
 
   /**
@@ -147,4 +187,28 @@ export class PhotoPageLoader<T> {
     this.destroy$.next();
     this.destroy$.complete();
   }
+
+  /**
+   * Auto-trickle mode: after each successful page load the loader schedules
+   * the next <c>loadNext</c> call automatically until the server reports
+   * <c>hasMore=false</c>. The small inter-page delay keeps the API call rate
+   * reasonable while the user is also interacting with the grid, and
+   * spaces out the page renders so the browser doesn't paint a 500-image
+   * grid in a single tick.
+   *
+   * Components that previously relied on the IntersectionObserver-driven
+   * pagination still work — auto-load is additive. The "Loaded X of Y"
+   * banner becomes unnecessary because every photo eventually appears on
+   * its own; components are free to drop it.
+   */
+  enableAutoLoad(delayMs: number = 200): void {
+    this.autoLoadEnabled = true;
+    this.autoLoadDelayMs = delayMs;
+    if (!this.isLoading() && this.hasMore()) {
+      this.loadNext();
+    }
+  }
+
+  private autoLoadEnabled = false;
+  private autoLoadDelayMs = 200;
 }

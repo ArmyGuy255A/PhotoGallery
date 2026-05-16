@@ -221,8 +221,7 @@ builder.Services.AddSingleton<WatermarkService>();
 builder.Services.AddScoped<IWatermarkTextResolver, WatermarkTextResolver>();
 builder.Services.AddScoped<IWatermarkBackfillService, WatermarkBackfillService>();
 builder.Services.AddScoped<GdprService>();
-builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
-builder.Services.AddScoped<GdprService>();
+builder.Services.AddScoped<IUserDisplayNameResolver, UserDisplayNameResolver>();
 
 // Register image processing service as singleton (manages its own scopes for background worker)
 builder.Services.AddSingleton<IImageProcessor, ImageProcessingService>();
@@ -284,6 +283,16 @@ builder.Services.Configure<AuthenticationOptions>(options =>
 
 builder.Services.AddControllersWithViews();
 
+// Override ASP.NET's default ProblemDetails-shaped 400 response so model
+// binding / validation failures come back in the same envelope the global
+// ExceptionHandlingMiddleware emits. Without this, controllers decorated with
+// [ApiController] auto-generate { title, status, type, errors } responses that
+// don't match the SPA's error-toast contract.
+builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = PhotoGallery.Middleware.ApiErrorResponseFactory.ValidationProblem;
+});
+
 // SignalR hub for real-time photo-processing progress (Phase 3).
 // JWT auth on the WebSocket handshake is wired via the OnMessageReceived
 // callback in Authentication/DependencyInjection.cs — browsers can't set
@@ -327,6 +336,23 @@ else
 app.UseHttpsRedirection();
 app.UseRouting();
 
+// Trace-id surfacing + global API exception handling.
+//
+// Both run only for /api/* requests so the legacy MVC / Razor surfaces
+// continue to use app.UseExceptionHandler("/Home/Error") (see above). The
+// trace-id middleware MUST be outside the exception middleware so the header
+// is written via OnStarting even when the exception middleware rewrites the
+// response (Response.Clear keeps OnStarting callbacks).
+//
+// Ordering note: both are wired BEFORE UseAuthentication so authentication
+// failures (e.g. token validation throws) are caught by the same envelope and
+// the trace id reaches the wire.
+app.UseWhen(ctx => ctx.Request.Path.StartsWithSegments("/api"), apiBranch =>
+{
+    apiBranch.UseMiddleware<PhotoGallery.Middleware.TraceIdHeaderMiddleware>();
+    apiBranch.UseMiddleware<PhotoGallery.Middleware.ExceptionHandlingMiddleware>();
+});
+
 // Enable CORS (before authentication)
 app.UseCors("AllowFrontendDev");
 
@@ -362,6 +388,11 @@ app.MapRazorPages()
 // SPA passes the JWT as ?access_token=... on the WS upgrade. See
 // Authentication/DependencyInjection.cs → OnMessageReceived.
 app.MapHub<PhotoProgressHub>("/hubs/photo-progress");
+
+// Fallback for unmatched /api/* routes so 404s come back in the uniform
+// envelope rather than the framework's empty 404. Registered after all
+// controller / hub mappings so it only catches genuinely unmapped paths.
+app.MapFallback("/api/{*rest}", PhotoGallery.Middleware.ApiErrorResponseFactory.WriteNotFoundAsync);
 
 // Start image processing worker
 using (var scope = app.Services.CreateScope())
