@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [trial, main]
 
+# Opt every JS action into Node 24 ahead of the June 2026 forced cutover.
+# Silences the Node 20 deprecation warning surfaced on every workflow run.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   backend:
     name: Backend build + tests

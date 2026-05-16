@@ -543,13 +543,13 @@ type SortDir = 'asc' | 'desc';
                 <input *ngIf="s.dataType !== 'bool'"
                   type="text"
                   class="form-input"
-                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? ''"
+                  [value]="settingValueFor(s)"
                   (input)="setSettingDraft(s.key, $any($event.target).value)"
                   [attr.placeholder]="s.defaultValue"
                   [attr.data-testid]="'admin-setting-input-' + s.key" />
                 <select *ngIf="s.dataType === 'bool'"
                   class="form-input"
-                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? s.defaultValue"
+                  [value]="settingValueFor(s)"
                   (change)="setSettingDraft(s.key, $any($event.target).value)"
                   [attr.data-testid]="'admin-setting-input-' + s.key">
                   <option value="true">true</option>
@@ -983,6 +983,21 @@ export class AdminSettingsComponent {
 
   setSettingDraft(key: string, value: string): void {
     this.settingDrafts.update(d => ({ ...d, [key]: value }));
+  }
+
+  /**
+   * Resolve the current value for a setting input. Returns the user's
+   * pending draft if they've started typing; otherwise the live value
+   * from the backend (currentValue, with defaultValue as the last-resort
+   * fallback). Extracted from the template because Angular's strict
+   * template type-check flags chained ?? expressions over signal calls
+   * as redundant — easier to express in TS.
+   */
+  settingValueFor(s: RuntimeSetting): string {
+    const draft = this.settingDrafts()[s.key];
+    if (draft !== undefined) return draft;
+    if (s.currentValue !== undefined && s.currentValue !== null) return s.currentValue;
+    return s.defaultValue ?? '';
   }
 
   isSettingDirty(s: RuntimeSetting): boolean {

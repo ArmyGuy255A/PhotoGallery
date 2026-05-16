@@ -14,6 +14,11 @@ permissions:
   pull-requests: read   # read labels of the merging PR
   actions: write        # dispatch release.yml after creating the release
 
+# Opt every JS action into Node 24 ahead of the June 2026 forced cutover.
+# Silences the Node 20 deprecation warning surfaced on every workflow run.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   cut-release:
     name: Cut release
