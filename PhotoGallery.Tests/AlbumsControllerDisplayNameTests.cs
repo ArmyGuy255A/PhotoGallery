@@ -105,6 +105,7 @@ public class AlbumsControllerDisplayNameTests
             new Mock<IAccessCodeRepository>().Object,
             NewUrlService(),
             resolver,
+            new Mock<PhotoGallery.Services.Storage.IStorageProvider>().Object,
             NullLogger<AlbumsController>.Instance);
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };

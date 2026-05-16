@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Interfaces;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
+using PhotoGallery.Services.Storage;
 using System.Security.Claims;
 
 namespace PhotoGallery.Controllers;
@@ -21,6 +22,7 @@ public class AlbumsController : ControllerBase
     private readonly IAccessCodeRepository _accessCodeRepository;
     private readonly PhotoVersionUrlService _urlService;
     private readonly IUserDisplayNameResolver _displayNames;
+    private readonly IStorageProvider _storageProvider;
     private readonly ILogger<AlbumsController> _logger;
 
     public AlbumsController(
@@ -29,6 +31,7 @@ public class AlbumsController : ControllerBase
         IAccessCodeRepository accessCodeRepository,
         PhotoVersionUrlService urlService,
         IUserDisplayNameResolver displayNames,
+        IStorageProvider storageProvider,
         ILogger<AlbumsController> logger)
     {
         _albumRepository = albumRepository;
@@ -36,6 +39,7 @@ public class AlbumsController : ControllerBase
         _accessCodeRepository = accessCodeRepository;
         _urlService = urlService;
         _displayNames = displayNames;
+        _storageProvider = storageProvider;
         _logger = logger;
     }
 
@@ -196,6 +200,38 @@ public class AlbumsController : ControllerBase
         // Admins can manage any album — see UpdateAlbum comment.
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
+
+        // Best-effort storage cleanup BEFORE the DB delete — list everything
+        // under photogallery/{albumId}/ (every photo's originals + variants
+        // + watermarks) and delete each key. Mirrors the per-photo cleanup
+        // in PhotosController.DeletePhoto. Failures are logged and the DB
+        // delete still proceeds; orphaned blobs are reclaimed by
+        // OrphanedBlobReaperService on its next sweep.
+        var prefix = $"photogallery/{albumId}/";
+        try
+        {
+            var keys = await _storageProvider.ListAsync(prefix);
+            var keyList = keys?.ToList() ?? new List<string>();
+            foreach (var key in keyList)
+            {
+                try { await _storageProvider.DeleteAsync(key); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to delete storage object {Key} while deleting album {AlbumId} (continuing)",
+                        key, albumId);
+                }
+            }
+            _logger.LogInformation(
+                "Deleted {Count} storage object(s) under {Prefix} for album {AlbumId}",
+                keyList.Count, prefix, albumId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to list storage objects under {Prefix} while deleting album {AlbumId} (continuing — orphan reaper will reclaim)",
+                prefix, albumId);
+        }
 
         // EF Core cascades Album -> Photo + AccessCode automatically, but the
         // photo-level RESTRICT-FK children (Downloads, UserCartItems,

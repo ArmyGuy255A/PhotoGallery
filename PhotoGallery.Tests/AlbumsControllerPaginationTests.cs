@@ -98,9 +98,12 @@ public class AlbumsControllerPaginationTests
             .ReturnsAsync((IEnumerable<string?> ids, CancellationToken _) =>
                 (IReadOnlyDictionary<string, string>)new Dictionary<string, string>());
 
+        var storage = new Mock<PhotoGallery.Services.Storage.IStorageProvider>();
+
         var controller = new AlbumsController(
             albumRepo.Object, photoRepo, codeRepo.Object, NewUrlService(),
             displayNames.Object,
+            storage.Object,
             NullLogger<AlbumsController>.Instance);
 
         var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, userId) };
