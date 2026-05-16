@@ -1,4 +1,4 @@
-import { Component, Input, OnDestroy, OnInit, ChangeDetectionStrategy, signal } from '@angular/core';
+import { Component, Input, OnDestroy, OnInit, ChangeDetectionStrategy, signal, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subject, interval, takeUntil, switchMap, catchError, of, startWith } from 'rxjs';
 import { PhotoService, AlbumProcessingSummary } from '../../services/photo.service';
@@ -56,12 +56,10 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
         </div>
 
         <div class="row row-uploading" *ngIf="s.photoStatus.uploading > 0">
-          <span class="dot dot-uploading"></span>
           <span class="label">In-flight uploads</span>
           <span class="count" data-testid="upload-aside-uploading">{{ s.photoStatus.uploading }}</span>
         </div>
         <div class="row row-error" *ngIf="s.photoStatus.failed > 0">
-          <span class="dot dot-failed"></span>
           <span class="label">Failed</span>
           <span class="count" data-testid="upload-aside-failed">{{ s.photoStatus.failed }}</span>
         </div>
@@ -192,32 +190,14 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
     .upload-reshow-pill:hover { background: #111827; }
     .row {
       display: grid;
-      grid-template-columns: 14px 1fr auto;
+      grid-template-columns: 1fr auto;
       gap: 8px;
       align-items: center;
     }
     .row .label { color: #374151; }
     .row .count { color: #111827; font-weight: 600; font-variant-numeric: tabular-nums; }
-    .row-summary .label, .row-summary .count { color: #047857; }
+    .row-uploading .label, .row-uploading .count { color: #1d4ed8; }
     .row-error .label, .row-error .count { color: #b91c1c; }
-    .dot {
-      width: 10px;
-      height: 10px;
-      min-width: 10px;
-      max-width: 10px;
-      min-height: 10px;
-      max-height: 10px;
-      border-radius: 50%;
-      display: inline-block;
-      align-self: center;
-      justify-self: start;
-      flex-shrink: 0;
-    }
-    .dot-uploading { background: #0d6efd; }
-    .dot-pending { background: #9ca3af; }
-    .dot-processing { background: #f39c12; }
-    .dot-complete { background: #10b981; }
-    .dot-failed { background: #ef4444; }
 
     .quality-section {
       margin-top: 8px;
@@ -258,6 +238,15 @@ export class UploadProgressAsideComponent implements OnInit, OnDestroy {
   /** Polling interval (ms). 5s by default. */
   @Input() refreshMs: number = 5000;
 
+  /**
+   * Fires when the summary indicates new photo work has progressed —
+   * specifically when totalPhotos grows (new uploads landed) or Complete
+   * grows (server finished a photo's variants). Album-detail listens to
+   * trigger a refresh of the on-screen photo grid so freshly-completed
+   * thumbnails appear without the user reloading.
+   */
+  @Output() summaryChanged = new EventEmitter<AlbumProcessingSummary>();
+
   readonly summary = signal<AlbumProcessingSummary | null>(null);
   readonly visible = signal<boolean>(false);
   readonly dismissed = signal<boolean>(false);
@@ -280,7 +269,17 @@ export class UploadProgressAsideComponent implements OnInit, OnDestroy {
       )
       .subscribe(s => {
         if (!s) return;
+        const prev = this.summary();
         this.summary.set(s);
+        // Emit on edges that matter for the album-detail refresh:
+        //  - a fresh photo has landed (totalPhotos grew)
+        //  - the server finished another photo's variants (Complete grew)
+        // We avoid emitting on every tick because the grid refresh isn't cheap.
+        const prevTotal = prev?.totalPhotos ?? 0;
+        const prevComplete = prev?.photoStatus.complete ?? 0;
+        if (s.totalPhotos > prevTotal || s.photoStatus.complete > prevComplete) {
+          this.summaryChanged.emit(s);
+        }
         const inflight =
           s.photoStatus.uploading + s.photoStatus.pending + s.photoStatus.processing;
         const failedRecent = s.photoStatus.failed > 0;

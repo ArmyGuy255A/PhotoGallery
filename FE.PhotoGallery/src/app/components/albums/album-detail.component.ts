@@ -283,7 +283,8 @@ interface Album {
 
       <app-upload-progress-aside
         *ngIf="album?.id"
-        [albumId]="album!.id">
+        [albumId]="album!.id"
+        (summaryChanged)="onAlbumActivityChanged($event)">
       </app-upload-progress-aside>
     </div>
   `,
@@ -1182,6 +1183,21 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
     } else {
       this.onAddToCart(photo);
     }
+  }
+
+  /**
+   * The floating Album Activity aside fires this whenever the server reports
+   * either a new photo landing in the album or a freshly-completed photo's
+   * variants finishing — both cases require the on-screen grid to refresh
+   * so the new thumbnails appear without the user reloading. We re-arm the
+   * paged loader from scratch and let auto-trickle re-paginate the album;
+   * for an album of N photos at 20 per page that's N/20 fast HTTP calls
+   * spaced 200ms apart, comfortably less work than the server-side processing
+   * cycle that triggered it.
+   */
+  onAlbumActivityChanged(_summary: unknown): void {
+    this.loader.reset();
+    this.loader.enableAutoLoad();
   }
 
   getStatusClass(photo: Photo): string {

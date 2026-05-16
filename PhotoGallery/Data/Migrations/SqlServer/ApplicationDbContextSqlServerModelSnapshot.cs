@@ -308,6 +308,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
                     b.Property<int>("Quality")
                         .HasColumnType("int");
 
+                    b.Property<string>("UserId")
+                        .HasColumnType("nvarchar(max)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AccessCodeId");
@@ -677,6 +680,9 @@ namespace PhotoGallery.Data.Migrations.SqlServer
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("LastName")
                         .HasMaxLength(100)

@@ -679,20 +679,50 @@ public class PhotosController : ControllerBase
             .Where(p => p.AlbumId == albumId && p.ProcessingStatus == PhotoProcessingStatus.Uploading)
             .ToList();
         var photos = allPhotos.Concat(uploadingPhotos).ToList();
+        var photoIds = photos.Select(p => p.Id).ToHashSet();
+
+        // Per-quality queue items are the source of truth for processing
+        // state — Photo.ProcessingStatus only transitions Uploading->Pending
+        // in the upload-complete controller, never to Processing/Complete.
+        // We classify each non-Uploading photo by aggregating its queue items
+        // so the aside counters actually move as work drains.
+        var items = (await _queueItemRepository.GetAllAsync())
+            .Where(i => photoIds.Contains(i.PhotoId))
+            .ToList();
+        var itemsByPhoto = items.GroupBy(i => i.PhotoId).ToDictionary(g => g.Key, g => g.ToList());
 
         var statusCounts = new PhotoStatusCounts
         {
             Uploading = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Uploading),
-            Pending = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Pending),
-            Processing = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Processing),
-            Complete = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Complete),
-            Failed = photos.Count(p => p.ProcessingStatus == PhotoProcessingStatus.Failed)
+            Pending = 0,
+            Processing = 0,
+            Complete = 0,
+            Failed = 0
         };
+        // The four base qualities the SPA tracks (Watermark is not
+        // user-facing and lands as a follow-up enqueue after all four).
+        const int baseQualities = 4;
+        foreach (var p in photos.Where(p => p.ProcessingStatus != PhotoProcessingStatus.Uploading))
+        {
+            itemsByPhoto.TryGetValue(p.Id, out var its);
+            its ??= new List<ProcessingQueueItem>();
+            var basis = its.Where(i =>
+                i.Quality == QualityType.Thumbnail || i.Quality == QualityType.Low ||
+                i.Quality == QualityType.Medium    || i.Quality == QualityType.High).ToList();
 
-        var photoIds = photos.Select(p => p.Id).ToHashSet();
-        var items = (await _queueItemRepository.GetAllAsync())
-            .Where(i => photoIds.Contains(i.PhotoId))
-            .ToList();
+            var completeCount = basis.Count(i => i.Status == ProcessingStatus.Complete);
+            var processingCount = basis.Count(i => i.Status == ProcessingStatus.Processing);
+            var errorCount = basis.Count(i => i.Status == ProcessingStatus.Error);
+
+            if (basis.Count == baseQualities && completeCount == baseQualities)
+                statusCounts.Complete++;
+            else if (errorCount > 0 && processingCount == 0 && completeCount + errorCount == basis.Count)
+                statusCounts.Failed++;
+            else if (processingCount > 0 || completeCount > 0)
+                statusCounts.Processing++;
+            else
+                statusCounts.Pending++;
+        }
 
         QualityCounts CountFor(QualityType q) => new()
         {
