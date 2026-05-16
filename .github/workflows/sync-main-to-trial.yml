@@ -1,0 +1,108 @@
+name: Sync main → trial
+
+# After every push to main (i.e. every release merged from trial → main),
+# open a small PR that brings main's merge commit history back to trial so
+# the two branches don't slowly drift textually-out-of-sync.
+#
+# Why this exists:
+#   Squash-merging a trial→main PR creates a NEW commit on main that trial
+#   doesn't know about. The content is identical to what's on trial, but
+#   git sees two different SHAs. Over time, additional commits on main
+#   (release tags, auto-formatting, hotfixes, anything) leave trial
+#   strictly behind. This workflow's job is to keep them in lockstep.
+#
+# Failure modes:
+#   - Nothing to sync (trial already contains main) → the PR-create step
+#     errors out and the job exits 0. Logged as a warning.
+#   - Conflicts on the sync PR → opened anyway, labelled needs-attention
+#     so we know to resolve manually before the next trial→main flow.
+#
+# Skipped when:
+#   - The push was on a branch other than main (the `on:` filter handles this).
+#   - The commit message is from this workflow itself (avoids loops).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Top-level Node 24 opt-in to match the other workflows.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  sync:
+    name: Open main → trial sync PR
+    runs-on: ubuntu-latest
+    # Don't loop on ourselves — sync PRs land via squash-merge so the
+    # squash commit's title starts with "chore(sync):". Skip if that's
+    # the only thing in this push.
+    if: "!startsWith(github.event.head_commit.message, 'chore(sync): main → trial')"
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create sync branch
+        id: branch
+        run: |
+          set -euo pipefail
+          # Use a deterministic branch name per run so a stuck previous
+          # sync PR is overwritten instead of accumulating.
+          branch="u/auto/sync-main-to-trial-${{ github.run_id }}"
+          git fetch origin trial:trial
+          git checkout -b "$branch" trial
+          # Attempt to merge main into trial. If there's nothing new,
+          # the merge is a no-op and we exit cleanly.
+          if git merge --no-edit origin/main; then
+            echo "branch=$branch"      >> "$GITHUB_OUTPUT"
+            echo "has_changes=true"    >> "$GITHUB_OUTPUT"
+            if git diff --quiet trial; then
+              echo "Nothing to sync — main is already an ancestor of trial."
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # Merge conflict — push the branch with conflict markers so a
+            # human resolves it. Label needs-attention on the PR.
+            git add -A
+            git commit -m "chore(sync): main → trial (CONFLICTS — resolve manually)"
+            echo "branch=$branch"      >> "$GITHUB_OUTPUT"
+            echo "has_changes=true"    >> "$GITHUB_OUTPUT"
+            echo "has_conflicts=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push sync branch
+        if: steps.branch.outputs.has_changes == 'true'
+        run: git push origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Open sync PR
+        if: steps.branch.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="chore(sync): main → trial after ${GITHUB_SHA:0:7}"
+          body=$'Automated sync after a push to main.\n\nKeeps trial textually in sync with main so the next trial → main PR does not hit phantom conflicts on identical content.\n\nSafe to squash-merge. See `.github/workflows/sync-main-to-trial.yml` for the rationale.'
+          gh pr create \
+            --repo "${{ github.repository }}" \
+            --base trial \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "$title" \
+            --body "$body"
+          if [ "${{ steps.branch.outputs.has_conflicts }}" = "true" ]; then
+            gh pr edit --add-label "needs-fix" || true
+          fi
+
+      - name: Nothing to sync
+        if: steps.branch.outputs.has_changes != 'true'
+        run: echo "::notice ::main is already an ancestor of trial — no sync PR needed."
