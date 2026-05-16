@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { GoogleAuthService } from './auth/providers/google-auth.service';
 import { IdentityProvider, IdentityProviderType } from './auth/identity-provider';
@@ -192,6 +192,50 @@ export class AuthService {
     return this.refreshTokenPromise;
   }
 
+  /**
+   * Re-mint the app JWT with the CURRENT role set straight from the
+   * database. Use case: an admin grants the user the AlbumCreator role —
+   * without this call the user has to log out and back in for their old
+   * token to be replaced. With this call, just reloading the page picks
+   * up the new roles within seconds.
+   *
+   * Calls POST /api/auth/refresh, which is gated by the existing JWT (so
+   * the user must already be authenticated), reads their roles from
+   * UserManager, and returns a fresh token. We store it and notify the
+   * currentUser BehaviorSubject so role-aware UI gates (the Create
+   * Album button, sidenav admin entries, etc.) react automatically.
+   *
+   * Returns true if the token was refreshed, false otherwise (e.g. the
+   * user isn't currently authenticated or the BE returned an error —
+   * either way we leave the existing token alone).
+   */
+  async refreshRolesFromServer(): Promise<boolean> {
+    if (!this.isAuthenticatedSync()) return false;
+    try {
+      const apiUrl = environment.apiUrl || '';
+      const resp = await firstValueFrom(this.http.post<{ token: string }>(
+        `${apiUrl}/api/auth/refresh`, {}));
+      if (!resp?.token) return false;
+      this.setToken(TokenType.AppToken, resp.token);
+      this.currentUserSubject.next(this.decodeAppTokenUser());
+      this.isAuthenticatedSubject.next(true);
+      return true;
+    } catch (err) {
+      // 401 means the existing token has expired — fall back to the
+      // existing IdP-backed refresh path which can mint a fresh JWT
+      // from the cached IdP token without bouncing through the login UI.
+      // Anything else (5xx, network) we just swallow — the user keeps
+      // their current token until the next try.
+      const status = (err as any)?.status;
+      if (status === 401) {
+        await this.refreshAppToken();
+      } else {
+        console.warn('refreshRolesFromServer: BE refresh failed', err);
+      }
+      return false;
+    }
+  }
+
   tokenLifetimeIsValid(type: TokenType): boolean {
     const jwt = this.getToken(type);
     if (!jwt) {
@@ -260,6 +304,17 @@ export class AuthService {
 
   isAdmin(): boolean {
     return this.hasRole('Admin');
+  }
+
+  /**
+   * True if the signed-in user is allowed to create albums and upload
+   * photos — i.e. has Admin OR AlbumCreator. The BE enforces the same
+   * pair on the endpoints (POST /api/albums, /upload-tickets,
+   * /upload-complete); this method is the SPA's UI gate for buttons
+   * and route guards that would otherwise lead to a 403.
+   */
+  canCreateAlbums(): boolean {
+    return this.hasRole('Admin') || this.hasRole('AlbumCreator');
   }
 
   private decodeJwt(token: string): IdentityUser | null {

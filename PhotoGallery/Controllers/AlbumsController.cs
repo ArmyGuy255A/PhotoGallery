@@ -83,11 +83,11 @@ public class AlbumsController : ControllerBase
     }
 
     /// <summary>
-    /// Create a new album (admin only)
+    /// Create a new album. Available to Admin OR AlbumCreator.
     /// </summary>
     /// <param name="request">Album creation request</param>
     /// <returns>Created album details</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPost]
     public async Task<ActionResult<AlbumDetailDto>> CreateAlbum([FromBody] CreateAlbumRequest request)
     {
@@ -147,7 +147,7 @@ public class AlbumsController : ControllerBase
     /// <param name="id">Album ID</param>
     /// <param name="request">Update request</param>
     /// <returns>Updated album details</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPut("{id}")]
     public async Task<ActionResult<AlbumDetailDto>> UpdateAlbum(string id, [FromBody] UpdateAlbumRequest request)
     {
@@ -185,7 +185,7 @@ public class AlbumsController : ControllerBase
     /// </summary>
     /// <param name="id">Album ID</param>
     /// <returns>No content</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpDelete("{id}")]
     public async Task<ActionResult> DeleteAlbum(string id)
     {
@@ -375,7 +375,7 @@ public class AlbumsController : ControllerBase
     /// </summary>
     /// <param name="albumId">Album ID</param>
     /// <returns>List of access codes</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpGet("{albumId}/access-codes")]
     public async Task<ActionResult<List<AccessCodeListDto>>> GetAccessCodes(string albumId)
     {
@@ -420,7 +420,7 @@ public class AlbumsController : ControllerBase
     /// <param name="albumId">Album ID</param>
     /// <param name="request">Access code creation request</param>
     /// <returns>Created access code details</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPost("{albumId}/access-codes")]
     public async Task<ActionResult<AccessCodeDetailDto>> CreateAccessCode(string albumId, [FromBody] CreateAccessCodeRequest request)
     {
@@ -505,7 +505,7 @@ public class AlbumsController : ControllerBase
     /// <param name="albumId">Album ID</param>
     /// <param name="codeId">Access code ID</param>
     /// <returns>No content</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpDelete("{albumId}/access-codes/{codeId}")]
     public async Task<ActionResult> DeleteAccessCode(string albumId, string codeId)
     {

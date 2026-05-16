@@ -93,8 +93,16 @@ public static class SettingsCatalogue
             "Tick interval for the pre-signed-URL refresh worker. Hot-reload — takes effect on the next sleep cycle.",
             RestartRequired: false),
         new SettingCatalogueEntry(
-            "BlobStorage:VerifyCachedUrls", "Storage", "bool", "true",
-            "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Hot-reload — takes effect on the next URL fetch.",
+            "BlobStorage:UrlCacheSlidingMinutes", "Storage", "int", "30",
+            "Sliding in-process cache TTL for short-lived pre-signed URLs (thumbnails / watermarked variants served to the public code-gallery). Each access extends the entry by this many minutes, but the entry is hard-capped at the underlying SAS expiry minus a 3-minute safety margin so we never hand out an expired URL. Hot-reload — takes effect on the next cache miss.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "BlobStorage:PublicUrlTtlMinutes", "Storage", "int", "60",
+            "TTL (minutes) for the short-lived pre-signed URLs the code-gallery hands to public visitors. Must be larger than UrlCacheSlidingMinutes so the in-process cache has headroom to extend on repeat hits. Hot-reload — takes effect on the next URL sign.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "BlobStorage:VerifyCachedUrls", "Storage", "bool", "false",
+            "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Default is false so paged album rendering doesn't pay N HEAD-request round-trips per page; StorageConsistencyService catches drift on its sweep instead. Hot-reload — takes effect on the next URL fetch.",
             RestartRequired: false),
     };
 }

@@ -55,3 +55,22 @@ export const adminGuard: CanActivateFn = (
 
   return true;
 };
+
+/**
+ * Route guard that allows Admin OR AlbumCreator. Used for /albums/create
+ * and /albums/:id/edit so the new AlbumCreator role can actually reach
+ * the screens it has permission to use.
+ */
+export const albumCreatorGuard: CanActivateFn = (
+  route: ActivatedRouteSnapshot,
+  state: RouterStateSnapshot
+) => {
+  const router = inject(Router);
+  const authService = inject(AuthService);
+
+  if (!authService.canCreateAlbums()) {
+    router.navigate(['/unauthorized']);
+    return false;
+  }
+  return true;
+};

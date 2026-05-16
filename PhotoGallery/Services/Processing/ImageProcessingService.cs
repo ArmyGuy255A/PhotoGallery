@@ -226,6 +226,7 @@ public class ImageProcessingService : IImageProcessor
                         _logger.LogInformation("Completed processing photo {PhotoId} quality {Quality}",
                             item.PhotoId, item.Quality);
                         processedPhotos.Add(item.PhotoId);
+                        try { _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>().IncrementProcessed("PhotoProcessing"); } catch { }
                     }
                     catch (OperationCanceledException)
                     {

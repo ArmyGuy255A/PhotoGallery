@@ -102,7 +102,7 @@ public class PhotosController : ControllerBase
     /// once the blob actually exists. This guarantees the worker only ever
     /// dequeues photos whose original.jpg is real.
     /// </summary>
-    [Authorize]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPost("albums/{albumId}/upload-tickets")]
     public async Task<ActionResult<UploadTicketsResponse>> CreateUploadTickets(
         string albumId,
@@ -262,7 +262,7 @@ public class PhotosController : ControllerBase
     /// will pick up, and broadcasts <c>ProcessingStarted</c> to the
     /// uploader's hub group.
     /// </summary>
-    [Authorize]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPost("{photoId:guid}/upload-complete")]
     public async Task<ActionResult<UploadCompleteResponse>> UploadComplete(
         Guid photoId,

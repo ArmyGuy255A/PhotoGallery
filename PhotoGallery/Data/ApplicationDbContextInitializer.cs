@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Models;
 
@@ -71,6 +71,13 @@ public class ApplicationDbContextInitializer(
         if (roleManager.Roles.All(r => r.Name != userRole.Name))
         {
             await roleManager.CreateAsync(userRole);
+        }
+
+        // AlbumCreator: elevated, non-admin role for users who can create albums + upload photos.
+        var albumCreatorRole = new IdentityRole(Roles.AlbumCreator);
+        if (roleManager.Roles.All(r => r.Name != albumCreatorRole.Name))
+        {
+            await roleManager.CreateAsync(albumCreatorRole);
         }
 
         // Seed admin user: mrdieppa@gmail.com

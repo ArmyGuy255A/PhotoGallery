@@ -18,8 +18,13 @@ namespace PhotoGallery.Services;
 /// </summary>
 public class CartZipService : ICartZipService
 {
-    /// <summary>Maximum number of items allowed in a single bulk download request.</summary>
-    public const int MaxItemsPerCartConst = 100;
+    /// <summary>
+    /// Default upper bound on items in a single bulk download. Admin can
+    /// override at runtime via the Cart:MaxItems setting (hot-reload).
+    /// Bumped to 99999 (effectively unlimited) until a ranged-selection UI ships — the streaming zip path keeps memory flat regardless of count, so the cap exists purely as a sanity ceiling on a single download request; the streaming
+    /// download path keeps memory flat regardless of count.
+    /// </summary>
+    public const int MaxItemsPerCartConst = 99999;
 
     public int MaxItemsPerCart => MaxItemsPerCartConst;
 

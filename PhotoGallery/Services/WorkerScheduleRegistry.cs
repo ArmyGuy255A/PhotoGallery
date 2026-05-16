@@ -17,6 +17,13 @@ public class WorkerScheduleRegistry
 {
     private readonly ConcurrentDictionary<string, WorkerEntry> _workers = new();
 
+    /// <summary>
+    /// Per-process replica identifier, sampled once. ACA injects
+    /// CONTAINER_APP_REPLICA_NAME; locally we fall back to MachineName.
+    /// </summary>
+    public static readonly string InstanceId =
+        Environment.GetEnvironmentVariable("CONTAINER_APP_REPLICA_NAME") ?? Environment.MachineName;
+
     public void Register(string name, string displayName, TimeSpan interval, Action? triggerHook = null)
     {
         _workers[name] = new WorkerEntry

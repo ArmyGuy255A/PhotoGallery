@@ -37,6 +37,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<AuditLogEntry> AuditLogEntries { get; set; }
     public DbSet<UserCartItem> UserCartItems { get; set; }
     public DbSet<RuntimeSetting> RuntimeSettings { get; set; }
+    public DbSet<WorkerHeartbeat> WorkerHeartbeats { get; set; } = null!;
     
     protected override void OnModelCreating(ModelBuilder builder)
     {
