@@ -11,7 +11,7 @@ import { AccountSettingsComponent } from './components/account/account-settings.
 import { AdminSettingsComponent } from './components/admin/admin-settings.component';
 import { BaseLayoutComponent } from './base-layout/base-layout.component';
 import { AuthService } from './services/auth.service';
-import { authGuard, adminGuard } from './services/auth.guard';
+import { authGuard, adminGuard, albumCreatorGuard } from './services/auth.guard';
 
 /**
  * canMatch helper for the public, unwrapped `/code/:code` route. Returns
@@ -45,8 +45,8 @@ export const routes: Routes = [
     canActivate: [authGuard],
     children: [
       { path: 'dashboard', component: DashboardComponent },
-      { path: 'albums/create', component: AlbumsCreateComponent, canActivate: [adminGuard] },
-      { path: 'albums/:id/edit', component: AlbumEditComponent, canActivate: [adminGuard] },
+      { path: 'albums/create', component: AlbumsCreateComponent, canActivate: [albumCreatorGuard] },
+      { path: 'albums/:id/edit', component: AlbumEditComponent, canActivate: [albumCreatorGuard] },
       { path: 'albums/:id', component: AlbumDetailComponent },
       { path: 'shared-albums', component: SharedAlbumsComponent },
       // Authenticated viewers of /code/:code render through BaseLayoutComponent

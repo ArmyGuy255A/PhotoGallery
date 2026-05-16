@@ -262,6 +262,17 @@ export class AuthService {
     return this.hasRole('Admin');
   }
 
+  /**
+   * True if the signed-in user is allowed to create albums and upload
+   * photos — i.e. has Admin OR AlbumCreator. The BE enforces the same
+   * pair on the endpoints (POST /api/albums, /upload-tickets,
+   * /upload-complete); this method is the SPA's UI gate for buttons
+   * and route guards that would otherwise lead to a 403.
+   */
+  canCreateAlbums(): boolean {
+    return this.hasRole('Admin') || this.hasRole('AlbumCreator');
+  }
+
   private decodeJwt(token: string): IdentityUser | null {
     try {
       const payload = token.split('.')[1];
