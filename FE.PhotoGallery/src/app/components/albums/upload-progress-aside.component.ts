@@ -22,7 +22,7 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <aside
-      *ngIf="visible() && !dismissed()"
+      *ngIf="expanded()"
       class="upload-aside"
       data-testid="upload-progress-aside"
       role="status"
@@ -33,7 +33,7 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
         <button
           type="button"
           class="aside-dismiss"
-          (click)="dismissed.set(true)"
+          (click)="expanded.set(false)"
           aria-label="Hide progress panel"
           data-testid="upload-aside-dismiss">×</button>
       </header>
@@ -98,16 +98,22 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
       </div>
     </aside>
 
-    <!-- Re-show pill when the user dismissed the aside but work is still
-         in flight. One click brings the full panel back. -->
+    <!-- Always-present pill: opens the full panel. Sits at the same
+         bottom-right anchor as the expanded aside; one is shown at a
+         time via expanded(). The pill carries an active-work badge so
+         users can see at a glance whether something needs attention
+         without having to open the panel. -->
     <button
-      *ngIf="visible() && dismissed()"
+      *ngIf="!expanded() && albumId"
       type="button"
       class="upload-reshow-pill"
+      [class.pill-active]="activeCount(summary()) > 0"
       data-testid="upload-progress-reshow"
-      (click)="dismissed.set(false)"
-      [attr.aria-label]="'Show album activity (' + activeCount(summary()) + ' in progress)'">
-      📥 Album activity ({{ activeCount(summary()) }})
+      (click)="expanded.set(true)"
+      [attr.aria-label]="activeCount(summary()) > 0
+        ? 'Show album activity (' + activeCount(summary()) + ' in progress)'
+        : 'Show album activity'">
+      📥 Album activity<ng-container *ngIf="activeCount(summary()) > 0"> ({{ activeCount(summary()) }})</ng-container>
     </button>
   `,
   styles: [`
@@ -188,6 +194,15 @@ import { PhotoService, AlbumProcessingSummary } from '../../services/photo.servi
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
     }
     .upload-reshow-pill:hover { background: #111827; }
+    .upload-reshow-pill.pill-active {
+      background: #0d6efd;
+      animation: pill-pulse 2s ease-in-out infinite;
+    }
+    .upload-reshow-pill.pill-active:hover { background: #0b5ed7; }
+    @keyframes pill-pulse {
+      0%, 100% { box-shadow: 0 6px 20px rgba(13, 110, 253, 0.35); }
+      50%      { box-shadow: 0 6px 28px rgba(13, 110, 253, 0.6); }
+    }
     .row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -248,8 +263,16 @@ export class UploadProgressAsideComponent implements OnInit, OnDestroy {
   @Output() summaryChanged = new EventEmitter<AlbumProcessingSummary>();
 
   readonly summary = signal<AlbumProcessingSummary | null>(null);
-  readonly visible = signal<boolean>(false);
-  readonly dismissed = signal<boolean>(false);
+  /**
+   * Single source of truth for whether the full panel is rendered.
+   *   - Starts false → user sees the pill only.
+   *   - Auto-flips true when activity transitions 0 → >0 (new uploads
+   *     land or the failed count spikes).
+   *   - User × button or pill click flips it manually.
+   *   - Does NOT auto-flip false on activity ending — the pill stays
+   *     visible so the user can always reopen the panel.
+   */
+  readonly expanded = signal<boolean>(false);
 
   private readonly destroy$ = new Subject<void>();
 
@@ -271,26 +294,24 @@ export class UploadProgressAsideComponent implements OnInit, OnDestroy {
         if (!s) return;
         const prev = this.summary();
         this.summary.set(s);
+
         // Emit on edges that matter for the album-detail refresh:
         //  - a fresh photo has landed (totalPhotos grew)
         //  - the server finished another photo's variants (Complete grew)
-        // We avoid emitting on every tick because the grid refresh isn't cheap.
         const prevTotal = prev?.totalPhotos ?? 0;
         const prevComplete = prev?.photoStatus.complete ?? 0;
         if (s.totalPhotos > prevTotal || s.photoStatus.complete > prevComplete) {
           this.summaryChanged.emit(s);
         }
-        const inflight =
-          s.photoStatus.uploading + s.photoStatus.pending + s.photoStatus.processing;
-        const failedRecent = s.photoStatus.failed > 0;
-        const wasVisible = this.visible();
-        const nowVisible = inflight > 0 || failedRecent;
-        this.visible.set(nowVisible);
-        // Re-arm the dismiss state ONLY on the visible -> hidden edge so a
-        // user-dismissed panel comes back automatically the next time work
-        // shows up, but doesn't bounce back during an active batch.
-        if (wasVisible && !nowVisible) {
-          this.dismissed.set(false);
+
+        // Auto-expand on the no-activity -> activity edge so a fresh upload
+        // batch surfaces the panel without the user having to click. Never
+        // auto-collapse — the pill stays visible so the user can always
+        // reopen the panel after the batch settles.
+        const prevActive = this.activeCount(prev);
+        const nowActive = this.activeCount(s);
+        if (prevActive === 0 && nowActive > 0) {
+          this.expanded.set(true);
         }
       });
   }
