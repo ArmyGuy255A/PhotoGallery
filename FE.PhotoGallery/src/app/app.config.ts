@@ -37,6 +37,14 @@ export const appConfig: ApplicationConfig = {
       const auth = inject(AuthService);
       const cart = inject(CartService);
       if (auth.isAuthenticatedSync()) {
+        // Mint a fresh app token straight from the DB so role changes
+        // applied by an admin since the last login take effect on the
+        // next page refresh (no logout/login dance). Fire-and-forget;
+        // boot proceeds with the current token and the UI re-renders
+        // when the refresh resolves a few hundred ms later.
+        auth.refreshRolesFromServer()
+          .catch(err => console.warn('AuthService.refreshRolesFromServer failed at boot', err));
+
         cart.loadForUser().catch(err => console.error('CartService.loadForUser failed at boot', err));
       }
     })
