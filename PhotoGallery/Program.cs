@@ -258,6 +258,8 @@ builder.Services.AddHostedService<PhotoProcessingWorker>();
 builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
 builder.Services.AddHostedService<StorageConsistencyWorker>();
 builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
+builder.Services.AddSingleton<WorkerScheduleRegistry>();
+builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
@@ -394,11 +396,15 @@ app.MapHub<PhotoProgressHub>("/hubs/photo-progress");
 // controller / hub mappings so it only catches genuinely unmapped paths.
 app.MapFallback("/api/{*rest}", PhotoGallery.Middleware.ApiErrorResponseFactory.WriteNotFoundAsync);
 
-// Start image processing worker
-using (var scope = app.Services.CreateScope())
-{
-    var imageProcessor = scope.ServiceProvider.GetRequiredService<IImageProcessor>();
-    await imageProcessor.StartProcessingWorkerAsync(app.Lifetime.ApplicationStopping);
-}
+// Image processing is driven by PhotoProcessingWorker (a BackgroundService
+// registered via AddHostedService). The legacy in-service polling loop
+// inside ImageProcessingService.StartProcessingWorkerAsync used to run in
+// parallel here, which produced approximate-not-strict priority ordering:
+// two workers concurrently leased batches, and when worker B fired while
+// worker A held locks on the highest-priority Thumbnail rows, READPAST
+// skipped those locked rows and worker B's lease started returning lower-
+// priority Medium / High items. The user-visible symptom was all quality
+// bars advancing in parallel rather than thumbnails finishing first.
+// Removed the second start; PhotoProcessingWorker is the sole driver now.
 
 app.Run();

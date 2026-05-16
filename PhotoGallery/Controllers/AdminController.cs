@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Data;
 using PhotoGallery.Enums;
 using PhotoGallery.Models;
+using PhotoGallery.Services;
 
 namespace PhotoGallery.Controllers;
 
@@ -417,6 +418,241 @@ public class AdminController : ControllerBase
 
         return Ok(dtos);
     }
+
+    // ---------------------------------------------------------------------
+    // Runtime settings — DB-backed key/value store editable from the admin
+    // page. Resolution order: RuntimeSettings table -> IConfiguration ->
+    // hard-coded default in the consumer.
+    //
+    // Changes persist immediately but most workers read their interval at
+    // construction, so the UI flags those as "restart required". Workers
+    // can opt into hot-reload by calling ISettingsResolver on each tick.
+    // ---------------------------------------------------------------------
+
+    [HttpGet("settings")]
+    public async Task<ActionResult<IEnumerable<RuntimeSettingDto>>> GetSettings()
+    {
+        // Merge known catalogue defaults with persisted overrides so the
+        // admin sees every editable setting, not just the ones an admin has
+        // already changed.
+        var catalogue = SettingsCatalogue.GetAll();
+        var persisted = await _ctx.RuntimeSettings.AsNoTracking().ToListAsync();
+        var byKey = persisted.ToDictionary(s => s.Key, StringComparer.OrdinalIgnoreCase);
+
+        var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var dtos = catalogue.Select(c =>
+        {
+            byKey.TryGetValue(c.Key, out var p);
+            return new RuntimeSettingDto
+            {
+                Key = c.Key,
+                Category = c.Category,
+                DataType = c.DataType,
+                Description = c.Description,
+                DefaultValue = c.DefaultValue,
+                ConfiguredValue = cfg[c.Key] ?? c.DefaultValue,
+                CurrentValue = p?.Value ?? cfg[c.Key] ?? c.DefaultValue,
+                HasOverride = p != null,
+                LastModifiedAt = p?.LastModifiedAt,
+                LastModifiedBy = p?.LastModifiedBy,
+                RestartRequired = c.RestartRequired
+            };
+        }).OrderBy(d => d.Category).ThenBy(d => d.Key).ToList();
+        return Ok(dtos);
+    }
+
+    [HttpPut("settings/{key}")]
+    public async Task<ActionResult<RuntimeSettingDto>> UpdateSetting(string key, [FromBody] UpdateSettingRequest body)
+    {
+        if (string.IsNullOrWhiteSpace(body?.Value))
+            return BadRequest(new { error = "Value is required." });
+
+        var entry = SettingsCatalogue.GetAll().FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (entry == null)
+            return NotFound(new { error = $"Unknown setting '{key}'." });
+
+        // Type-check before persisting so a typo doesn't crash the next
+        // worker tick.
+        if (!entry.IsValid(body.Value, out var err))
+            return BadRequest(new { error = err });
+
+        var existing = await _ctx.RuntimeSettings.FirstOrDefaultAsync(s => s.Key == entry.Key);
+        if (existing == null)
+        {
+            existing = new RuntimeSetting
+            {
+                Id = Guid.NewGuid(),
+                Key = entry.Key,
+                Category = entry.Category,
+                DataType = entry.DataType,
+                Description = entry.Description
+            };
+            _ctx.RuntimeSettings.Add(existing);
+        }
+        existing.Value = body.Value;
+        existing.LastModifiedAt = DateTime.UtcNow;
+        existing.LastModifiedBy = User.Identity?.Name;
+        await _ctx.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Admin {Admin} updated runtime setting {Key}={Value}",
+            existing.LastModifiedBy, existing.Key, existing.Value);
+
+        return Ok(new RuntimeSettingDto
+        {
+            Key = entry.Key,
+            Category = entry.Category,
+            DataType = entry.DataType,
+            Description = entry.Description,
+            DefaultValue = entry.DefaultValue,
+            ConfiguredValue = HttpContext.RequestServices.GetRequiredService<IConfiguration>()[entry.Key] ?? entry.DefaultValue,
+            CurrentValue = existing.Value,
+            HasOverride = true,
+            LastModifiedAt = existing.LastModifiedAt,
+            LastModifiedBy = existing.LastModifiedBy,
+            RestartRequired = entry.RestartRequired
+        });
+    }
+
+    [HttpDelete("settings/{key}")]
+    public async Task<IActionResult> ResetSetting(string key)
+    {
+        var existing = await _ctx.RuntimeSettings.FirstOrDefaultAsync(s => s.Key == key);
+        if (existing != null)
+        {
+            _ctx.RuntimeSettings.Remove(existing);
+            await _ctx.SaveChangesAsync();
+            _logger.LogInformation("Admin {Admin} reset runtime setting {Key}", User.Identity?.Name, key);
+        }
+        return NoContent();
+    }
+
+    // ---------------------------------------------------------------------
+    // Anonymous visitors — group UserAccessLog rows by (IpHash, UserAgent)
+    // so the admin can see which uncatalogued browsers have used which
+    // access codes. Authenticated rows are excluded (those visitors live
+    // in the Users tab).
+    // ---------------------------------------------------------------------
+
+    [HttpGet("anonymous-visitors")]
+    public async Task<ActionResult<IEnumerable<AnonymousVisitorDto>>> GetAnonymousVisitors([FromQuery] int limit = 200)
+    {
+        if (limit <= 0 || limit > 1000) limit = 200;
+
+        // Pull every anonymous access-log row joined to the code it touched
+        // (so we can list the codes the visitor has used). Then group in
+        // memory by IP + UA — composite GROUP BY through EF on a string
+        // column is supported on SqlServer but trips up on Sqlite at the
+        // sizes we expect this table to be.
+        var rows = await (
+            from log in _ctx.Set<UserAccessLog>()
+            where log.UserId == null
+            join code in _ctx.AccessCodes on log.AccessCodeId equals code.Id
+            from album in _ctx.Albums.Where(a => a.Id == code.AlbumId).DefaultIfEmpty()
+            select new
+            {
+                log.IpAddress,
+                log.UserAgent,
+                log.AccessDate,
+                CodeId = code.Id,
+                code.Code,
+                AlbumTitle = album != null ? album.Title : code.DeletedAlbumTitle ?? "(album deleted)"
+            }).ToListAsync();
+
+        var grouped = rows
+            .GroupBy(r => new { IpAddress = r.IpAddress ?? "(unknown)", UserAgent = r.UserAgent ?? "(unknown)" })
+            .Select(g => new AnonymousVisitorDto
+            {
+                IpAddress = g.Key.IpAddress,
+                UserAgent = g.Key.UserAgent,
+                AccessCount = g.Count(),
+                FirstSeenAt = g.Min(r => r.AccessDate),
+                LastSeenAt = g.Max(r => r.AccessDate),
+                Codes = g.GroupBy(r => r.CodeId)
+                    .Select(cg => new AnonymousVisitorCodeDto
+                    {
+                        CodeId = cg.Key.ToString(),
+                        Code = cg.First().Code,
+                        AlbumTitle = cg.First().AlbumTitle,
+                        UseCount = cg.Count(),
+                        LastUsedAt = cg.Max(r => r.AccessDate)
+                    })
+                    .OrderByDescending(c => c.LastUsedAt)
+                    .ToList()
+            })
+            .OrderByDescending(v => v.LastSeenAt)
+            .Take(limit)
+            .ToList();
+
+        return Ok(grouped);
+    }
+
+    // ---------------------------------------------------------------------
+    // Service health — single snapshot endpoint that powers the admin
+    // "Service Health" tab. Returns worker schedules, queue stats, and the
+    // photo-counts the admin asked for.
+    // ---------------------------------------------------------------------
+
+    [HttpGet("service-health")]
+    public async Task<ActionResult<ServiceHealthDto>> GetServiceHealth()
+    {
+        var photoStatuses = await _ctx.Photos
+            .GroupBy(p => p.ProcessingStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync();
+        int countFor(PhotoProcessingStatus s) =>
+            photoStatuses.FirstOrDefault(x => x.Status == s)?.Count ?? 0;
+
+        var queueByStatus = await _ctx.ProcessingQueueItems
+            .GroupBy(i => i.Status)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToListAsync();
+        int queueFor(PhotoGallery.Models.ProcessingStatus s) =>
+            queueByStatus.FirstOrDefault(x => x.Key == s)?.Count ?? 0;
+
+        var queueByQuality = await _ctx.ProcessingQueueItems
+            .Where(i => i.Status == PhotoGallery.Models.ProcessingStatus.Pending ||
+                        i.Status == PhotoGallery.Models.ProcessingStatus.Processing)
+            .GroupBy(i => i.Quality)
+            .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
+            .ToListAsync();
+
+        var registry = HttpContext.RequestServices.GetRequiredService<WorkerScheduleRegistry>();
+        var workers = registry.Snapshot();
+
+        return Ok(new ServiceHealthDto
+        {
+            GeneratedAt = DateTime.UtcNow,
+            Photos = new PhotoCountsDto
+            {
+                Total = photoStatuses.Sum(x => x.Count),
+                Uploading = countFor(PhotoProcessingStatus.Uploading),
+                Pending = countFor(PhotoProcessingStatus.Pending),
+                Processing = countFor(PhotoProcessingStatus.Processing),
+                Complete = countFor(PhotoProcessingStatus.Complete),
+                Failed = countFor(PhotoProcessingStatus.Failed)
+            },
+            Queue = new QueueCountsDto
+            {
+                Pending = queueFor(PhotoGallery.Models.ProcessingStatus.Pending),
+                Processing = queueFor(PhotoGallery.Models.ProcessingStatus.Processing),
+                Complete = queueFor(PhotoGallery.Models.ProcessingStatus.Complete),
+                Error = queueFor(PhotoGallery.Models.ProcessingStatus.Error),
+                ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
+            },
+            Workers = workers
+        });
+    }
+
+    [HttpPost("service-health/workers/{name}/trigger")]
+    public IActionResult TriggerWorker(string name)
+    {
+        var registry = HttpContext.RequestServices.GetRequiredService<WorkerScheduleRegistry>();
+        if (!registry.Trigger(name))
+            return NotFound(new { error = $"Worker '{name}' is not registered or does not support manual trigger." });
+        _logger.LogInformation("Admin {Admin} triggered worker {Worker} manually", User.Identity?.Name, name);
+        return Accepted(new { worker = name, status = "Triggered. Next tick will fire immediately." });
+    }
 }
 
 public class AdminUserDto
@@ -441,6 +677,82 @@ public class AdminUserPage
     public int Page { get; set; }
     public int PageSize { get; set; }
     public bool HasMore { get; set; }
+}
+
+public class RuntimeSettingDto
+{
+    public string Key { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string DataType { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string DefaultValue { get; set; } = string.Empty;
+    public string ConfiguredValue { get; set; } = string.Empty;
+    public string CurrentValue { get; set; } = string.Empty;
+    public bool HasOverride { get; set; }
+    public bool RestartRequired { get; set; }
+    public DateTime? LastModifiedAt { get; set; }
+    public string? LastModifiedBy { get; set; }
+}
+
+public class UpdateSettingRequest
+{
+    public string Value { get; set; } = string.Empty;
+}
+
+public class AnonymousVisitorDto
+{
+    public string IpAddress { get; set; } = string.Empty;
+    public string UserAgent { get; set; } = string.Empty;
+    public int AccessCount { get; set; }
+    public DateTime FirstSeenAt { get; set; }
+    public DateTime LastSeenAt { get; set; }
+    public List<AnonymousVisitorCodeDto> Codes { get; set; } = new();
+}
+
+public class AnonymousVisitorCodeDto
+{
+    public string CodeId { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string AlbumTitle { get; set; } = string.Empty;
+    public int UseCount { get; set; }
+    public DateTime LastUsedAt { get; set; }
+}
+
+public class ServiceHealthDto
+{
+    public DateTime GeneratedAt { get; set; }
+    public PhotoCountsDto Photos { get; set; } = new();
+    public QueueCountsDto Queue { get; set; } = new();
+    public List<WorkerStatusDto> Workers { get; set; } = new();
+}
+
+public class PhotoCountsDto
+{
+    public int Total { get; set; }
+    public int Uploading { get; set; }
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Failed { get; set; }
+}
+
+public class QueueCountsDto
+{
+    public int Pending { get; set; }
+    public int Processing { get; set; }
+    public int Complete { get; set; }
+    public int Error { get; set; }
+    public Dictionary<string, int> ByQuality { get; set; } = new();
+}
+
+public class WorkerStatusDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public TimeSpan Interval { get; set; }
+    public DateTime? LastRanAt { get; set; }
+    public DateTime? NextRunAt { get; set; }
+    public bool CanTrigger { get; set; }
 }
 
 public class SetRolesRequest

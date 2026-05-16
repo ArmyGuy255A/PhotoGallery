@@ -153,7 +153,7 @@ interface CodeValidation {
         </div>
 
         <div *ngIf="photos.length > 0" class="photo-grid">
-          <article *ngFor="let photo of photos; let i = index" class="photo-card">
+          <article *ngFor="let photo of photos; let i = index; trackBy: trackByPhotoId" class="photo-card">
             <div class="photo-thumb" (click)="openModal(i)" role="button" tabindex="0"
                  (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)"
                  [attr.aria-label]="'View ' + photo.fileName">
@@ -590,6 +590,8 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     20,
     (newItems) => this.seedQualitiesFor(newItems)
   );
+  /** trackBy keyfn for the *ngFor on .photo-card — keeps DOM nodes stable. */
+  trackByPhotoId(_index: number, photo: PublicPhoto): string { return photo.photoId; }
   /** Skeleton-grid placeholder count (8 tiles while page 1 is in flight). */
   readonly skeletonSlots: ReadonlyArray<unknown> = new Array(8);
   selectedQuality: Record<string, CartQuality> = {};

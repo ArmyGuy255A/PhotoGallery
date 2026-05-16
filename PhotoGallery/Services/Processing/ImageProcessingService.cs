@@ -25,6 +25,7 @@ public class ImageProcessingService : IImageProcessor
     private readonly IHubContext<PhotoProgressHub>? _progressHub;
     private readonly ILogger<ImageProcessingService> _logger;
     private readonly int _workerParallelism;
+    private readonly int _leaseBatchMultiplier;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromMinutes(5);
     private CancellationTokenSource? _processingCts;
     private Task? _processingTask;
@@ -64,6 +65,8 @@ public class ImageProcessingService : IImageProcessor
         // avoid an operator pasting nonsense into the appsetting and pinning a worker.
         var configured = configuration.GetValue<int>("PhotoProcessing:WorkerParallelism", 5);
         _workerParallelism = Math.Clamp(configured, 1, 64);
+        var configuredMultiplier = configuration.GetValue<int>("PhotoProcessing:LeaseBatchMultiplier", 4);
+        _leaseBatchMultiplier = Math.Clamp(configuredMultiplier, 1, 32);
         _progressHub = progressHub;
     }
 
@@ -160,7 +163,7 @@ public class ImageProcessingService : IImageProcessor
                 // while some are mid-flight. 5 min lease > worst-case single-photo
                 // processing time so a slow consumer doesn't have its row stolen.
                 leased = await itemRepository.LeaseNextBatchAsync(
-                    _workerParallelism * 4, _leaseDuration, cancellationToken);
+                    _workerParallelism * _leaseBatchMultiplier, _leaseDuration, cancellationToken);
             }
 
             if (leased.Count == 0)

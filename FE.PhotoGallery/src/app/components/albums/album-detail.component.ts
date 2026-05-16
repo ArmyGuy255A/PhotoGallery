@@ -107,7 +107,7 @@ interface Album {
             </div>
 
             <div class="photos-grid" *ngIf="photos.length > 0" data-testid="photos-grid">
-              <div *ngFor="let photo of photos; let i = index" class="photo-card" data-testid="photo-card"
+              <div *ngFor="let photo of photos; let i = index; trackBy: trackByPhotoId" class="photo-card" data-testid="photo-card"
                    [attr.data-photo-id]="photo.id"
                    role="button" tabindex="0">
                 <!-- Issue #113: per-photo delete (✕) in the top-right, gated to
@@ -1229,9 +1229,17 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
    * cycle that triggered it.
    */
   onAlbumActivityChanged(_summary: unknown): void {
-    this.loader.reset();
-    this.loader.enableAutoLoad();
+    // Phase: smooth refresh during active uploads. We used to call
+    // loader.reset() + loader.enableAutoLoad() here which nuked the photos
+    // array and re-rendered from page 1 — that's what caused the visible
+    // glitch on every poll while uploading. Now we do an in-place merge:
+    // re-fetch the pages already loaded, keep object references for items
+    // that haven't changed, and only append new items if totalCount grew.
+    this.loader.refreshLoaded(p => p.id);
   }
+
+  /** trackBy keyfn for the *ngFor on .photo-card — keeps DOM nodes stable. */
+  trackByPhotoId(_index: number, photo: Photo): string { return photo.id; }
 
   getStatusClass(photo: Photo): string {
     if (!photo.processingStatus) return 'pending';

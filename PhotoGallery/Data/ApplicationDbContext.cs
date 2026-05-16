@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using PhotoGallery.Models;
@@ -36,6 +36,7 @@ public class ApplicationDbContext : IdentityDbContext<User>
     public DbSet<SavedAccessCode> SavedAccessCodes { get; set; }
     public DbSet<AuditLogEntry> AuditLogEntries { get; set; }
     public DbSet<UserCartItem> UserCartItems { get; set; }
+    public DbSet<RuntimeSetting> RuntimeSettings { get; set; }
     
     protected override void OnModelCreating(ModelBuilder builder)
     {
