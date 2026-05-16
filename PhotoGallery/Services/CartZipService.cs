@@ -41,7 +41,8 @@ public class CartZipService : ICartZipService
         IReadOnlyList<CartZipItem> items,
         Stream output,
         Guid? accessCodeId,
-        string? remoteIp)
+        string? remoteIp,
+        string? userId = null)
     {
         if (items.Count > MaxItemsPerCartConst)
         {
@@ -84,6 +85,7 @@ public class CartZipService : ICartZipService
                         Id = Guid.NewGuid(),
                         PhotoId = item.PhotoId,
                         AccessCodeId = accessCodeId,
+                        UserId = userId,
                         Quality = item.Quality,
                         DownloadedAt = DateTime.UtcNow,
                         IpHash = ipHash

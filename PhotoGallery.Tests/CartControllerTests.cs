@@ -523,9 +523,10 @@ public class CartControllerTests
                 It.IsAny<IReadOnlyList<CartZipItem>>(),
                 It.IsAny<Stream>(),
                 It.IsAny<Guid?>(),
+                It.IsAny<string?>(),
                 It.IsAny<string?>()))
-            .Callback<IReadOnlyList<CartZipItem>, Stream, Guid?, string?>(
-                (items, _, _, _) => streamed = items.ToList())
+            .Callback<IReadOnlyList<CartZipItem>, Stream, Guid?, string?, string?>(
+                (items, _, _, _, _) => streamed = items.ToList())
             .ReturnsAsync(1);
 
         var controller = NewController(db, Owner, cartZipMock: cartZip);
@@ -572,7 +573,7 @@ public class CartControllerTests
 
         cartZip.Verify(s => s.StreamCartZipAsync(
             It.IsAny<IReadOnlyList<CartZipItem>>(), It.IsAny<Stream>(),
-            It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
 
         // Issue #111: the 403 path must NOT clear the cart — every item
         // should remain so the user can retry once authorisation is restored.
@@ -623,9 +624,9 @@ public class CartControllerTests
         List<CartZipItem>? streamed = null;
         cartZip.Setup(s => s.StreamCartZipAsync(
                 It.IsAny<IReadOnlyList<CartZipItem>>(), It.IsAny<Stream>(),
-                It.IsAny<Guid?>(), It.IsAny<string?>()))
-            .Callback<IReadOnlyList<CartZipItem>, Stream, Guid?, string?>(
-                (items, _, _, _) => streamed = items.ToList())
+                It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Callback<IReadOnlyList<CartZipItem>, Stream, Guid?, string?, string?>(
+                (items, _, _, _, _) => streamed = items.ToList())
             .ReturnsAsync(2);
 
         var controller = NewController(db, Owner, cartZipMock: cartZip);

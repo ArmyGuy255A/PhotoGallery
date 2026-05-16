@@ -1,4 +1,4 @@
-﻿using Authentication.Classes;
+using Authentication.Classes;
 using Authentication.Interfaces;
 using Authentication.Services;
 using Configuration;
@@ -97,6 +97,21 @@ public class ExternalAuthService : IExternalAuthService
         // Resolve roles in PhotoGallery (web layer) and pass to the
         // cross-cutting JwtTokenService for issuance — keeps Authentication
         // free of any domain-User dependency.
+        // Stamp the last-login timestamp on every successful external login.
+        // Drives the Admin user table. A transient ConcurrencyFailure on a
+        // best-effort timestamp is tolerable — the user is signed in either way.
+        try
+        {
+            user.LastLoginAt = DateTime.UtcNow;
+            await _userManager.UpdateAsync(user);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to stamp LastLoginAt on user {UserId} (non-fatal)",
+                user.Id);
+        }
+
         var roles = await _userManager.GetRolesAsync(user);
         var token = _tokenService.GenerateTokenForUser(user.Id, user.Email ?? string.Empty, roles);
         _logger.LogInformation("HandleExternalLogin: issued JWT for {Email} with roles [{Roles}]", user.Email, string.Join(", ", roles));
