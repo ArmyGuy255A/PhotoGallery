@@ -178,17 +178,35 @@ public class AdminController : ControllerBase
     {
         if (body?.Roles == null) return BadRequest("Roles array is required");
 
-        var requested = body.Roles.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct().ToList();
-        var invalid = requested.Where(r => !AllowedRoles.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
+        // "User" is the implicit baseline role — accept it in the payload
+        // (the FE always sends it to avoid stripping it) but validate it
+        // separately from AllowedRoles so it's never an "unknown role" error.
+        // Final role set is guaranteed to include User regardless of what
+        // the caller sent.
+        var requested = body.Roles
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var assignable = AllowedRoles.Concat(new[] { Roles.User })
+            .ToArray();
+        var invalid = requested.Where(r => !assignable.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
         if (invalid.Count > 0)
-            return BadRequest($"Unknown role(s): {string.Join(", ", invalid)}. Allowed: {string.Join(", ", AllowedRoles)}");
+            return BadRequest($"Unknown role(s): {string.Join(", ", invalid)}. Allowed: {string.Join(", ", assignable)}");
+
+        // Force-add User to the requested set if the caller dropped it.
+        if (!requested.Contains(Roles.User, StringComparer.OrdinalIgnoreCase))
+            requested.Add(Roles.User);
 
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return NotFound("User not found");
 
         var current = (await _userManager.GetRolesAsync(user)).ToList();
         var toAdd = requested.Where(r => !current.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
-        var toRemove = current.Where(r => !requested.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
+        var toRemove = current.Where(r =>
+            !requested.Contains(r, StringComparer.OrdinalIgnoreCase) &&
+            // Defensive: never remove User even if a future caller bug forgets it.
+            !string.Equals(r, Roles.User, StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Last-admin guard: if removing Admin from this user would leave the
         // system with zero admins, refuse the change. The very first admin
