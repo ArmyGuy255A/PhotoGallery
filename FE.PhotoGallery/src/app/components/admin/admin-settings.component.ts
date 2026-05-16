@@ -80,7 +80,75 @@ interface UserDownload {
 }
 
 type JobState = 'idle' | 'running' | 'success' | 'error';
-type AdminTab = 'maintenance' | 'users' | 'stats';
+type AdminTab = 'maintenance' | 'users' | 'stats' | 'settings' | 'visitors' | 'health';
+
+interface RuntimeSetting {
+  key: string;
+  category: string;
+  dataType: string;
+  defaultValue: string;
+  description: string;
+  restartRequired: boolean;
+  configuredValue: string;
+  currentValue: string;
+  hasOverride: boolean;
+  lastModifiedAt?: string | null;
+  lastModifiedBy?: string | null;
+}
+
+interface AnonymousVisitorCode {
+  codeId: string;
+  code: string;
+  albumTitle?: string | null;
+  useCount: number;
+  lastUsedAt?: string | null;
+}
+
+interface AnonymousVisitor {
+  ipAddress: string;
+  userAgent: string;
+  accessCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  codes: AnonymousVisitorCode[];
+}
+
+interface WorkerStatus {
+  name: string;
+  displayName: string;
+  interval: string;
+  lastRanAt?: string | null;
+  nextRunAt?: string | null;
+  canTrigger: boolean;
+}
+
+interface ReplicaInfo {
+  instanceId: string;
+  hostName: string;
+  workersEnabled: boolean;
+  role: string;
+}
+
+interface ServiceHealth {
+  generatedAt: string;
+  replica: ReplicaInfo;
+  photos: {
+    total: number;
+    uploading: number;
+    pending: number;
+    processing: number;
+    complete: number;
+    failed: number;
+  };
+  queue: {
+    pending: number;
+    processing: number;
+    complete: number;
+    error: number;
+    byQuality: Record<string, number>;
+  };
+  workers: WorkerStatus[];
+}
 type UserSortKey = 'email' | 'name' | 'lastLogin' | 'loginCount' | 'downloads' | 'albums' | 'created';
 type SortDir = 'asc' | 'desc';
 
@@ -113,6 +181,21 @@ type SortDir = 'asc' | 'desc';
           [class.active]="activeTab() === 'stats'"
           (click)="onSelectTab('stats')"
           data-testid="admin-tab-stats">📊 Download stats</button>
+        <button type="button" role="tab"
+          [attr.aria-selected]="activeTab() === 'settings'"
+          [class.active]="activeTab() === 'settings'"
+          (click)="onSelectTab('settings')"
+          data-testid="admin-tab-settings">⚙️ Settings</button>
+        <button type="button" role="tab"
+          [attr.aria-selected]="activeTab() === 'visitors'"
+          [class.active]="activeTab() === 'visitors'"
+          (click)="onSelectTab('visitors')"
+          data-testid="admin-tab-visitors">👁️ Visitors</button>
+        <button type="button" role="tab"
+          [attr.aria-selected]="activeTab() === 'health'"
+          [class.active]="activeTab() === 'health'"
+          (click)="onSelectTab('health')"
+          data-testid="admin-tab-health">❤️ Service Health</button>
       </nav>
 
       <!-- Maintenance tab -->
@@ -423,6 +506,209 @@ type SortDir = 'asc' | 'desc';
           </div>
         </div>
       </div>
+
+      <!-- Settings tab -->
+      <section *ngIf="activeTab() === 'settings'" class="admin-card" data-testid="admin-card-settings">
+        <h2>Runtime settings</h2>
+        <p class="card-hint">
+          Every setting below is read live from the database on the next
+          worker tick / HTTP call — no restart required. Leave a field blank
+          and press <strong>Reset</strong> to fall back to the appsettings /
+          environment / KeyVault value.
+        </p>
+        <div *ngIf="settingsError() as err" class="alert alert-error">{{ err }}</div>
+        <div *ngIf="settingsLoading()" class="loading-row">Loading settings…</div>
+        <table *ngIf="settings().length > 0" class="admin-table" data-testid="admin-settings-table">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Category</th>
+              <th>Value</th>
+              <th>Default</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let s of settings(); trackBy: trackBySettingKey" [attr.data-key]="s.key">
+              <td>
+                <code>{{ s.key }}</code>
+                <div class="muted small">{{ s.description }}</div>
+              </td>
+              <td>{{ s.category }}</td>
+              <td>
+                <input *ngIf="s.dataType !== 'bool'"
+                  type="text"
+                  class="form-input"
+                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? ''"
+                  (input)="setSettingDraft(s.key, $any($event.target).value)"
+                  [attr.placeholder]="s.defaultValue"
+                  [attr.data-testid]="'admin-setting-input-' + s.key" />
+                <select *ngIf="s.dataType === 'bool'"
+                  class="form-input"
+                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? s.defaultValue"
+                  (change)="setSettingDraft(s.key, $any($event.target).value)"
+                  [attr.data-testid]="'admin-setting-input-' + s.key">
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </td>
+              <td><code class="muted">{{ s.defaultValue }}</code></td>
+              <td class="actions-cell">
+                <button type="button" class="btn-primary btn-sm"
+                  [disabled]="!isSettingDirty(s)"
+                  (click)="saveSetting(s)"
+                  [attr.data-testid]="'admin-setting-save-' + s.key">Save</button>
+                <button type="button" class="btn-link"
+                  *ngIf="s.hasOverride"
+                  (click)="resetSetting(s)"
+                  [attr.data-testid]="'admin-setting-reset-' + s.key">Reset</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Anonymous visitors tab -->
+      <section *ngIf="activeTab() === 'visitors'" class="admin-card" data-testid="admin-card-visitors">
+        <h2>Anonymous visitors</h2>
+        <p class="card-hint">
+          Unique IP × User-Agent combinations that have used a share code
+          since logging began. Click a row to see every code that visitor has
+          used.
+        </p>
+        <div *ngIf="visitorsError() as err" class="alert alert-error">{{ err }}</div>
+        <div *ngIf="visitorsLoading()" class="loading-row">Loading visitors…</div>
+        <table *ngIf="visitors().length > 0; else noVisitors" class="admin-table clickable-rows" data-testid="admin-visitors-table">
+          <thead>
+            <tr>
+              <th>IP address</th>
+              <th>Browser</th>
+              <th class="num">Codes used</th>
+              <th class="num">Accesses</th>
+              <th>First seen</th>
+              <th>Last seen</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <ng-container *ngFor="let v of visitors()">
+              <tr (click)="toggleVisitor(v)"
+                class="row-clickable"
+                [class.expanded]="expandedVisitor() === v"
+                data-testid="admin-visitor-row">
+                <td><code>{{ v.ipAddress || '—' }}</code></td>
+                <td class="ua-cell" [title]="v.userAgent">{{ v.userAgent || '—' }}</td>
+                <td class="num">{{ v.codes.length }}</td>
+                <td class="num">{{ v.accessCount | number }}</td>
+                <td>{{ v.firstSeenAt | date:'short' }}</td>
+                <td>{{ v.lastSeenAt | date:'short' }}</td>
+                <td class="row-arrow">{{ expandedVisitor() === v ? '▾' : '›' }}</td>
+              </tr>
+              <tr *ngIf="expandedVisitor() === v" class="drilldown-row">
+                <td colspan="7">
+                  <table class="admin-table inner">
+                    <thead>
+                      <tr><th>Code</th><th>Album</th><th class="num">Accesses</th><th>Last access</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr *ngFor="let c of v.codes">
+                        <td><code>{{ c.code }}</code></td>
+                        <td>{{ c.albumTitle || '(deleted album)' }}</td>
+                        <td class="num">{{ c.useCount | number }}</td>
+                        <td>{{ c.lastUsedAt ? (c.lastUsedAt | date:'short') : '—' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </td>
+              </tr>
+            </ng-container>
+          </tbody>
+        </table>
+        <ng-template #noVisitors><p class="muted">No anonymous visitors yet.</p></ng-template>
+      </section>
+
+      <!-- Service Health tab -->
+      <section *ngIf="activeTab() === 'health'" class="admin-card" data-testid="admin-card-health">
+        <h2>Service health</h2>
+        <p class="card-hint">
+          Live snapshot of photo / queue counts and the schedule of every
+          background worker. Polls every 5 seconds while this tab is open.
+          Use <strong>Trigger now</strong> to short-circuit a worker's wait.
+        </p>
+        <div *ngIf="healthError() as err" class="alert alert-error">{{ err }}</div>
+        <div *ngIf="healthLoading() && !health()" class="loading-row">Loading service health…</div>
+
+        <div *ngIf="health() as h" class="health-grid">
+          <div class="stat-card">
+            <h3>This replica</h3>
+            <dl class="stat-list">
+              <dt>Role</dt><dd><code>{{ h.replica.role }}</code></dd>
+              <dt>Instance</dt><dd><code class="muted small">{{ h.replica.instanceId }}</code></dd>
+              <dt>Workers</dt><dd>{{ h.replica.workersEnabled ? 'enabled' : 'disabled' }}</dd>
+            </dl>
+            <p class="muted small">
+              When scaled out, refresh repeatedly to see other replicas
+              answer. Workers + queue counts below reflect all replicas
+              (shared DB); the Workers table reflects only this one.
+            </p>
+          </div>
+          <div class="stat-card">
+            <h3>Photos</h3>
+            <dl class="stat-list">
+              <dt>Total</dt><dd>{{ h.photos.total | number }}</dd>
+              <dt>Uploading</dt><dd>{{ h.photos.uploading | number }}</dd>
+              <dt>Pending</dt><dd>{{ h.photos.pending | number }}</dd>
+              <dt>Processing</dt><dd>{{ h.photos.processing | number }}</dd>
+              <dt>Complete</dt><dd>{{ h.photos.complete | number }}</dd>
+              <dt>Failed</dt><dd>{{ h.photos.failed | number }}</dd>
+            </dl>
+          </div>
+          <div class="stat-card">
+            <h3>Processing queue</h3>
+            <dl class="stat-list">
+              <dt>Pending</dt><dd>{{ h.queue.pending | number }}</dd>
+              <dt>Processing</dt><dd>{{ h.queue.processing | number }}</dd>
+              <dt>Complete</dt><dd>{{ h.queue.complete | number }}</dd>
+              <dt>Error</dt><dd>{{ h.queue.error | number }}</dd>
+            </dl>
+            <h4 class="sub-h">Pending+Processing by quality</h4>
+            <dl class="stat-list" data-testid="admin-health-queue-by-quality">
+              <ng-container *ngFor="let q of healthQueueByQuality()">
+                <dt>{{ q.quality }}</dt><dd>{{ q.count | number }}</dd>
+              </ng-container>
+            </dl>
+          </div>
+        </div>
+
+        <h3 *ngIf="health()">Workers</h3>
+        <table *ngIf="health() as h2" class="admin-table" data-testid="admin-health-workers">
+          <thead>
+            <tr>
+              <th>Worker</th>
+              <th>Interval</th>
+              <th>Last ran</th>
+              <th>Next run</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let w of h2.workers" [attr.data-worker]="w.name">
+              <td><strong>{{ w.displayName }}</strong><br /><code class="muted small">{{ w.name }}</code></td>
+              <td>{{ formatInterval(w.interval) }}</td>
+              <td>{{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}</td>
+              <td>{{ w.nextRunAt ? (w.nextRunAt | date:'short') : '—' }}</td>
+              <td>
+                <button type="button" class="btn-primary btn-sm"
+                  [disabled]="!w.canTrigger || triggeringWorker() === w.name"
+                  (click)="triggerWorker(w)"
+                  [attr.data-testid]="'admin-health-trigger-' + w.name">
+                  {{ triggeringWorker() === w.name ? 'Triggering…' : 'Trigger now' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
     </section>
   `,
   styles: [`
@@ -541,6 +827,22 @@ type SortDir = 'asc' | 'desc';
       background: transparent; border: none; font-size: 22px;
       line-height: 1; color: #6b7280; cursor: pointer;
     }
+
+    .form-input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; width: 100%; min-width: 160px; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn-link { background: transparent; border: none; color: #0d6efd; text-decoration: underline; cursor: pointer; padding: 0 8px; font-size: 12px; }
+    .actions-cell { white-space: nowrap; }
+    .small { font-size: 11px; }
+    .ua-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .drilldown-row td { background: #f9fafb; padding: 8px 16px; }
+    .admin-table.inner { box-shadow: none; border: 1px solid #e5e7eb; }
+    .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 8px 0 16px; }
+    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; background: #fafbfd; }
+    .stat-card h3 { margin: 0 0 6px; font-size: 13px; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat-card .sub-h { margin: 12px 0 4px; font-size: 12px; color: #6b7280; }
+    .stat-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; }
+    .stat-list dt { color: #6b7280; font-size: 12px; }
+    .stat-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
   `]
 })
 export class AdminSettingsComponent {
@@ -592,6 +894,27 @@ export class AdminSettingsComponent {
   readonly drilldownLoading = signal<boolean>(false);
   readonly drilldownError = signal<string | null>(null);
 
+  // Runtime settings tab
+  readonly settings = signal<RuntimeSetting[]>([]);
+  readonly settingsLoading = signal<boolean>(false);
+  readonly settingsError = signal<string | null>(null);
+  readonly settingDrafts = signal<Record<string, string>>({});
+  private settingsLoaded = false;
+
+  // Anonymous visitors tab
+  readonly visitors = signal<AnonymousVisitor[]>([]);
+  readonly visitorsLoading = signal<boolean>(false);
+  readonly visitorsError = signal<string | null>(null);
+  readonly expandedVisitor = signal<AnonymousVisitor | null>(null);
+  private visitorsLoaded = false;
+
+  // Service health tab
+  readonly health = signal<ServiceHealth | null>(null);
+  readonly healthLoading = signal<boolean>(false);
+  readonly healthError = signal<string | null>(null);
+  readonly triggeringWorker = signal<string | null>(null);
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor() {
     // Debounced search → reload users from page 1.
     this.searchInput$
@@ -606,7 +929,144 @@ export class AdminSettingsComponent {
     this.activeTab.set(tab);
     if (tab === 'users' && !this.usersLoaded) this.loadUsers();
     if (tab === 'stats' && !this.statsLoaded) this.loadStats();
+    if (tab === 'settings' && !this.settingsLoaded) this.loadSettings();
+    if (tab === 'visitors' && !this.visitorsLoaded) this.loadVisitors();
+    if (tab === 'health') {
+      this.loadHealth();
+      this.startHealthPolling();
+    } else {
+      this.stopHealthPolling();
+    }
   }
+
+  // ---- Runtime settings ----------------------------------------------------
+
+  loadSettings(): void {
+    this.settingsLoading.set(true);
+    this.settingsError.set(null);
+    this.http.get<RuntimeSetting[]>(`${environment.apiUrl}/api/admin/settings`)
+      .pipe(catchError(err => { this.settingsError.set(this.extractErrorMessage(err)); return of([]); }))
+      .subscribe(rows => {
+        this.settings.set(rows);
+        this.settingsLoading.set(false);
+        this.settingsLoaded = true;
+      });
+  }
+
+  trackBySettingKey(_i: number, s: RuntimeSetting): string { return s.key; }
+
+  setSettingDraft(key: string, value: string): void {
+    this.settingDrafts.update(d => ({ ...d, [key]: value }));
+  }
+
+  isSettingDirty(s: RuntimeSetting): boolean {
+    const draft = this.settingDrafts()[s.key];
+    if (draft === undefined) return false;
+    return draft !== s.currentValue;
+  }
+
+  saveSetting(s: RuntimeSetting): void {
+    const value = this.settingDrafts()[s.key];
+    if (value === undefined) return;
+    this.http.put<RuntimeSetting>(
+      `${environment.apiUrl}/api/admin/settings/${encodeURIComponent(s.key)}`,
+      { value })
+      .pipe(catchError(err => { this.settingsError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(updated => {
+        if (!updated) return;
+        this.settings.update(rows => rows.map(r => r.key === s.key ? updated : r));
+        this.settingDrafts.update(d => { const copy = { ...d }; delete copy[s.key]; return copy; });
+      });
+  }
+
+  resetSetting(s: RuntimeSetting): void {
+    this.http.delete(`${environment.apiUrl}/api/admin/settings/${encodeURIComponent(s.key)}`)
+      .pipe(catchError(err => { this.settingsError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(() => {
+        this.settingDrafts.update(d => { const copy = { ...d }; delete copy[s.key]; return copy; });
+        // Reload the full list so currentValue resets to configured fallback.
+        this.loadSettings();
+      });
+  }
+
+  // ---- Anonymous visitors --------------------------------------------------
+
+  loadVisitors(): void {
+    this.visitorsLoading.set(true);
+    this.visitorsError.set(null);
+    this.http.get<AnonymousVisitor[]>(`${environment.apiUrl}/api/admin/anonymous-visitors`)
+      .pipe(catchError(err => { this.visitorsError.set(this.extractErrorMessage(err)); return of([]); }))
+      .subscribe(rows => {
+        this.visitors.set(rows);
+        this.visitorsLoading.set(false);
+        this.visitorsLoaded = true;
+      });
+  }
+
+  toggleVisitor(v: AnonymousVisitor): void {
+    this.expandedVisitor.set(this.expandedVisitor() === v ? null : v);
+  }
+
+  // ---- Service health ------------------------------------------------------
+
+  loadHealth(): void {
+    this.healthLoading.set(true);
+    this.http.get<ServiceHealth>(`${environment.apiUrl}/api/admin/service-health`)
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(snap => {
+        if (snap) {
+          this.health.set(snap);
+          this.healthError.set(null);
+        }
+        this.healthLoading.set(false);
+      });
+  }
+
+  healthQueueByQuality(): Array<{ quality: string; count: number }> {
+    const h = this.health();
+    if (!h) return [];
+    return Object.entries(h.queue.byQuality || {}).map(([quality, count]) => ({ quality, count }));
+  }
+
+  private startHealthPolling(): void {
+    this.stopHealthPolling();
+    this.healthTimer = setInterval(() => this.loadHealth(), 5000);
+  }
+
+  private stopHealthPolling(): void {
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
+  }
+
+  formatInterval(iso: string | null | undefined): string {
+    if (!iso) return '—';
+    // .NET TimeSpan: "[d.]hh:mm:ss[.fff]". Compress to a human-friendly form.
+    const m = /^(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(iso);
+    if (!m) return iso;
+    const days = parseInt(m[1] || '0', 10);
+    const hours = parseInt(m[2], 10);
+    const minutes = parseInt(m[3], 10);
+    const seconds = parseInt(m[4], 10);
+    const parts: string[] = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (minutes) parts.push(`${minutes}m`);
+    if (seconds || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(' ');
+  }
+
+  triggerWorker(w: WorkerStatus): void {
+    this.triggeringWorker.set(w.name);
+    this.http.post(`${environment.apiUrl}/api/admin/service-health/workers/${encodeURIComponent(w.name)}/trigger`, {})
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(() => {
+        this.triggeringWorker.set(null);
+        this.loadHealth();
+      });
+  }
+
 
   // ---- Maintenance ---------------------------------------------------------
 

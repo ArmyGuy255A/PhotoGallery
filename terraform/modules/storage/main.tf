@@ -39,15 +39,15 @@ resource "azurerm_storage_account" "this" {
     }
 
     cors_rule {
-      allowed_origins    = var.cors_allowed_origins
+      allowed_origins = var.cors_allowed_origins
       # PUT + POST are required for the direct-to-blob SAS upload flow the
       # SPA uses (PhotoService.uploadPhoto → POST /upload-tickets then
       # browser PUTs the file straight to blob storage). The narrower
       # GET/HEAD/OPTIONS set worked for the legacy multipart path that
       # routed everything through the API; SAS direct upload broke under
       # those CORS rules with ERR_FAILED on the preflight.
-      allowed_methods    = ["GET", "HEAD", "OPTIONS", "PUT", "POST"]
-      allowed_headers    = [
+      allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST"]
+      allowed_headers = [
         "x-ms-blob-type",
         "x-ms-meta-*",
         "x-ms-version",

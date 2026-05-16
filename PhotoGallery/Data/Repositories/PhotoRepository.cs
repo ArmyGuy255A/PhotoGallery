@@ -23,6 +23,14 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
             .ToListAsync();
     }
 
+    public async Task<List<Photo>> GetAlbumPhotosIncludingUploadingAsync(Guid albumId)
+    {
+        return await _dbSet
+            .AsNoTracking()
+            .Where(p => p.AlbumId == albumId)
+            .ToListAsync();
+    }
+
     public async Task<Photo?> GetWithVersionsAsync(Guid photoId)
     {
         return await _dbSet

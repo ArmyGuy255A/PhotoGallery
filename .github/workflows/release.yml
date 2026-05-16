@@ -119,12 +119,32 @@ jobs:
       # Pin the version tag (not :latest or <sha>) so each deployed revision
       # is reproducible and `az containerapp update --image ...:vA.B.C.D`
       # against a prior version is a one-liner rollback.
-      - name: Update Container App image
+      #
+      # Split-topology: the same image powers both the API container app
+      # (always-on, min=max=1, full ingress) and the worker container app
+      # (no ingress, scales 0→N on queue depth). Both must move forward
+      # together — otherwise the API and workers diverge and shared schema
+      # / contract assumptions break. ACA_WORKER_NAME is optional so older
+      # deployments without the worker app still work; emit a warning and
+      # continue instead of failing.
+      - name: Update API Container App image
         run: |
           az containerapp update \
             --name "${{ vars.ACA_BACKEND_NAME }}" \
             --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
             --image "${{ vars.ACR_LOGIN_SERVER }}/photogallery-backend:${{ needs.publish-images.outputs.version }}"
+
+      - name: Update worker Container App image
+        if: vars.ACA_WORKER_NAME != ''
+        run: |
+          az containerapp update \
+            --name "${{ vars.ACA_WORKER_NAME }}" \
+            --resource-group "${{ vars.ACA_RESOURCE_GROUP }}" \
+            --image "${{ vars.ACR_LOGIN_SERVER }}/photogallery-backend:${{ needs.publish-images.outputs.version }}"
+
+      - name: Skip worker update (not configured)
+        if: vars.ACA_WORKER_NAME == ''
+        run: echo "::warning::vars.ACA_WORKER_NAME is not set — skipping worker container app update. Set the repo variable to the worker ACA app name once terraform/dev/main.tf module.compute_worker is applied."
 
       - name: Show active revision
         run: |

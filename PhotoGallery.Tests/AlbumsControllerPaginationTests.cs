@@ -55,6 +55,8 @@ public class AlbumsControllerPaginationTests
         public TestPhotoRepository(ApplicationDbContext ctx) : base(ctx) { }
         public Task<List<Photo>> GetAlbumPhotosAsync(Guid albumId) =>
             _context.Photos.Where(p => p.AlbumId == albumId).ToListAsync();
+        public Task<List<Photo>> GetAlbumPhotosIncludingUploadingAsync(Guid albumId) =>
+            _context.Photos.Where(p => p.AlbumId == albumId).ToListAsync();
         public Task<Photo?> GetWithVersionsAsync(Guid photoId) =>
             _context.Photos.Include(p => p.PhotoVersions).FirstOrDefaultAsync(p => p.Id == photoId);
         public Task<List<Photo>> GetUnprocessedPhotosAsync() =>
