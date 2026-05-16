@@ -28,7 +28,12 @@ namespace PhotoGallery.Controllers;
 [Route("api/admin")]
 public class AdminController : ControllerBase
 {
-    private static readonly string[] AllowedRoles = { "Admin", "User" };
+    /// <summary>
+    /// Roles the admin UI may assign/revoke. "User" is intentionally excluded
+    /// — every authenticated user implicitly has it, and removing it leaves a
+    /// user in a confusing "elevated-only" state.
+    /// </summary>
+    private static readonly string[] AllowedRoles = { "Admin", "AlbumCreator" };
 
     private readonly ApplicationDbContext _ctx;
     private readonly UserManager<User> _userManager;
@@ -159,22 +164,49 @@ public class AdminController : ControllerBase
     /// the same list twice is a no-op. Refuses to remove the last Admin
     /// (so an admin can't lock the system out by demoting themselves).
     /// </summary>
+
+    /// <summary>
+    /// Catalogue of admin-assignable roles. Returned to the SPA so the
+    /// Users tab can render the correct role chips/toggles for each row.
+    /// "User" is excluded — it's implicit for every authenticated user.
+    /// </summary>
+    [HttpGet("roles")]
+    public ActionResult<IEnumerable<string>> GetAssignableRoles() => Ok(AllowedRoles);
+
     [HttpPut("users/{userId}/roles")]
     public async Task<ActionResult<AdminUserDto>> SetUserRoles(string userId, [FromBody] SetRolesRequest body)
     {
         if (body?.Roles == null) return BadRequest("Roles array is required");
 
-        var requested = body.Roles.Where(r => !string.IsNullOrWhiteSpace(r)).Distinct().ToList();
-        var invalid = requested.Where(r => !AllowedRoles.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
+        // "User" is the implicit baseline role — accept it in the payload
+        // (the FE always sends it to avoid stripping it) but validate it
+        // separately from AllowedRoles so it's never an "unknown role" error.
+        // Final role set is guaranteed to include User regardless of what
+        // the caller sent.
+        var requested = body.Roles
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var assignable = AllowedRoles.Concat(new[] { Roles.User })
+            .ToArray();
+        var invalid = requested.Where(r => !assignable.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
         if (invalid.Count > 0)
-            return BadRequest($"Unknown role(s): {string.Join(", ", invalid)}. Allowed: {string.Join(", ", AllowedRoles)}");
+            return BadRequest($"Unknown role(s): {string.Join(", ", invalid)}. Allowed: {string.Join(", ", assignable)}");
+
+        // Force-add User to the requested set if the caller dropped it.
+        if (!requested.Contains(Roles.User, StringComparer.OrdinalIgnoreCase))
+            requested.Add(Roles.User);
 
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null) return NotFound("User not found");
 
         var current = (await _userManager.GetRolesAsync(user)).ToList();
         var toAdd = requested.Where(r => !current.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
-        var toRemove = current.Where(r => !requested.Contains(r, StringComparer.OrdinalIgnoreCase)).ToList();
+        var toRemove = current.Where(r =>
+            !requested.Contains(r, StringComparer.OrdinalIgnoreCase) &&
+            // Defensive: never remove User even if a future caller bug forgets it.
+            !string.Equals(r, Roles.User, StringComparison.OrdinalIgnoreCase)).ToList();
 
         // Last-admin guard: if removing Admin from this user would leave the
         // system with zero admins, refuse the change. The very first admin
@@ -617,8 +649,56 @@ public class AdminController : ControllerBase
             .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
             .ToListAsync();
 
+        // Merge in-memory registry (this replica) + heartbeat rows (other replicas).
+        // The in-memory entries take precedence for the local replica (real-time
+        // trigger hook availability); rows in the DB for OTHER instances are
+        // surfaced as additional worker statuses so the dashboard sees the
+        // separate worker container app on the split topology.
         var registry = HttpContext.RequestServices.GetRequiredService<WorkerScheduleRegistry>();
         var workers = registry.Snapshot();
+        var localKeys = workers.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var heartbeats = await _ctx.WorkerHeartbeats.AsNoTracking().ToListAsync();
+        // Liveness: heartbeat is fresh if newer than (now - max(2*interval, 90s)).
+        // 90s floor keeps a 5-second interval from being declared dead after a
+        // single missed tick.
+        var now = DateTime.UtcNow;
+        foreach (var hb in heartbeats)
+        {
+            // Find the matching local worker entry (same name) and decorate it
+            // with the metrics from the heartbeat. If absent locally, add a
+            // synthetic entry.
+            var liveness = TimeSpan.FromSeconds(Math.Max(90, hb.IntervalSeconds * 2));
+            var isAlive = (now - hb.LastHeartbeatAt) <= liveness;
+            var dto = new WorkerStatusDto
+            {
+                Name             = hb.WorkerName,
+                DisplayName      = hb.DisplayName,
+                Interval         = TimeSpan.FromSeconds(hb.IntervalSeconds),
+                LastRanAt        = hb.LastRanAt,
+                NextRunAt        = hb.LastHeartbeatAt.AddSeconds(hb.IntervalSeconds),
+                CanTrigger       = false, // remote replica — trigger hook not reachable from here
+                InstanceId       = hb.InstanceId,
+                IsAlive          = isAlive,
+                ItemsProcessedTotal = hb.ItemsProcessedTotal,
+                ItemsInFlight    = hb.ItemsInFlight,
+                LastError        = hb.LastError
+            };
+            // De-dup by (name + instanceId) so the local replica's in-memory
+            // entry and its DB heartbeat row don't both show up.
+            var localInstance = WorkerScheduleRegistry.InstanceId;
+            if (string.Equals(hb.InstanceId, localInstance, StringComparison.OrdinalIgnoreCase) && localKeys.Contains(hb.WorkerName))
+            {
+                // Augment the local entry with the metrics from its own heartbeat row.
+                var local = workers.First(w => string.Equals(w.Name, hb.WorkerName, StringComparison.OrdinalIgnoreCase));
+                local.InstanceId          = hb.InstanceId;
+                local.IsAlive             = isAlive;
+                local.ItemsProcessedTotal = hb.ItemsProcessedTotal;
+                local.ItemsInFlight       = hb.ItemsInFlight;
+                local.LastError           = hb.LastError;
+                continue;
+            }
+            workers.Add(dto);
+        }
 
         var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var workersEnabled = cfg.GetValue("WorkersEnabled", true);
@@ -771,6 +851,16 @@ public class WorkerStatusDto
     public DateTime? LastRanAt { get; set; }
     public DateTime? NextRunAt { get; set; }
     public bool CanTrigger { get; set; }
+    /// <summary>Replica that owns this entry. Local in-memory entries get filled by the heartbeat merge in GetServiceHealth.</summary>
+    public string? InstanceId { get; set; }
+    /// <summary>True if the heartbeat row is fresh (within 2x its interval, min 90s). False = worker has gone silent.</summary>
+    public bool IsAlive { get; set; } = true;
+    /// <summary>Per-replica running total of items processed since startup.</summary>
+    public long ItemsProcessedTotal { get; set; }
+    /// <summary>Size of the batch the worker is currently chewing on, 0 between ticks.</summary>
+    public int ItemsInFlight { get; set; }
+    /// <summary>Last error from the worker (sticky until a successful tick).</summary>
+    public string? LastError { get; set; }
 }
 
 public class SetRolesRequest

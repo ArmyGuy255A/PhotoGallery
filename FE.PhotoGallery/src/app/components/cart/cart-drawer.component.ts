@@ -291,7 +291,7 @@ export class CartDrawerComponent implements OnInit, OnDestroy {
       await this.cart.download();
     } catch (err: unknown) {
       if (err instanceof CartCapError) {
-        this.showToast('Cart is full (100 items max). Please download or remove items first.');
+        this.showToast('Cart is full. Please download or remove items first.');
       } else {
         const msg = err instanceof Error ? err.message : 'Download failed. Please try again.';
         this.showToast(msg);

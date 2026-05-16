@@ -11,7 +11,7 @@ import { AlbumEditComponent } from './components/albums/album-edit.component';
 import { SharedAlbumsComponent } from './components/shared-albums/shared-albums.component';
 import { AccountSettingsComponent } from './components/account/account-settings.component';
 import { AdminSettingsComponent } from './components/admin/admin-settings.component';
-import { authGuard, adminGuard } from './services/auth.guard';
+import { authGuard, adminGuard, albumCreatorGuard } from './services/auth.guard';
 
 function findTopLevel(path: string): Route | undefined {
   return routes.find(r => r.path === path);
@@ -71,11 +71,11 @@ describe('app.routes', () => {
     expect(findChild('account').component).toBe(AccountSettingsComponent);
   });
 
-  it('protects album-create and album-edit child routes with adminGuard', () => {
+  it('protects album-create and album-edit child routes with albumCreatorGuard', () => {
     expect(findChild('albums/create').component).toBe(AlbumsCreateComponent);
-    expect(findChild('albums/create').canActivate).toContain(adminGuard);
+    expect(findChild('albums/create').canActivate).toContain(albumCreatorGuard);
     expect(findChild('albums/:id/edit').component).toBe(AlbumEditComponent);
-    expect(findChild('albums/:id/edit').canActivate).toContain(adminGuard);
+    expect(findChild('albums/:id/edit').canActivate).toContain(albumCreatorGuard);
   });
 
   it('mounts /admin/settings as an adminGuard-protected child of the shell', () => {

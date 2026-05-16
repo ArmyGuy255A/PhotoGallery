@@ -226,9 +226,23 @@ public class StorageConsistencyService
             return;
         }
 
-        // Items in Processing are in flight — never touch them (concurrency safety with PhotoProcessingWorker).
+        // Items in Processing: in-flight items are protected by the lease.
+        // If LeaseExpiresAt has passed, the worker that owned this row crashed
+        // (OOM in trial was the cause) and the row is now orphaned. Reset it
+        // to Pending so the next worker tick re-leases and reprocesses.
         if (item.Status == ProcessingStatus.Processing)
         {
+            if (item.LeaseExpiresAt.HasValue && item.LeaseExpiresAt.Value < DateTime.UtcNow)
+            {
+                _logger.LogWarning(
+                    "Orphaned Processing item {ItemId} (photo {PhotoId} quality {Quality}) — lease expired {LeaseExpired:o}; resetting to Pending",
+                    item.Id, photo.Id, quality, item.LeaseExpiresAt.Value);
+                ResetItemToPending(item);
+                await _itemRepository.UpdateAsync(item);
+                mutations.ItemsChanged = true;
+                report.ItemsRequeued++;
+            }
+            // Active lease (worker still working): leave it alone.
             return;
         }
 

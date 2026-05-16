@@ -314,7 +314,6 @@ type SortDir = 'asc' | 'desc';
                 Downloads <span class="sort-indicator">{{ sortIndicator('downloads') }}</span>
               </th>
               <th>Roles</th>
-              <th>Admin</th>
             </tr>
           </thead>
           <tbody>
@@ -335,19 +334,24 @@ type SortDir = 'asc' | 'desc';
                 <ng-template #zeroDownloads><span class="muted">0</span></ng-template>
               </td>
               <td>
-                <span *ngFor="let r of u.roles" class="role-chip" [class.role-admin]="r === 'Admin'">{{ r }}</span>
-              </td>
-              <td>
-                <label class="role-toggle">
-                  <input type="checkbox" [checked]="isAdmin(u)"
-                    [disabled]="roleUpdateFor() === u.id"
-                    (change)="toggleAdmin(u, $event)"
-                    [attr.data-testid]="'admin-user-toggle-' + u.id" />
-                </label>
+                <!-- Always-on baseline chip. Not toggleable — every authenticated user has User. -->
+                <span class="role-chip role-baseline" title="Implicit baseline role — every authenticated user has this">User</span>
+                <!-- Assignable elevated roles: each chip is a toggle button. -->
+                <button *ngFor="let role of assignableRoles()"
+                  type="button"
+                  class="role-chip role-toggle"
+                  [class.role-on]="hasRole(u, role)"
+                  [class.role-admin]="role === 'Admin' && hasRole(u, role)"
+                  [disabled]="roleUpdateFor() === u.id"
+                  (click)="toggleRole(u, role)"
+                  [attr.data-testid]="'admin-user-role-' + role.toLowerCase() + '-' + u.id"
+                  [attr.aria-pressed]="hasRole(u, role)">
+                  {{ role }}
+                </button>
               </td>
             </tr>
             <tr *ngIf="p.items.length === 0">
-              <td colspan="8" class="muted center">No users match the current filter.</td>
+              <td colspan="7" class="muted center">No users match the current filter.</td>
             </tr>
           </tbody>
         </table>
@@ -539,13 +543,13 @@ type SortDir = 'asc' | 'desc';
                 <input *ngIf="s.dataType !== 'bool'"
                   type="text"
                   class="form-input"
-                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? ''"
+                  [value]="settingValueFor(s)"
                   (input)="setSettingDraft(s.key, $any($event.target).value)"
                   [attr.placeholder]="s.defaultValue"
                   [attr.data-testid]="'admin-setting-input-' + s.key" />
                 <select *ngIf="s.dataType === 'bool'"
                   class="form-input"
-                  [value]="settingDrafts()[s.key] ?? s.currentValue ?? s.defaultValue"
+                  [value]="settingValueFor(s)"
                   (change)="setSettingDraft(s.key, $any($event.target).value)"
                   [attr.data-testid]="'admin-setting-input-' + s.key">
                   <option value="true">true</option>
@@ -797,7 +801,22 @@ type SortDir = 'asc' | 'desc';
       border-radius: 999px; font-size: 11px; background: #f3f4f6; color: #374151;
     }
     .role-chip.role-admin { background: #fef3c7; color: #92400e; }
-    .role-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .role-chip.role-baseline { background: #eef2ff; color: #4338ca; cursor: default; }
+    /* Toggleable chip button — outlined when off, filled when on. */
+    button.role-chip.role-toggle {
+      border: 1px solid #d1d5db; background: transparent; color: #6b7280;
+      cursor: pointer; transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    button.role-chip.role-toggle:hover:not(:disabled) {
+      background: #f9fafb; border-color: #9ca3af; color: #374151;
+    }
+    button.role-chip.role-toggle.role-on {
+      background: #dcfce7; color: #15803d; border-color: #86efac;
+    }
+    button.role-chip.role-toggle.role-on.role-admin {
+      background: #fef3c7; color: #92400e; border-color: #fcd34d;
+    }
+    button.role-chip.role-toggle:disabled { opacity: 0.5; cursor: wait; }
     .link-button {
       background: transparent; border: none; color: #0d6efd;
       cursor: pointer; padding: 0; font: inherit; text-decoration: underline;
@@ -866,6 +885,13 @@ export class AdminSettingsComponent {
   readonly usersLoading = signal<boolean>(false);
   readonly usersError = signal<string | null>(null);
   readonly roleUpdateFor = signal<string | null>(null);
+  /**
+   * Catalogue of admin-assignable roles fetched from GET /api/admin/roles.
+   * Defaults to the current set ['Admin', 'AlbumCreator'] so the UI is
+   * usable before the network call returns. "User" is intentionally
+   * excluded — it's the implicit baseline role.
+   */
+  readonly assignableRoles = signal<string[]>(['Admin', 'AlbumCreator']);
   readonly search = signal<string>('');
   readonly page = signal<number>(1);
   readonly pageSize = signal<number>(25);
@@ -927,7 +953,7 @@ export class AdminSettingsComponent {
 
   onSelectTab(tab: AdminTab): void {
     this.activeTab.set(tab);
-    if (tab === 'users' && !this.usersLoaded) this.loadUsers();
+    if (tab === 'users' && !this.usersLoaded) { this.loadUsers(); this.loadAssignableRoles(); }
     if (tab === 'stats' && !this.statsLoaded) this.loadStats();
     if (tab === 'settings' && !this.settingsLoaded) this.loadSettings();
     if (tab === 'visitors' && !this.visitorsLoaded) this.loadVisitors();
@@ -957,6 +983,21 @@ export class AdminSettingsComponent {
 
   setSettingDraft(key: string, value: string): void {
     this.settingDrafts.update(d => ({ ...d, [key]: value }));
+  }
+
+  /**
+   * Resolve the current value for a setting input. Returns the user's
+   * pending draft if they've started typing; otherwise the live value
+   * from the backend (currentValue, with defaultValue as the last-resort
+   * fallback). Extracted from the template because Angular's strict
+   * template type-check flags chained ?? expressions over signal calls
+   * as redundant — easier to express in TS.
+   */
+  settingValueFor(s: RuntimeSetting): string {
+    const draft = this.settingDrafts()[s.key];
+    if (draft !== undefined) return draft;
+    if (s.currentValue !== undefined && s.currentValue !== null) return s.currentValue;
+    return s.defaultValue ?? '';
   }
 
   isSettingDirty(s: RuntimeSetting): boolean {
@@ -1148,17 +1189,41 @@ export class AdminSettingsComponent {
   }
 
   isAdmin(u: AdminUser): boolean { return u.roles.some(r => r === 'Admin'); }
+
+  loadAssignableRoles(): void {
+    this.http.get<string[]>(`${environment.apiUrl}/api/admin/roles`)
+      .pipe(catchError(() => of(null)))
+      .subscribe(roles => {
+        if (roles && roles.length > 0) this.assignableRoles.set(roles);
+      });
+  }
+
+  hasRole(u: AdminUser, role: string): boolean {
+    return u.roles.some(r => r.toLowerCase() === role.toLowerCase());
+  }
   formatName(u: AdminUser): string {
     const n = [u.firstName, u.lastName].filter(x => !!x).join(' ').trim();
     return n || '—';
   }
 
-  toggleAdmin(u: AdminUser, evt: Event): void {
-    const want = (evt.target as HTMLInputElement).checked;
-    const next = want
-      ? Array.from(new Set([...u.roles, 'Admin']))
-      : u.roles.filter(r => r !== 'Admin');
-    if (next.length === 0) next.push('User');
+  /**
+   * Toggle a single elevated role on a user. The "User" role is implicit
+   * and never sent in the PUT body — the BE preserves any existing
+   * baseline roles automatically.
+   *
+   * Last-admin guard is enforced server-side; on a Conflict response we
+   * just surface the error and reload (the row reverts to the prior
+   * roles set).
+   */
+  toggleRole(u: AdminUser, role: string): void {
+    const has = this.hasRole(u, role);
+    const next = has
+      ? u.roles.filter(r => r.toLowerCase() !== role.toLowerCase())
+      : Array.from(new Set([...u.roles, role]));
+    // Always keep the implicit User role so a successful PUT doesn't
+    // accidentally strip it (the BE allowlist excludes "User", so it
+    // would otherwise be filtered out).
+    if (!next.some(r => r.toLowerCase() === 'user')) next.push('User');
     this.roleUpdateFor.set(u.id);
     this.http.put<AdminUser>(`${environment.apiUrl}/api/admin/users/${u.id}/roles`, { roles: next })
       .pipe(catchError(err => {

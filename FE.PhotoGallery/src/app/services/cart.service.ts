@@ -38,7 +38,7 @@ interface CartResponse {
 }
 
 const STORAGE_KEY_PREFIX = 'photogallery-cart';
-const MAX_CART_SIZE = 100;
+const MAX_CART_SIZE = 99999;
 
 /** Error code thrown by service when the server returns a 409 cap_reached. */
 export const CART_CAP_REACHED = 'cart_cap_reached';
@@ -333,7 +333,7 @@ export class CartService {
 
   private addItemRemote(item: CartItem): void {
     if (this.items$.value.length >= MAX_CART_SIZE) {
-      this.errors$.next('Cart is full (100 items max). Please download or remove items first.');
+      this.errors$.next('Cart is full. Please download or remove items first.');
       return;
     }
     const url = `${environment.apiUrl}/api/cart`;

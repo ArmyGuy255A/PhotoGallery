@@ -72,7 +72,7 @@ describe('CartDrawerComponent', () => {
   });
 
   it('shows the cap toast when download throws CartCapError', async () => {
-    cart.download = jasmine.createSpy('download').and.returnValue(Promise.reject(new CartCapError(100)));
+    cart.download = jasmine.createSpy('download').and.returnValue(Promise.reject(new CartCapError(99999)));
     cart.cartItems$.next([item('p1', 'A1', 'Alpha')]);
     fixture.detectChanges();
 

@@ -17,8 +17,18 @@ namespace PhotoGallery.Controllers;
 [AllowAnonymous]
 public class AccessCodeController : ControllerBase
 {
-    /// <summary>TTL for short-lived public pre-signed URLs (gallery thumbnails).</summary>
-    private const int PublicUrlTtlMinutes = 15;
+    /// <summary>Construction-time default TTL for short-lived public pre-signed URLs. Hot-reloadable via BlobStorage:PublicUrlTtlMinutes.</summary>
+    private const int DefaultPublicUrlTtlMinutes = 60;
+
+    /// <summary>
+    /// Resolves the public-URL TTL live from <see cref="ISettingsResolver"/> so an admin
+    /// can extend cache headroom (UrlCacheSlidingMinutes &lt; this) without redeploying.
+    /// </summary>
+    private async Task<int> GetPublicUrlTtlMinutesAsync()
+    {
+        var resolver = HttpContext.RequestServices.GetRequiredService<ISettingsResolver>();
+        return await resolver.GetIntAsync("BlobStorage:PublicUrlTtlMinutes", DefaultPublicUrlTtlMinutes);
+    }
 
     private readonly IAccessCodeRepository _accessCodeRepository;
     private readonly IPhotoRepository _photoRepository;
@@ -172,12 +182,13 @@ public class AccessCodeController : ControllerBase
             string? mediumUrl = null;
             try
             {
+                var ttl = await GetPublicUrlTtlMinutesAsync();
                 thumbnailUrl = await _urlService.GenerateShortLivedUrlAsync(
-                    photo.Id, QualityType.Thumbnail, PublicUrlTtlMinutes, watermarked: true);
+                    photo.Id, QualityType.Thumbnail, ttl, watermarked: true);
                 // Public viewers see the watermarked Medium per D009 (deters AI removal +
                 // keeps the unwatermarked variant gated behind cart-checkout).
                 mediumUrl = await _urlService.GenerateShortLivedUrlAsync(
-                    photo.Id, QualityType.Medium, PublicUrlTtlMinutes, watermarked: true);
+                    photo.Id, QualityType.Medium, ttl, watermarked: true);
             }
             catch (Exception ex)
             {

@@ -81,6 +81,12 @@ public class PhotoVersionUrlRefreshWorker : BackgroundService
                 {
                     await RefreshExpiringUrlsAsync(refreshWindowDays, intervalHours, stoppingToken);
                     _registry.RecordTick(WorkerName);
+                    try
+                    {
+                        var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+                        await hb.StampAsync(WorkerName, "Pre-signed URL refresh", TimeSpan.FromHours(intervalHours), DateTime.UtcNow, stoppingToken);
+                    }
+                    catch { /* heartbeat is best-effort */ }
                 }
                 catch (OperationCanceledException)
                 {

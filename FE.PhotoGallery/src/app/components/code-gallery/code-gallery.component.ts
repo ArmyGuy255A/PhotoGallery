@@ -819,8 +819,8 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
       sourceAlbumTitle: this.album?.albumTitle
     });
     if (!added) {
-      if (this.cart.count >= 100) {
-        this.showToast('Cart is full (100 items max). Please download or remove items first.');
+      if (this.cart.count >= 99999) {
+        this.showToast('Cart is full. Please download or remove items first.');
       }
     }
   }
@@ -888,7 +888,7 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     if (added === requested) {
       this.showToast(`Added ${added} photo${added === 1 ? '' : 's'} to cart.`);
     } else if (added === 0) {
-      this.showToast('Cart is full (100 items max). Please download or remove items first.');
+      this.showToast('Cart is full. Please download or remove items first.');
     } else {
       this.showToast(`Added ${added} photos (cap reached); ${skipped} not added.`);
     }

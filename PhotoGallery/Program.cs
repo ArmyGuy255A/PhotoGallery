@@ -275,7 +275,9 @@ if (workersEnabled)
     builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
 }
 builder.Services.AddSingleton<WorkerScheduleRegistry>();
+builder.Services.AddSingleton<WorkerHeartbeatWriter>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
+builder.Services.AddMemoryCache();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()
@@ -299,7 +301,18 @@ builder.Services.Configure<AuthenticationOptions>(options =>
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
 });
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews()
+    .AddJsonOptions(o =>
+    {
+        // Always emit DateTime as ISO 8601 UTC with Z suffix so the SPA's
+        // Angular DatePipe renders them in the visitor's local timezone.
+        // See Serialization/UtcDateTimeJsonConverter.cs for the rationale
+        // (EF Core hands back Kind=Unspecified, which made the default
+        // serializer omit the timezone offset and the browser interpret
+        // the string as local time).
+        o.JsonSerializerOptions.Converters.Add(new PhotoGallery.Serialization.UtcDateTimeJsonConverter());
+        o.JsonSerializerOptions.Converters.Add(new PhotoGallery.Serialization.NullableUtcDateTimeJsonConverter());
+    });
 
 // Override ASP.NET's default ProblemDetails-shaped 400 response so model
 // binding / validation failures come back in the same envelope the global
@@ -316,7 +329,15 @@ builder.Services.Configure<Microsoft.AspNetCore.Mvc.ApiBehaviorOptions>(options 
 // callback in Authentication/DependencyInjection.cs — browsers can't set
 // custom headers on the WS upgrade so the SPA passes the JWT in the
 // ?access_token=... query string for paths under /hubs/.
-builder.Services.AddSignalR();
+builder.Services.AddSignalR()
+    .AddJsonProtocol(o =>
+    {
+        // Mirror the REST controllers — SignalR clients (the FE
+        // PhotoProgressService) also need UTC-with-Z timestamps so
+        // toLocaleString() / DatePipe render correctly.
+        o.PayloadSerializerOptions.Converters.Add(new PhotoGallery.Serialization.UtcDateTimeJsonConverter());
+        o.PayloadSerializerOptions.Converters.Add(new PhotoGallery.Serialization.NullableUtcDateTimeJsonConverter());
+    });
 
 var app = builder.Build();
 

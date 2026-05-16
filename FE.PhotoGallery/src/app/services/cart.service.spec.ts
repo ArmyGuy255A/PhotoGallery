@@ -206,12 +206,12 @@ describe('CartService', () => {
         expect(service.count).toBe(2);
       });
 
-      it('enforces the 100-item cap and returns the truncated count', () => {
+      it('enforces the 99999-item cap and returns the truncated count', () => {
         const batch: CartItem[] = [];
-        for (let i = 0; i < 120; i++) batch.push(makeItem(`p${i}`));
+        for (let i = 0; i < 100050; i++) batch.push(makeItem(`p${i}`));
         const added = service.addItems(batch);
-        expect(added).toBe(100);
-        expect(service.count).toBe(100);
+        expect(added).toBe(99999);
+        expect(service.count).toBe(99999);
       });
     });
   });
@@ -299,10 +299,10 @@ describe('CartService', () => {
 
       service.addItem({ photoId: 'p1', fileName: 'p1.jpg', quality: 'Medium' });
       const req = httpMock.expectOne(`${environment.apiUrl}/api/cart`);
-      req.flush({ reason: 'cap_reached', limit: 100 }, { status: 409, statusText: 'Conflict' });
+      req.flush({ reason: 'cap_reached', limit: 99999 }, { status: 409, statusText: 'Conflict' });
 
       expect(errors.length).toBe(1);
-      expect(errors[0]).toContain('100 items max');
+      expect(errors[0]).toContain('Cart is full');
     });
 
     it('removeItem DELETEs and updates state', async () => {
@@ -380,7 +380,7 @@ describe('CartService', () => {
       await flushMicrotasks();
       const req = httpMock.expectOne(`${environment.apiUrl}/api/cart/download`);
       req.flush(
-        new Blob([JSON.stringify({ reason: 'cap_reached', limit: 100 })], { type: 'application/json' }),
+        new Blob([JSON.stringify({ reason: 'cap_reached', limit: 99999 })], { type: 'application/json' }),
         { status: 409, statusText: 'Conflict' }
       );
 

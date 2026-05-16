@@ -26,6 +26,14 @@ public interface IPhotoVersionUrlRepository : IRepository<PhotoVersionUrl>
     /// Get all URLs for a photo.
     /// </summary>
     Task<List<PhotoVersionUrl>> GetByPhotoIdAsync(Guid photoId);
+
+    /// <summary>
+    /// Batch variant — fetch all active cached URLs for the supplied photo IDs in
+    /// one round-trip. Used by the album-list / paged-photos endpoints so a 20-photo
+    /// page is two DB calls (Photos + PhotoVersionUrls) instead of 40 individual
+    /// lookups. The caller groups the result by PhotoId in memory.
+    /// </summary>
+    Task<List<PhotoVersionUrl>> GetByPhotoIdsAsync(IEnumerable<Guid> photoIds);
     
     /// <summary>
     /// Get all active URLs that are expiring soon (before the refresh window).

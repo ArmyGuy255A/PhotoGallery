@@ -15,6 +15,10 @@ interface Album {
   createdDate: string;
   ownerId: string;
   canManage: boolean;
+  /** AAD/Identity user id of the album owner; set by the BE. */
+  createdBy?: string;
+  /** Resolved display name (e.g. "Phillip Dieppa"); empty when unresolved. */
+  createdByDisplayName?: string;
 }
 
 interface SavedAccessCode {
@@ -48,8 +52,8 @@ interface SavedAccessCode {
       </header>
 
       <main class="dashboard-content">
-        <!-- Admin-only: My Albums (the photographer's owned library) -->
-        <section class="albums-section" *ngIf="isAdmin">
+        <!-- My Albums — visible to Admin AND AlbumCreator -->
+        <section class="albums-section" *ngIf="canCreateAlbums">
           <div class="section-header">
             <h2>My Albums</h2>
             <button routerLink="/albums/create" class="create-btn">+ New Album</button>
@@ -81,6 +85,10 @@ interface SavedAccessCode {
               </div>
               <p class="album-description">{{ album.description || 'No description' }}</p>
               <p class="album-date">{{ (album.createdDate | date: 'short') }}</p>
+              <!-- Admin-only: show who created the album (issue: admin oversight). -->
+              <p *ngIf="isAdmin" class="album-creator" data-testid="album-card-created-by">
+                by {{ album.createdByDisplayName || album.createdBy || '—' }}
+              </p>
               <button class="action-btn" (click)="viewAlbum(album.id)">View Album</button>
             </div>
           </div>
@@ -356,9 +364,15 @@ interface SavedAccessCode {
     }
 
     .album-date {
-      margin: 0 0 12px 0;
+      margin: 0 0 4px 0;
       color: #999;
       font-size: 12px;
+    }
+    .album-creator {
+      margin: 0 0 12px 0;
+      color: #777;
+      font-size: 12px;
+      font-style: italic;
     }
 
     .action-btn {
@@ -492,6 +506,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.authService.isAdmin();
   }
 
+  /** Admin OR AlbumCreator — drives the My Albums section + Create button. */
+  get canCreateAlbums(): boolean {
+    return this.authService.canCreateAlbums();
+  }
+
   constructor(
     private authService: AuthService,
     private http: HttpClient,
@@ -503,14 +522,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.currentUser = user;
     });
 
-    // Admin-only data; skip the request entirely for non-admins so they don't
-    // see a 403 in the browser console for an endpoint they shouldn't be
-    // hitting in the first place.
-    if (this.isAdmin) {
+    // Album list — visible to Admin AND AlbumCreator. Non-creators don't
+    // see the My Albums section so we skip the request entirely (avoids a
+    // 403 in the console for /api/albums on a regular user).
+    if (this.canCreateAlbums) {
       this.loadAlbums();
-      this.loadStats();
     } else {
       this.isLoading = false;
+    }
+    // Admin-only data: stats panel.
+    if (this.isAdmin) {
+      this.loadStats();
     }
 
     this.loadSharedAlbums();
@@ -522,8 +544,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
         takeUntil(this.destroy$)
       )
       .subscribe(() => {
-        if (this.isAdmin) {
+        if (this.canCreateAlbums) {
           this.loadAlbums();
+        }
+        if (this.isAdmin) {
           this.loadStats();
         }
         this.loadSharedAlbums();
