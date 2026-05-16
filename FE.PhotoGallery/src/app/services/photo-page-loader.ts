@@ -182,6 +182,101 @@ export class PhotoPageLoader<T> {
     this.photos.update(existing => existing.filter(p => !predicate(p)));
   }
 
+  /**
+   * In-place refresh of the pages already loaded. Used during active uploads:
+   * the album-activity poll fires every few seconds and previously called
+   * <c>reset() + enableAutoLoad()</c>, which dumped the entire photo array
+   * and re-rendered from page 1 — that's what caused the scroll glitch
+   * users see on a long album during a bulk upload.
+   *
+   * Behaviour:
+   *  - Re-fetches pages 1..currentPage in parallel.
+   *  - Merges items into the existing array <b>by id</b>: an existing item
+   *    whose payload hasn't changed retains its array slot and object
+   *    reference (Angular's *ngFor trackBy keeps the DOM node), and only
+   *    items whose fields actually changed get a new object.
+   *  - If the server says <c>totalCount</c> grew, leaves <c>hasMore=true</c>
+   *    so the auto-load loop continues from where it left off; otherwise
+   *    preserves the current <c>hasMore</c>.
+   *  - Never resets the photos array to empty — even on a fetch error.
+   *
+   * Caller must provide a key extractor so the loader can match items by id
+   * (the loader itself is generic and doesn't know that <c>T</c> has an .id).
+   */
+  refreshLoaded(keyOf: (item: T) => string): void {
+    const loadedPage = this.page();
+    if (loadedPage === 0) {
+      this.loadNext();
+      return;
+    }
+    if (this.isLoading()) return;
+    this.isLoading.set(true);
+
+    // Fetch pages 1..loadedPage sequentially so we observe the same FileName
+    // ordering the user already sees on screen.
+    const fetchPage = (p: number): Promise<PhotoPage<T>> => new Promise((resolve, reject) => {
+      const sub = this.fetcher(p, this.pageSize).subscribe({
+        next: env => { sub.unsubscribe(); resolve(env); },
+        error: err => { sub.unsubscribe(); reject(err); }
+      });
+    });
+
+    (async () => {
+      const merged: T[] = [];
+      let lastEnvelope: PhotoPage<T> | null = null;
+      try {
+        for (let p = 1; p <= loadedPage; p++) {
+          const env = await fetchPage(p);
+          lastEnvelope = env;
+          for (const item of env?.items ?? []) merged.push(item);
+        }
+      } catch {
+        this.isLoading.set(false);
+        return;
+      }
+
+      // Merge by id, preserving object reference where the fields haven't
+      // changed. This is what keeps Angular's *ngFor from blowing away
+      // every DOM node on each poll cycle.
+      const existing = this.photos();
+      const existingById = new Map(existing.map(p => [keyOf(p), p] as const));
+      const next = merged.map(incoming => {
+        const id = keyOf(incoming);
+        const prior = existingById.get(id);
+        if (prior && this.shallowEqualPhoto(prior, incoming)) return prior;
+        return incoming;
+      });
+      this.photos.set(next);
+      if (lastEnvelope) {
+        this.totalCount.set(lastEnvelope.totalCount ?? next.length);
+        // If the server has new pages beyond what we've loaded, keep
+        // auto-load going from where we left off.
+        const moreAfterLoaded = lastEnvelope.totalCount > next.length;
+        this.hasMore.set(moreAfterLoaded || !!lastEnvelope.hasMore);
+        if (moreAfterLoaded && this.autoLoadEnabled) {
+          setTimeout(() => this.loadNext(), this.autoLoadDelayMs);
+        }
+      }
+      this.isLoading.set(false);
+    })();
+  }
+
+  /**
+   * Shallow field-by-field comparison used by <see cref="refreshLoaded"/> to
+   * decide whether an incoming item is "the same" as the cached one (so the
+   * old object reference can be reused, preserving the trackBy identity).
+   * Works for plain-data photo DTOs; doesn't care about nested objects.
+   */
+  private shallowEqualPhoto(a: T, b: T): boolean {
+    const ak = Object.keys(a as Record<string, unknown>);
+    const bk = Object.keys(b as Record<string, unknown>);
+    if (ak.length !== bk.length) return false;
+    for (const k of ak) {
+      if ((a as Record<string, unknown>)[k] !== (b as Record<string, unknown>)[k]) return false;
+    }
+    return true;
+  }
+
   /** Tear down on component destroy. */
   destroy(): void {
     this.destroy$.next();

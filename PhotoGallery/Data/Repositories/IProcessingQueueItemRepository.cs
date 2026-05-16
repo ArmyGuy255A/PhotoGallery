@@ -26,6 +26,14 @@ public interface IProcessingQueueItemRepository : IRepository<ProcessingQueueIte
     /// <summary>Get all items for a specific photo</summary>
     Task<IEnumerable<ProcessingQueueItem>> GetByPhotoIdAsync(Guid photoId);
 
+    /// <summary>
+    /// Album-scoped variant — joins ProcessingQueueItems to Photos by PhotoId
+    /// and filters by AlbumId in a single round-trip. Used by the album
+    /// processing-summary endpoint which previously did a full-table
+    /// GetAllAsync + in-memory filter, triggering 503s under bulk-upload load.
+    /// </summary>
+    Task<List<ProcessingQueueItem>> GetByAlbumIdAsync(Guid albumId);
+
     /// <summary>Mark an item as completed</summary>
     Task MarkCompleteAsync(Guid itemId);
 

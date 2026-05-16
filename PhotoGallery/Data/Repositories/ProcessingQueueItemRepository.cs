@@ -68,6 +68,22 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
             .ToListAsync();
     }
 
+
+    /// <summary>
+    /// Album-scoped — uses a single join so we don't full-table-scan
+    /// ProcessingQueueItems. Used by GET /api/photos/albums/{id}/processing-summary
+    /// which is polled every 5s during uploads.
+    /// </summary>
+    public async Task<List<ProcessingQueueItem>> GetByAlbumIdAsync(Guid albumId)
+    {
+        return await (from item in _dbSet
+                      join photo in _context.Photos on item.PhotoId equals photo.Id
+                      where photo.AlbumId == albumId
+                      select item)
+            .AsNoTracking()
+            .ToListAsync();
+    }
+
     /// <summary>Mark an item as completed</summary>
     public async Task MarkCompleteAsync(Guid itemId)
     {

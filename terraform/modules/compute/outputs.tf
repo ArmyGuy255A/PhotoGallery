@@ -3,12 +3,12 @@ output "container_app_name" {
 }
 
 output "container_app_fqdn" {
-  description = "External ingress FQDN of the API."
-  value       = azurerm_container_app.this.ingress[0].fqdn
+  description = "External ingress FQDN of the API. Empty string when ingress is disabled (worker replica)."
+  value       = var.ingress_enabled ? azurerm_container_app.this.ingress[0].fqdn : ""
 }
 
 output "container_app_url" {
-  value = "https://${azurerm_container_app.this.ingress[0].fqdn}"
+  value = var.ingress_enabled ? "https://${azurerm_container_app.this.ingress[0].fqdn}" : ""
 }
 
 output "uami_name" {
@@ -34,5 +34,5 @@ output "container_app_id" {
 }
 
 output "container_app_environment_id" {
-  value = azurerm_container_app_environment.this.id
+  value = local.env_id
 }

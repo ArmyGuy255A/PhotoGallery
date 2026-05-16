@@ -218,3 +218,7 @@ PhotoGallery.code-workspace
 # Local-only appsettings overlays (per-developer secrets, KV URIs, etc.)
 **/appsettings.*.Local.json
 
+
+# Terraform plan artifacts
+tfplan*
+*.tfplan*

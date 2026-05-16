@@ -942,7 +942,46 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
-    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
+    /// Album-scoped storage reconciliation. Album owner (or admin) hits this
+    /// after a bulk upload if any photo's thumbnail/medium/etc came back missing.
+    /// Same per-photo logic as the global reconcile but bounded to one album so
+    /// the response time stays low (matters because the admin UI button is
+    /// synchronous).
+    ///
+    /// Returns a JSON ConsistencyReport with counters (requeued, backFilled, ...).
+    /// </summary>
+    [HttpPost("albums/{albumId:guid}/reconcile-storage")]
+    public async Task<IActionResult> ReconcileAlbumStorage(Guid albumId, CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId)) return Unauthorized();
+
+        var album = await _albumRepository.GetByIdAsync(albumId);
+        if (album == null) return NotFound();
+
+        var isAdmin = User.IsInRole("Admin");
+        if (!isAdmin && album.OwnerId != userId) return Forbid();
+
+        try
+        {
+            _logger.LogInformation(
+                "User {User} triggered album storage reconciliation for {AlbumId}",
+                User.Identity?.Name, albumId);
+            var report = await _storageConsistencyService.RunForAlbumAsync(albumId, cancellationToken);
+            return Ok(report);
+        }
+        catch (OperationCanceledException)
+        {
+            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Album storage reconciliation failed for {AlbumId}", albumId);
+            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
+        }
+    }
+
+    /// <summary>    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
     /// (Phase 5). Scans top-level <c>photogallery/&lt;albumGuid&gt;/</c> and
     /// <c>photogallery/&lt;albumGuid&gt;/&lt;photoGuid&gt;/</c> prefixes and
     /// deletes any whose DB row no longer exists. Blobs younger than

@@ -7,11 +7,9 @@ namespace PhotoGallery.Services.Processing;
 /// Reference: D007 (Storage/Database Consistency Reconciliation).
 ///
 /// Mirrors the <see cref="PhotoProcessingWorker"/> / <see cref="PhotoVersionUrlRefreshWorker"/>
-/// pattern: PeriodicTimer + per-tick scope. The worker holds no per-cycle state; the
-/// scoped <c>StorageConsistencyService</c> owns the reconciliation logic and its own
-/// SemaphoreSlim so an overlapping admin-triggered run cannot conflict with a tick.
+/// pattern: per-tick scope + live setting resolution.
 ///
-/// Configuration:
+/// Configuration (hot-reloadable via <see cref="ISettingsResolver"/>):
 /// <list type="bullet">
 ///   <item><c>PhotoProcessing:ConsistencyCheckEnabled</c> (default true) — kill switch.</item>
 ///   <item><c>PhotoProcessing:ConsistencyCheckIntervalHours</c> (default 1) — tick interval.</item>
@@ -19,54 +17,86 @@ namespace PhotoGallery.Services.Processing;
 /// </summary>
 public class StorageConsistencyWorker : BackgroundService
 {
+    public const string WorkerName = "StorageConsistency";
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<StorageConsistencyWorker> _logger;
-    private readonly bool _enabled;
-    private readonly int _intervalHours;
+    private readonly WorkerScheduleRegistry _registry;
+    private readonly bool _defaultEnabled;
+    private readonly int _defaultIntervalHours;
+    private readonly ManualResetEventSlim _triggerSignal = new(initialState: false);
 
     public StorageConsistencyWorker(
         IServiceProvider serviceProvider,
         ILogger<StorageConsistencyWorker> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        WorkerScheduleRegistry registry)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _registry = registry;
 
-        _enabled = configuration.GetValue("PhotoProcessing:ConsistencyCheckEnabled", true);
-        _intervalHours = configuration.GetValue("PhotoProcessing:ConsistencyCheckIntervalHours", 1);
-        if (_intervalHours < 1)
-        {
-            _intervalHours = 1;
-        }
+        _defaultEnabled = configuration.GetValue("PhotoProcessing:ConsistencyCheckEnabled", true);
+        _defaultIntervalHours = Math.Max(1,
+            configuration.GetValue("PhotoProcessing:ConsistencyCheckIntervalHours", 1));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!_enabled)
-        {
-            _logger.LogInformation("StorageConsistencyWorker disabled by PhotoProcessing:ConsistencyCheckEnabled=false");
-            return;
-        }
+        _logger.LogInformation(
+            "StorageConsistencyWorker started (default enabled={Enabled}, default interval={IntervalHours}h, hot-reloadable)",
+            _defaultEnabled, _defaultIntervalHours);
 
-        _logger.LogInformation("StorageConsistencyWorker started with {IntervalHours}h interval", _intervalHours);
+        _registry.Register(
+            WorkerName,
+            displayName: "Storage ↔ DB consistency",
+            interval: TimeSpan.FromHours(_defaultIntervalHours),
+            triggerHook: () => _triggerSignal.Set());
 
         try
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromHours(_intervalHours));
-            while (await timer.WaitForNextTickAsync(stoppingToken))
+            while (!stoppingToken.IsCancellationRequested)
             {
+                bool enabled = _defaultEnabled;
+                int intervalHours = _defaultIntervalHours;
                 try
                 {
-                    await RunCycleAsync(stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
+                    using var scope = _serviceProvider.CreateScope();
+                    var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+                    enabled = await resolver.GetBoolAsync("PhotoProcessing:ConsistencyCheckEnabled", _defaultEnabled, stoppingToken);
+                    intervalHours = Math.Max(1,
+                        await resolver.GetIntAsync("PhotoProcessing:ConsistencyCheckIntervalHours", _defaultIntervalHours, stoppingToken));
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error in storage consistency reconciliation cycle");
+                    _logger.LogDebug(ex, "Failed to resolve live settings; using defaults");
                 }
+
+                if (enabled)
+                {
+                    try
+                    {
+                        await RunCycleAsync(stoppingToken);
+                        _registry.RecordTick(WorkerName);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error in storage consistency reconciliation cycle");
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("StorageConsistencyWorker tick skipped — disabled via PhotoProcessing:ConsistencyCheckEnabled");
+                }
+
+                var triggered = await Task.Run(
+                    () => _triggerSignal.Wait(TimeSpan.FromHours(intervalHours), stoppingToken),
+                    stoppingToken);
+                if (triggered) _triggerSignal.Reset();
             }
         }
         catch (OperationCanceledException)

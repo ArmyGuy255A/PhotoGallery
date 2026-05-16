@@ -153,7 +153,7 @@ interface CodeValidation {
         </div>
 
         <div *ngIf="photos.length > 0" class="photo-grid">
-          <article *ngFor="let photo of photos; let i = index" class="photo-card">
+          <article *ngFor="let photo of photos; let i = index; trackBy: trackByPhotoId" class="photo-card">
             <div class="photo-thumb" (click)="openModal(i)" role="button" tabindex="0"
                  (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)"
                  [attr.aria-label]="'View ' + photo.fileName">
@@ -182,6 +182,30 @@ interface CodeValidation {
               </div>
             </div>
           </article>
+        </div>
+
+        <!--
+          Pagination banner. The loader auto-trickles pages in the background,
+          but on a large album that means the visitor sees the first 20 photos
+          and no further indication that more are arriving. This banner reads
+          the loader's totalCount + photos.length to show "Showing X of Y
+          photos…" with a tiny spinner while more pages are pending. Hidden
+          once everything is loaded.
+        -->
+        <div *ngIf="photos.length > 0 && loader.totalCount() > photos.length"
+             class="photos-loading-more"
+             data-testid="code-photos-loading-more"
+             role="status"
+             aria-live="polite">
+          <div class="photos-spinner small" aria-hidden="true"></div>
+          <p class="photos-loading-copy">
+            Loading photos… <strong>{{ photos.length | number }}</strong> of
+            <strong>{{ loader.totalCount() | number }}</strong>
+          </p>
+          <div class="photos-progress-track" aria-hidden="true">
+            <div class="photos-progress-fill"
+                 [style.width.%]="(photos.length / loader.totalCount()) * 100"></div>
+          </div>
         </div>
 
         <!--
@@ -590,6 +614,8 @@ export class CodeGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     20,
     (newItems) => this.seedQualitiesFor(newItems)
   );
+  /** trackBy keyfn for the *ngFor on .photo-card — keeps DOM nodes stable. */
+  trackByPhotoId(_index: number, photo: PublicPhoto): string { return photo.photoId; }
   /** Skeleton-grid placeholder count (8 tiles while page 1 is in flight). */
   readonly skeletonSlots: ReadonlyArray<unknown> = new Array(8);
   selectedQuality: Record<string, CartQuality> = {};

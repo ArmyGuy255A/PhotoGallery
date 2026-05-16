@@ -277,6 +277,25 @@ module "compute" {
   image       = var.container_app_image
   target_port = var.container_app_target_port
 
+  # Topology: this is the API replica. It runs the workers too (so a quiet
+  # MVP doesn't need the sibling worker app spun up), but is pinned to
+  # exactly 1 replica. The pin is non-negotiable: SignalR's PhotoProgressHub
+  # holds connected WebSocket clients in process memory. Adding a second
+  # replica would silently drop progress events for any client connected to
+  # the "other" box. The worker-only sibling below has no ingress, so it
+  # never accepts WebSocket clients — only the API replica does, and the
+  # in-process hub is always reachable by them.
+  #
+  # If the queue grows past 10 pending rows, the worker-only sibling app
+  # scales out (0→N) to chew through the backlog without touching this
+  # replica's CPU. Progress events from those worker replicas don't reach
+  # SignalR clients — the FE's 5s poll fallback in
+  # `upload-progress-aside.component.ts` covers that case so users still see
+  # totals tick. Per-photo % bars are real-time only when the API replica
+  # itself processed the photo.
+  min_replicas = 1
+  max_replicas = 1
+
   # Authenticate ACA pulls against ACR via the UAMI. The AcrPull role
   # assignment is in dev/main.tf (azurerm_role_assignment.aca_acr_pull).
   container_registry_server = module.acr.login_server
@@ -313,6 +332,13 @@ module "compute" {
     "Storage__Provider"  = "AzureBlob"
     "Database__Provider" = "SqlServer"
 
+    # The API container app is ingress-only. It NEVER processes photos —
+    # ImageSharp + the 0.5 vCPU container starves Kestrel's request thread
+    # pool, killing response times (observed in trial). The sibling worker
+    # app (min=1) owns 100% of background processing. The API still serves
+    # /upload-tickets, /upload-complete, /api/photos/... etc.
+    "WorkersEnabled" = "false"
+
     # Storage (non-secret config) — AccountUrl is also seeded in KV for
     # rotatability, but resolving it from a plain env var is the default
     # path. KV wins only if the same key is bound through the KV provider.
@@ -339,6 +365,139 @@ module "compute" {
   app_insights_connection_string = module.observability.app_insights_connection_string
 
   tags = local.common_tags
+}
+
+###############################################################################
+# Compute (worker) — sibling Container App that runs the same image with no
+# ingress. Scales 0→N on queue depth via a KEDA MSSQL custom scaler so we
+# only pay for image-processing CPU when there's actual work to do.
+#
+# Topology rationale:
+#   - API replica (above) is pinned to exactly 1 because SignalR's hub holds
+#     connected WebSocket clients in process memory and we deliberately do
+#     not run Azure SignalR Service. Adding a 2nd API replica would silently
+#     drop events for clients connected to the "other" replica.
+#   - Worker replicas never accept HTTP, so SignalR clients never connect
+#     here. The hub on a worker replica is unused; progress events from
+#     workers here don't reach FE clients. The FE 5s poll fallback in
+#     upload-progress-aside.component.ts masks this (the per-album summary
+#     stays correct, per-photo % only animates for photos processed on the
+#     API replica). Acceptable tradeoff to avoid Azure SignalR.
+#
+# Scaling:
+#   - min_replicas = 0 → scale-to-zero when queue is empty (no cost when
+#     idle, just like before this split).
+#   - max_replicas = 3 → cap blast radius on a runaway queue.
+#   - activationValue = 10 → don't wake from 0 until at least 10 pending
+#     rows. Matches the user-defined "more than 10 photos" threshold.
+#   - targetValue   = 10 → 1 worker replica per 10 pending rows. So 100
+#     pending rows → 3 replicas (capped). Tunable.
+#
+# After apply, the worker UAMI must be registered as a SQL DB user via the
+# same T-SQL step we use for the API UAMI (see
+# Documentation/Runbooks/local-azure-dev.md):
+#   CREATE USER [<worker-uami-name>] FROM EXTERNAL PROVIDER;
+#   ALTER ROLE db_datareader  ADD MEMBER [<worker-uami-name>];
+#   ALTER ROLE db_datawriter  ADD MEMBER [<worker-uami-name>];
+#   ALTER ROLE db_ddladmin    ADD MEMBER [<worker-uami-name>];  -- migrations on startup
+# The UAMI name is exposed via module.compute_worker.uami_name.
+###############################################################################
+
+module "compute_worker" {
+  source = "../modules/compute"
+
+  # Re-use the API's Container Apps Environment — one CAE per region is
+  # cheaper and lets both apps share the Log Analytics workspace.
+  container_app_environment_name = local.cae_name
+  existing_environment_id        = module.compute.container_app_environment_id
+
+  container_app_name         = "ca-${local.prefix}-worker-${local.env}"
+  resource_group_name        = data.azurerm_resource_group.this.name
+  location                   = data.azurerm_resource_group.this.location
+  log_analytics_workspace_id = module.observability.log_analytics_workspace_id
+
+  image          = var.container_app_image
+  target_port    = var.container_app_target_port
+  container_name = "worker"
+
+  ingress_enabled                = false
+  http_scale_concurrent_requests = 0
+
+  # min=1 keeps one worker always on so newly-uploaded photos start
+  # processing within seconds (no 30-60s cold start). max=3 caps blast
+  # radius. Steady-state cost is one ~0.25 vCPU-seconds-billed replica
+  # idling between ticks; bulk uploads scale to 3 within ~30s of the CPU
+  # crossing the threshold below.
+  min_replicas = 1
+  max_replicas = 3
+
+  # Bump worker to 1.0 vCPU / 2 GiB. The previous 0.5 vCPU / 1 GiB combo
+  # was hitting OOMKilled (exit 137) during bulk uploads — ImageSharp
+  # decoded high-quality variants in parallel and blew past 1 GiB. The
+  # next supported ACA Consumption pair is 1.0/2Gi, which gives us
+  # ~2x the working set without changing pricing tier.
+  cpu    = 1.0
+  memory = "2Gi"
+
+  # CPU-based autoscaler. KEDA's MSSQL scaler can't authenticate against
+  # our AAD-only SQL server (it runs outside the container, so no UAMI
+  # access), and was failing with "Login failed for user ''". CPU
+  # utilization is a clean proxy here because workers are entirely
+  # CPU-bound during image resize. 70% triggers a scale-out before the
+  # current replica is saturated.
+  cpu_scale_rule = {
+    utilization = "70"
+  }
+
+  container_registry_server = module.acr.login_server
+
+  key_vault_id       = module.keyvault.vault_id
+  storage_account_id = module.storage.storage_account_id
+
+  # Same secret set as the API replica. The worker needs the SQL conn
+  # string (queue + photos) and storage credentials; the other secrets
+  # are harmless extras since the worker code paths don't read them.
+  kv_secret_ids = {
+    "connectionstrings-defaultconnection" = module.keyvault.secret_versionless_ids["ConnectionStrings--DefaultConnection"]
+  }
+
+  kv_env_mapping = {
+    "connectionstrings-defaultconnection" = "ConnectionStrings__DefaultConnection"
+  }
+
+  extra_env = {
+    "Storage__Provider"                 = "AzureBlob"
+    "Database__Provider"                = "SqlServer"
+    "Storage__AzureBlob__AccountUrl"    = module.storage.blob_endpoint
+    "Storage__AzureBlob__ContainerName" = module.storage.container_name
+    "KeyVault__Uri"                     = module.keyvault.vault_uri
+    "WorkersEnabled"                    = "true"
+    # Drop parallelism to 2: at 4 we were OOMing on 1Gi, and even with
+    # 2Gi headroom keeping parallelism conservative lets us bursty-grow
+    # replicas (1→2→3) when CPU rises rather than packing more threads
+    # into a single replica.
+    "PhotoProcessing__WorkerParallelism"    = "2"
+    "PhotoProcessing__LeaseBatchMultiplier" = "4"
+  }
+
+  app_insights_connection_string = module.observability.app_insights_connection_string
+
+  tags = local.common_tags
+}
+
+# AcrPull for the worker UAMI so it can pull the same image.
+resource "azurerm_role_assignment" "worker_acr_pull" {
+  scope                = module.acr.id
+  role_definition_name = "AcrPull"
+  principal_id         = module.compute_worker.uami_principal_id
+}
+
+# Contributor on the worker container app so the CI pipeline can update
+# its image alongside the API's.
+resource "azurerm_role_assignment" "github_actions_worker_contributor" {
+  scope                = module.compute_worker.container_app_id
+  role_definition_name = "Contributor"
+  principal_id         = module.github_oidc.service_principal_object_id
 }
 
 

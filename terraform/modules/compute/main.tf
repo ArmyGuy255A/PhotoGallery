@@ -77,12 +77,26 @@ resource "azurerm_container_app_environment" "this" {
   # Consumption-only environment — no `workload_profile` blocks declared, so
   # the env defaults to the pure Consumption plan with scale-to-zero.
 
+  # Lifecycle: the environment is shared by both the API container app and
+  # the (optional) worker container app, so callers create one environment
+  # via the API instance and pass `existing_environment_id` to a sibling
+  # worker instance to skip re-creating it. We make that explicit by
+  # ignoring no_op env mutations here.
+  count = var.existing_environment_id == "" ? 1 : 0
+
   tags = var.tags
+}
+
+locals {
+  # Resolve the environment id: either the one this module just created,
+  # or one passed in by a sibling instance (split-topology). Exactly one
+  # branch is populated by the count above.
+  env_id = var.existing_environment_id != "" ? var.existing_environment_id : azurerm_container_app_environment.this[0].id
 }
 
 resource "azurerm_container_app" "this" {
   name                         = var.container_app_name
-  container_app_environment_id = azurerm_container_app_environment.this.id
+  container_app_environment_id = local.env_id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
 
@@ -119,8 +133,56 @@ resource "azurerm_container_app" "this" {
     min_replicas = var.min_replicas
     max_replicas = var.max_replicas
 
+    # KEDA HTTP scaler — wake up + scale out on concurrent request volume.
+    # Only meaningful for the API replica (the worker has no ingress, so
+    # there are no incoming HTTP requests to scale on).
+    dynamic "http_scale_rule" {
+      for_each = var.ingress_enabled && var.http_scale_concurrent_requests > 0 ? [1] : []
+      content {
+        name                = "http-concurrency"
+        concurrent_requests = tostring(var.http_scale_concurrent_requests)
+      }
+    }
+
+    # KEDA MSSQL custom scaler (deprecated path, see variables.tf). Kept
+    # as a dynamic block so existing callers that still pass it don't break,
+    # but the runtime authentication failure makes this a no-op for our
+    # AAD-only SQL server. New callers should use cpu_scale_rule below.
+    dynamic "custom_scale_rule" {
+      for_each = var.queue_depth_scale_rule != null ? [var.queue_depth_scale_rule] : []
+      content {
+        name             = "queue-depth"
+        custom_rule_type = "mssql"
+        metadata = {
+          query           = custom_scale_rule.value.query
+          targetValue     = custom_scale_rule.value.target_value
+          activationValue = custom_scale_rule.value.activation_value
+        }
+        authentication {
+          secret_name       = custom_scale_rule.value.secret_name
+          trigger_parameter = "connectionString"
+        }
+      }
+    }
+
+    # CPU-based scaler — scales up once average container CPU across
+    # current replicas exceeds the configured percentage. Uses ACA's
+    # built-in metrics (no DB credentials needed), so it works fine
+    # against our AAD-only SQL server.
+    dynamic "custom_scale_rule" {
+      for_each = var.cpu_scale_rule != null ? [var.cpu_scale_rule] : []
+      content {
+        name             = "cpu-utilization"
+        custom_rule_type = "cpu"
+        metadata = {
+          type  = "Utilization"
+          value = var.cpu_scale_rule.utilization
+        }
+      }
+    }
+
     container {
-      name   = "api"
+      name   = var.container_name
       image  = var.image
       cpu    = var.cpu
       memory = var.memory
@@ -175,15 +237,18 @@ resource "azurerm_container_app" "this" {
     }
   }
 
-  ingress {
-    external_enabled           = true
-    target_port                = var.target_port
-    transport                  = "auto"
-    allow_insecure_connections = false
+  dynamic "ingress" {
+    for_each = var.ingress_enabled ? [1] : []
+    content {
+      external_enabled           = true
+      target_port                = var.target_port
+      transport                  = "auto"
+      allow_insecure_connections = false
 
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
+      traffic_weight {
+        latest_revision = true
+        percentage      = 100
+      }
     }
   }
 
@@ -193,7 +258,7 @@ resource "azurerm_container_app" "this" {
 
   lifecycle {
     # pg-devops-cicd will flip the image between the placeholder and the
-    # real GHCR image outside Terraform. Don't fight that.
+    # real GHCR/ACR image outside Terraform. Don't fight that.
     ignore_changes = [
       template[0].container[0].image,
     ]

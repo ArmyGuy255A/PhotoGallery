@@ -41,7 +41,8 @@ public class PhotoVersionUrlRefreshWorkerTests
         return new PhotoVersionUrlRefreshWorker(
             _mockServiceProvider.Object,
             _mockLogger.Object,
-            config);
+            config,
+            new PhotoGallery.Services.WorkerScheduleRegistry());
     }
 
     [Fact]
@@ -72,7 +73,8 @@ public class PhotoVersionUrlRefreshWorkerTests
         var worker = new PhotoVersionUrlRefreshWorker(
             _mockServiceProvider.Object,
             _mockLogger.Object,
-            config);
+            config,
+            new PhotoGallery.Services.WorkerScheduleRegistry());
 
         // Assert - Verify the worker is created (it should use default 24h)
         Assert.NotNull(worker);

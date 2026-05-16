@@ -25,6 +25,7 @@ public class ImageProcessingService : IImageProcessor
     private readonly IHubContext<PhotoProgressHub>? _progressHub;
     private readonly ILogger<ImageProcessingService> _logger;
     private readonly int _workerParallelism;
+    private readonly int _leaseBatchMultiplier;
     private readonly TimeSpan _leaseDuration = TimeSpan.FromMinutes(5);
     private CancellationTokenSource? _processingCts;
     private Task? _processingTask;
@@ -64,6 +65,8 @@ public class ImageProcessingService : IImageProcessor
         // avoid an operator pasting nonsense into the appsetting and pinning a worker.
         var configured = configuration.GetValue<int>("PhotoProcessing:WorkerParallelism", 5);
         _workerParallelism = Math.Clamp(configured, 1, 64);
+        var configuredMultiplier = configuration.GetValue<int>("PhotoProcessing:LeaseBatchMultiplier", 4);
+        _leaseBatchMultiplier = Math.Clamp(configuredMultiplier, 1, 32);
         _progressHub = progressHub;
     }
 
@@ -149,6 +152,22 @@ public class ImageProcessingService : IImageProcessor
     {
         try
         {
+            // Read throttle settings live each tick so admin changes hot-reload
+            // without a restart. Falls back to the construction-time defaults
+            // when the RuntimeSettings table has no override.
+            int liveParallelism = _workerParallelism;
+            int liveMultiplier = _leaseBatchMultiplier;
+            using (var settingsScope = _serviceProvider.CreateScope())
+            {
+                var resolver = settingsScope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+                liveParallelism = Math.Clamp(
+                    await resolver.GetIntAsync("PhotoProcessing:WorkerParallelism", _workerParallelism, cancellationToken),
+                    1, 64);
+                liveMultiplier = Math.Clamp(
+                    await resolver.GetIntAsync("PhotoProcessing:LeaseBatchMultiplier", _leaseBatchMultiplier, cancellationToken),
+                    1, 32);
+            }
+
             // Lease a batch of work — Pending OR (Error AND retry-due) AND lease-free.
             // The lease itself is set atomically by the repo so two workers (in-instance
             // or cross-instance once we scale ACA replicas) never claim the same row.
@@ -160,14 +179,14 @@ public class ImageProcessingService : IImageProcessor
                 // while some are mid-flight. 5 min lease > worst-case single-photo
                 // processing time so a slow consumer doesn't have its row stolen.
                 leased = await itemRepository.LeaseNextBatchAsync(
-                    _workerParallelism * 4, _leaseDuration, cancellationToken);
+                    liveParallelism * liveMultiplier, _leaseDuration, cancellationToken);
             }
 
             if (leased.Count == 0)
                 return;
 
             _logger.LogDebug("Leased {Count} items for processing (parallelism={Parallelism})",
-                leased.Count, _workerParallelism);
+                leased.Count, liveParallelism);
 
             // Funnel into a Channel so we have backpressure if a slow consumer falls
             // behind, and so cancellation cleanly drains in-flight items.
@@ -184,7 +203,7 @@ public class ImageProcessingService : IImageProcessor
             var processedPhotos = new System.Collections.Concurrent.ConcurrentBag<Guid>();
             var parallelOptions = new ParallelOptions
             {
-                MaxDegreeOfParallelism = _workerParallelism,
+                MaxDegreeOfParallelism = liveParallelism,
                 CancellationToken = cancellationToken,
             };
 
