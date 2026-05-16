@@ -15,6 +15,10 @@ interface Album {
   createdDate: string;
   ownerId: string;
   canManage: boolean;
+  /** AAD/Identity user id of the album owner; set by the BE. */
+  createdBy?: string;
+  /** Resolved display name (e.g. "Phillip Dieppa"); empty when unresolved. */
+  createdByDisplayName?: string;
 }
 
 interface SavedAccessCode {
@@ -81,6 +85,10 @@ interface SavedAccessCode {
               </div>
               <p class="album-description">{{ album.description || 'No description' }}</p>
               <p class="album-date">{{ (album.createdDate | date: 'short') }}</p>
+              <!-- Admin-only: show who created the album (issue: admin oversight). -->
+              <p *ngIf="isAdmin" class="album-creator" data-testid="album-card-created-by">
+                by {{ album.createdByDisplayName || album.createdBy || '—' }}
+              </p>
               <button class="action-btn" (click)="viewAlbum(album.id)">View Album</button>
             </div>
           </div>
@@ -356,9 +364,15 @@ interface SavedAccessCode {
     }
 
     .album-date {
-      margin: 0 0 12px 0;
+      margin: 0 0 4px 0;
       color: #999;
       font-size: 12px;
+    }
+    .album-creator {
+      margin: 0 0 12px 0;
+      color: #777;
+      font-size: 12px;
+      font-style: italic;
     }
 
     .action-btn {
