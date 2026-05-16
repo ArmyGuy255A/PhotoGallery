@@ -28,7 +28,12 @@ namespace PhotoGallery.Controllers;
 [Route("api/admin")]
 public class AdminController : ControllerBase
 {
-    private static readonly string[] AllowedRoles = { "Admin", "User" };
+    /// <summary>
+    /// Roles the admin UI may assign/revoke. "User" is intentionally excluded
+    /// — every authenticated user implicitly has it, and removing it leaves a
+    /// user in a confusing "elevated-only" state.
+    /// </summary>
+    private static readonly string[] AllowedRoles = { "Admin", "AlbumCreator" };
 
     private readonly ApplicationDbContext _ctx;
     private readonly UserManager<User> _userManager;
@@ -159,6 +164,15 @@ public class AdminController : ControllerBase
     /// the same list twice is a no-op. Refuses to remove the last Admin
     /// (so an admin can't lock the system out by demoting themselves).
     /// </summary>
+
+    /// <summary>
+    /// Catalogue of admin-assignable roles. Returned to the SPA so the
+    /// Users tab can render the correct role chips/toggles for each row.
+    /// "User" is excluded — it's implicit for every authenticated user.
+    /// </summary>
+    [HttpGet("roles")]
+    public ActionResult<IEnumerable<string>> GetAssignableRoles() => Ok(AllowedRoles);
+
     [HttpPut("users/{userId}/roles")]
     public async Task<ActionResult<AdminUserDto>> SetUserRoles(string userId, [FromBody] SetRolesRequest body)
     {

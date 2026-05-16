@@ -83,11 +83,11 @@ public class AlbumsController : ControllerBase
     }
 
     /// <summary>
-    /// Create a new album (admin only)
+    /// Create a new album. Available to Admin OR AlbumCreator.
     /// </summary>
     /// <param name="request">Album creation request</param>
     /// <returns>Created album details</returns>
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = "Admin,AlbumCreator")]
     [HttpPost]
     public async Task<ActionResult<AlbumDetailDto>> CreateAlbum([FromBody] CreateAlbumRequest request)
     {
