@@ -59,7 +59,7 @@ variable "dev_public_ip" {
 variable "cors_allowed_origins" {
   description = "Origins allowed to fetch SAS-signed blob URLs from the browser."
   type        = list(string)
-  default     = [
+  default = [
     "https://agreeable-tree-043fa290f.7.azurestaticapps.net",
     "http://localhost:4200",
     "https://localhost:4200",
