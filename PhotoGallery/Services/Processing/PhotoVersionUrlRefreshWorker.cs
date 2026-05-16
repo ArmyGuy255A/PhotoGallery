@@ -5,57 +5,96 @@ namespace PhotoGallery.Services.Processing;
 
 /// <summary>
 /// Background service that periodically refreshes expiring pre-signed URLs for photo downloads.
-/// 
+///
 /// Responsibilities:
-/// - Runs daily (configurable) to check for URLs approaching expiration
+/// - Runs on a configurable interval (default daily) to check for URLs approaching expiration
 /// - Regenerates URLs when they're within the refresh window (default: 5 days before expiration)
 /// - Ensures Thumbnail and Medium URLs never expire in the database
 /// - Logs refresh operations and any errors
-/// 
+///
 /// Reference: D004 (Pre-Signed URL Caching Architecture)
+///
+/// Configuration (hot-reloadable via <see cref="ISettingsResolver"/>):
+/// <list type="bullet">
+///   <item><c>BlobStorage:RefreshWorkerIntervalHours</c> (default 24) — tick interval.</item>
+///   <item><c>BlobStorage:PreSignedUrlRefreshWindowDays</c> (default 5) — refresh window.</item>
+/// </list>
 /// </summary>
 public class PhotoVersionUrlRefreshWorker : BackgroundService
 {
+    public const string WorkerName = "PhotoVersionUrlRefresh";
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<PhotoVersionUrlRefreshWorker> _logger;
-    private readonly int _refreshIntervalHours;
-    private readonly int _refreshWindowDays;
+    private readonly WorkerScheduleRegistry _registry;
+    private readonly int _defaultIntervalHours;
+    private readonly int _defaultRefreshWindowDays;
+    private readonly ManualResetEventSlim _triggerSignal = new(initialState: false);
 
     public PhotoVersionUrlRefreshWorker(
         IServiceProvider serviceProvider,
         ILogger<PhotoVersionUrlRefreshWorker> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        WorkerScheduleRegistry registry)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _registry = registry;
 
-        // Read interval from config, default to 24 hours (daily)
-        _refreshIntervalHours = configuration.GetValue<int>("BlobStorage:RefreshWorkerIntervalHours", 24);
-        if (_refreshIntervalHours < 1)
-            _refreshIntervalHours = 24;
-
-        // Read refresh window from config, default to 5 days
-        _refreshWindowDays = configuration.GetValue<int>("BlobStorage:PreSignedUrlRefreshWindowDays", 5);
+        _defaultIntervalHours = Math.Max(1,
+            configuration.GetValue("BlobStorage:RefreshWorkerIntervalHours", 24));
+        _defaultRefreshWindowDays = configuration.GetValue("BlobStorage:PreSignedUrlRefreshWindowDays", 5);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("PhotoVersionUrlRefreshWorker started with {IntervalHours}h interval", _refreshIntervalHours);
+        _logger.LogInformation(
+            "PhotoVersionUrlRefreshWorker started (default interval={IntervalHours}h, refresh-window={WindowDays}d, hot-reloadable)",
+            _defaultIntervalHours, _defaultRefreshWindowDays);
+
+        _registry.Register(
+            WorkerName,
+            displayName: "Pre-signed URL refresh",
+            interval: TimeSpan.FromHours(_defaultIntervalHours),
+            triggerHook: () => _triggerSignal.Set());
 
         try
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromHours(_refreshIntervalHours));
-
-            while (await timer.WaitForNextTickAsync(stoppingToken))
+            while (!stoppingToken.IsCancellationRequested)
             {
+                int intervalHours = _defaultIntervalHours;
+                int refreshWindowDays = _defaultRefreshWindowDays;
                 try
                 {
-                    await RefreshExpiringUrlsAsync(stoppingToken);
+                    using var scope = _serviceProvider.CreateScope();
+                    var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+                    intervalHours = Math.Max(1,
+                        await resolver.GetIntAsync("BlobStorage:RefreshWorkerIntervalHours", _defaultIntervalHours, stoppingToken));
+                    refreshWindowDays = await resolver.GetIntAsync("BlobStorage:PreSignedUrlRefreshWindowDays", _defaultRefreshWindowDays, stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to resolve live settings; using defaults");
+                }
+
+                try
+                {
+                    await RefreshExpiringUrlsAsync(refreshWindowDays, intervalHours, stoppingToken);
+                    _registry.RecordTick(WorkerName);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error in photo URL refresh cycle");
                 }
+
+                var triggered = await Task.Run(
+                    () => _triggerSignal.Wait(TimeSpan.FromHours(intervalHours), stoppingToken),
+                    stoppingToken);
+                if (triggered) _triggerSignal.Reset();
             }
         }
         catch (OperationCanceledException)
@@ -69,7 +108,7 @@ public class PhotoVersionUrlRefreshWorker : BackgroundService
         }
     }
 
-    private async Task RefreshExpiringUrlsAsync(CancellationToken cancellationToken)
+    private async Task RefreshExpiringUrlsAsync(int refreshWindowDays, int intervalHours, CancellationToken cancellationToken)
     {
         try
         {
@@ -78,25 +117,23 @@ public class PhotoVersionUrlRefreshWorker : BackgroundService
             var urlService = scope.ServiceProvider.GetRequiredService<PhotoVersionUrlService>();
 
             var now = DateTime.UtcNow;
-            var refreshCutoffDate = now.AddDays(_refreshWindowDays);
+            var refreshCutoffDate = now.AddDays(refreshWindowDays);
 
             _logger.LogDebug("Starting URL refresh cycle. Looking for URLs expiring before {CutoffDate}", refreshCutoffDate);
 
-            // Get all URLs that are expiring within the refresh window
             var expiringUrls = await urlRepository.GetExpiringAsync(refreshCutoffDate);
 
             if (expiringUrls.Count == 0)
             {
-                _logger.LogDebug("No expiring URLs found. Next check in {IntervalHours}h", _refreshIntervalHours);
+                _logger.LogDebug("No expiring URLs found. Next check in {IntervalHours}h", intervalHours);
                 return;
             }
 
-            _logger.LogInformation("Found {Count} URLs expiring within {WindowDays} days. Refreshing...", expiringUrls.Count, _refreshWindowDays);
+            _logger.LogInformation("Found {Count} URLs expiring within {WindowDays} days. Refreshing...", expiringUrls.Count, refreshWindowDays);
 
             var successCount = 0;
             var failureCount = 0;
 
-            // Group by photo to refresh efficiently
             var urlsByPhoto = expiringUrls.GroupBy(u => u.PhotoId);
 
             foreach (var photoGroup in urlsByPhoto)
@@ -104,8 +141,6 @@ public class PhotoVersionUrlRefreshWorker : BackgroundService
                 try
                 {
                     var photoId = photoGroup.Key;
-
-                    // Generate new URLs for all qualities (will update cached ones)
                     var newUrls = await urlService.GeneratePhotoVersionUrlsAsync(photoId);
 
                     var successfulQualities = newUrls.Count(kvp => kvp.Value != null);

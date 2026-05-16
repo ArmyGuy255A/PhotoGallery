@@ -61,36 +61,40 @@ public static class SettingsCatalogue
             "Number of queue items leased per tick is WorkerParallelism × this multiplier. Lower values reduce DB pressure but underfeed consumers; raise only if workers are sitting idle waiting for the next lease. Hot-reload — takes effect on the next tick.",
             RestartRequired: false),
         new SettingCatalogueEntry(
-            "PhotoProcessing:ConsistencyCheckEnabled", "Processing", "bool", "true",
-            "Master switch for the periodic DB ↔ storage consistency sweep.",
-            RestartRequired: true),
-        new SettingCatalogueEntry(
-            "PhotoProcessing:ConsistencyCheckIntervalHours", "Processing", "int", "1",
-            "Hours between consistency-check sweeps.",
-            RestartRequired: true),
-        new SettingCatalogueEntry(
             "Storage:OrphanReapIntervalHours", "Storage", "int", "6",
-            "Hours between orphaned-blob reap passes.",
-            RestartRequired: true),
+            "Hours between orphaned-blob reap passes. Hot-reload — takes effect on the next sleep cycle.",
+            RestartRequired: false),
         new SettingCatalogueEntry(
             "Storage:OrphanReapGraceMinutes", "Storage", "int", "60",
-            "Grace window (minutes) — blobs younger than this are skipped by the reaper to protect in-flight direct uploads.",
+            "Grace window (minutes) — blobs younger than this are skipped by the reaper to protect in-flight direct uploads. Hot-reload — takes effect on the next reap pass.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "PhotoProcessing:ConsistencyCheckEnabled", "Processing", "bool", "true",
+            "Kill switch for the storage ↔ DB consistency reconciliation worker. Hot-reload — disabling skips ticks but keeps the loop running so re-enabling resumes on the next tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "PhotoProcessing:ConsistencyCheckIntervalHours", "Processing", "int", "1",
+            "Hours between consistency-check sweeps. Hot-reload — takes effect on the next sleep cycle.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Storage:OrphanReapEnabled", "Storage", "bool", "true",
+            "Kill switch for the orphaned-blob reaper. Hot-reload — disabling skips ticks but keeps the loop running.",
             RestartRequired: false),
         new SettingCatalogueEntry(
             "BlobStorage:PreSignedUrlTTLDays", "Storage", "int", "7",
-            "Lifetime of pre-signed public download URLs in days.",
+            "Lifetime of pre-signed public download URLs in days. Hot-reload — takes effect on the next URL generation.",
             RestartRequired: false),
         new SettingCatalogueEntry(
             "BlobStorage:PreSignedUrlRefreshWindowDays", "Storage", "int", "5",
-            "When a pre-signed URL is within this many days of expiring, the background refresh worker rotates it.",
+            "When a pre-signed URL is within this many days of expiring, the background refresh worker rotates it. Hot-reload — takes effect on the next refresh cycle.",
             RestartRequired: false),
         new SettingCatalogueEntry(
             "BlobStorage:RefreshWorkerIntervalHours", "Storage", "int", "24",
-            "Tick interval for the pre-signed-URL refresh worker.",
-            RestartRequired: true),
+            "Tick interval for the pre-signed-URL refresh worker. Hot-reload — takes effect on the next sleep cycle.",
+            RestartRequired: false),
         new SettingCatalogueEntry(
             "BlobStorage:VerifyCachedUrls", "Storage", "bool", "true",
-            "If true, the refresh worker HEAD-checks each cached URL before reuse — safer but slower.",
+            "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Hot-reload — takes effect on the next URL fetch.",
             RestartRequired: false),
     };
 }
@@ -98,8 +102,9 @@ public static class SettingsCatalogue
 /// <summary>
 /// Resolves a setting at runtime by checking the RuntimeSettings DB table
 /// first, then falling back to <see cref="Microsoft.Extensions.Configuration.IConfiguration"/>.
-/// Most workers read their interval at construction so admin overrides
-/// only take effect on restart (the catalogue entry flags this).
+/// Every setting in <see cref="SettingsCatalogue"/> is now hot-reloadable;
+/// the workers and scoped services that consume settings resolve them via
+/// this interface on each tick / call instead of caching at construction.
 /// </summary>
 public interface ISettingsResolver
 {

@@ -48,7 +48,8 @@ public sealed class OrphanedBlobReaperService
     private readonly IStorageProvider _storageProvider;
     private readonly ILogger<OrphanedBlobReaperService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly int _graceMinutes;
+    private readonly int _defaultGraceMinutes;
+    private readonly ISettingsResolver? _settingsResolver;
 
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
@@ -58,16 +59,18 @@ public sealed class OrphanedBlobReaperService
         IStorageProvider storageProvider,
         IConfiguration configuration,
         ILogger<OrphanedBlobReaperService> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ISettingsResolver? settingsResolver = null)
     {
         _albumRepository = albumRepository;
         _photoRepository = photoRepository;
         _storageProvider = storageProvider;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _settingsResolver = settingsResolver;
 
         var grace = configuration.GetValue("Storage:OrphanReapGraceMinutes", 60);
-        _graceMinutes = grace < 0 ? 0 : grace;
+        _defaultGraceMinutes = grace < 0 ? 0 : grace;
     }
 
     /// <summary>
@@ -83,11 +86,18 @@ public sealed class OrphanedBlobReaperService
         try
         {
             var report = new OrphanReapReport();
-            var cutoff = _timeProvider.GetUtcNow().AddMinutes(-_graceMinutes);
+            // Resolve grace minutes live so admin changes hot-reload per run.
+            int graceMinutes = _defaultGraceMinutes;
+            if (_settingsResolver != null)
+            {
+                graceMinutes = await _settingsResolver.GetIntAsync("Storage:OrphanReapGraceMinutes", _defaultGraceMinutes, cancellationToken);
+                if (graceMinutes < 0) graceMinutes = 0;
+            }
+            var cutoff = _timeProvider.GetUtcNow().AddMinutes(-graceMinutes);
 
             _logger.LogInformation(
                 "OrphanedBlobReaper run starting (grace={GraceMinutes}m, cutoff={Cutoff:o})",
-                _graceMinutes, cutoff);
+                graceMinutes, cutoff);
 
             var albumPrefixes = (await _storageProvider.ListSubPrefixesAsync(ContainerRootPrefix)).ToList();
 

@@ -27,10 +27,11 @@ public class PhotoVersionUrlService
     private readonly WatermarkService? _watermarkService;
     private readonly IWatermarkTextResolver? _watermarkTextResolver;
 
-    private readonly int _ttlDays;
+    private readonly int _defaultTtlDays;
     private readonly int _refreshWindowDays;
     private readonly List<string> _cachedQualities;
-    private readonly bool _verifyCachedUrls;
+    private readonly bool _defaultVerifyCachedUrls;
+    private readonly ISettingsResolver? _settingsResolver;
 
     public PhotoVersionUrlService(
         IStorageProvider storageProvider,
@@ -39,7 +40,8 @@ public class PhotoVersionUrlService
         IConfiguration configuration,
         ILogger<PhotoVersionUrlService> logger,
         WatermarkService? watermarkService = null,
-        IWatermarkTextResolver? watermarkTextResolver = null)
+        IWatermarkTextResolver? watermarkTextResolver = null,
+        ISettingsResolver? settingsResolver = null)
     {
         _storageProvider = storageProvider;
         _urlRepository = urlRepository;
@@ -50,7 +52,7 @@ public class PhotoVersionUrlService
         _watermarkTextResolver = watermarkTextResolver;
 
         // Load configuration
-        _ttlDays = _configuration.GetValue("BlobStorage:PreSignedUrlTTLDays", 7);
+        _defaultTtlDays = _configuration.GetValue("BlobStorage:PreSignedUrlTTLDays", 7);
         _refreshWindowDays = _configuration.GetValue("BlobStorage:PreSignedUrlRefreshWindowDays", 5);
         var cachedQualitiesJson = _configuration.GetSection("BlobStorage:CachedQualities").Get<List<string>>() ?? new();
         _cachedQualities = cachedQualitiesJson;
@@ -60,7 +62,8 @@ public class PhotoVersionUrlService
         // drift between PhotoVersionUrl rows and MinIO objects fail loudly with self-healing
         // regeneration; operators may disable in production once D007's worker is keeping
         // drift bounded.
-        _verifyCachedUrls = _configuration.GetValue("BlobStorage:VerifyCachedUrls", true);
+        _defaultVerifyCachedUrls = _configuration.GetValue("BlobStorage:VerifyCachedUrls", true);
+        _settingsResolver = settingsResolver;
     }
 
     /// <summary>
@@ -91,7 +94,7 @@ public class PhotoVersionUrlService
 
                 if (cachedUrl != null && cachedUrl.IsActive && cachedUrl.ExpiresAt > DateTime.UtcNow)
                 {
-                    if (_verifyCachedUrls)
+                    if (await GetVerifyCachedUrlsAsync())
                     {
                         // D008: verify the cached URL still backs a real object before returning it.
                         var storageKey = await TryBuildStorageKeyAsync(photoId, quality);
@@ -385,7 +388,7 @@ public class PhotoVersionUrlService
             }
 
             var now = DateTime.UtcNow;
-            var expiresAt = now.AddDays(_ttlDays);
+            var expiresAt = now.AddDays(await GetTtlDaysAsync());
 
             // Generate URLs for all 5 storage-backed qualities (Thumbnail/Low/Medium/High/Original).
             // The Watermark pseudo-quality (Phase 4 §2) is not a storage object — it's a queue-only
@@ -440,7 +443,7 @@ public class PhotoVersionUrlService
             }
 
             // Generate pre-signed URL (TTL in minutes)
-            var expirationMinutes = _ttlDays * 24 * 60;  // Convert days to minutes
+            var expirationMinutes = (await GetTtlDaysAsync()) * 24 * 60;  // Convert days to minutes
             var presignedUrl = await _storageProvider.GetUrlAsync(storageKey, expirationMinutes);
 
             if (string.IsNullOrEmpty(presignedUrl))
@@ -469,7 +472,7 @@ public class PhotoVersionUrlService
         try
         {
             var now = DateTime.UtcNow;
-            var expiresAt = now.AddDays(_ttlDays);
+            var expiresAt = now.AddDays(await GetTtlDaysAsync());
 
             // D008: look up regardless of IsActive. The unique index on (PhotoId, Quality)
             // means an inactive row cannot coexist with a new row — we must overwrite the
@@ -508,6 +511,43 @@ public class PhotoVersionUrlService
         {
             _logger.LogError(ex, "Error caching URL for photo {PhotoId} quality {Quality}", photoId, quality);
             // Don't rethrow - URL generation is complete, caching is optimization
+        }
+    }
+
+
+    /// <summary>
+    /// Resolves the pre-signed URL TTL live from <see cref="ISettingsResolver"/>
+    /// so admin changes to <c>BlobStorage:PreSignedUrlTTLDays</c> take effect on
+    /// the next URL generation without a process restart. Falls back to the
+    /// construction-time IConfiguration value if the resolver isn't wired
+    /// (unit tests) or the table has no override.
+    /// </summary>
+    private async Task<int> GetTtlDaysAsync(CancellationToken ct = default)
+    {
+        if (_settingsResolver == null) return _defaultTtlDays;
+        try
+        {
+            return await _settingsResolver.GetIntAsync("BlobStorage:PreSignedUrlTTLDays", _defaultTtlDays, ct);
+        }
+        catch
+        {
+            return _defaultTtlDays;
+        }
+    }
+
+    /// <summary>
+    /// Live read of the <c>BlobStorage:VerifyCachedUrls</c> toggle (D008).
+    /// </summary>
+    private async Task<bool> GetVerifyCachedUrlsAsync(CancellationToken ct = default)
+    {
+        if (_settingsResolver == null) return _defaultVerifyCachedUrls;
+        try
+        {
+            return await _settingsResolver.GetBoolAsync("BlobStorage:VerifyCachedUrls", _defaultVerifyCachedUrls, ct);
+        }
+        catch
+        {
+            return _defaultVerifyCachedUrls;
         }
     }
 
