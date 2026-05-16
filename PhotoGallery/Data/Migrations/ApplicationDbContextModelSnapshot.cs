@@ -859,6 +859,56 @@ namespace PhotoGallery.Data.Migrations
                     b.ToTable("UserCartItems");
                 });
 
+            modelBuilder.Entity("PhotoGallery.Models.WorkerHeartbeat", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("InstanceId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("IntervalSeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ItemsInFlight")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ItemsProcessedTotal")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastHeartbeatAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastRanAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkerName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LastHeartbeatAt");
+
+                    b.HasIndex("WorkerName", "InstanceId")
+                        .IsUnique();
+
+                    b.ToTable("WorkerHeartbeats");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)

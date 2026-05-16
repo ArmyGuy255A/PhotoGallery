@@ -52,22 +52,10 @@ public class PhotoProcessingWorker : BackgroundService
 
         try
         {
+            int currentInterval = _defaultIntervalSeconds;
             while (!stoppingToken.IsCancellationRequested)
             {
-                try
-                {
-                    await ProcessPhotosAsync(stoppingToken);
-                    _registry.RecordTick(WorkerName);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error in photo processing cycle");
-                }
-
-                // Read the interval live each loop so admin changes take
-                // effect on the next tick rather than at the next process
-                // restart.
-                int currentInterval = _defaultIntervalSeconds;
+                // Read interval live FIRST so heartbeat reports the current cadence.
                 try
                 {
                     using var scope = _serviceProvider.CreateScope();
@@ -79,6 +67,32 @@ public class PhotoProcessingWorker : BackgroundService
                 {
                     _logger.LogDebug(ex, "Failed to resolve live IntervalSeconds; using default {Default}", _defaultIntervalSeconds);
                 }
+
+                string? lastError = null;
+                try
+                {
+                    await ProcessPhotosAsync(stoppingToken);
+                    _registry.RecordTick(WorkerName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error in photo processing cycle");
+                    lastError = ex.Message;
+                }
+
+                try
+                {
+                    var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+                    await hb.StampAsync(
+                        WorkerName,
+                        "Image processing queue",
+                        TimeSpan.FromSeconds(currentInterval),
+                        lastError == null ? DateTime.UtcNow : (DateTime?)null,
+                        stoppingToken,
+                        itemsInFlight: 0,
+                        lastError: lastError);
+                }
+                catch { /* heartbeat is best-effort */ }
 
                 // Wait either for the live interval OR a manual trigger,
                 // whichever comes first. The trigger signal short-circuits

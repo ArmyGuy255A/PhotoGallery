@@ -86,6 +86,12 @@ public sealed class OrphanedBlobReaperWorker : BackgroundService
                     {
                         await RunCycleAsync(stoppingToken);
                         _registry.RecordTick(WorkerName);
+                    try
+                    {
+                        var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+                        await hb.StampAsync(WorkerName, "Orphaned-blob reaper", TimeSpan.FromHours(intervalHours), DateTime.UtcNow, stoppingToken);
+                    }
+                    catch { /* heartbeat is best-effort */ }
                     }
                     catch (OperationCanceledException)
                     {

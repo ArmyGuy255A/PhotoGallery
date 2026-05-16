@@ -33,6 +33,16 @@ public class PhotoVersionUrlRepository : Repository<PhotoVersionUrl>, IPhotoVers
             .ToListAsync();
     }
 
+    public async Task<List<PhotoVersionUrl>> GetByPhotoIdsAsync(IEnumerable<Guid> photoIds)
+    {
+        var ids = photoIds as IList<Guid> ?? photoIds.ToList();
+        if (ids.Count == 0) return new List<PhotoVersionUrl>();
+        return await _dbSet
+            .AsNoTracking()
+            .Where(pvu => ids.Contains(pvu.PhotoId) && pvu.IsActive)
+            .ToListAsync();
+    }
+
     public async Task<List<PhotoVersionUrl>> GetExpiringAsync(DateTime beforeDate)
     {
         return await _dbSet

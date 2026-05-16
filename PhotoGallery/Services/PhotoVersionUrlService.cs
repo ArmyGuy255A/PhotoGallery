@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using PhotoGallery.Enums;
 using PhotoGallery.Interfaces;
@@ -32,6 +33,7 @@ public class PhotoVersionUrlService
     private readonly List<string> _cachedQualities;
     private readonly bool _defaultVerifyCachedUrls;
     private readonly ISettingsResolver? _settingsResolver;
+    private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache? _memoryCache;
 
     public PhotoVersionUrlService(
         IStorageProvider storageProvider,
@@ -41,7 +43,8 @@ public class PhotoVersionUrlService
         ILogger<PhotoVersionUrlService> logger,
         WatermarkService? watermarkService = null,
         IWatermarkTextResolver? watermarkTextResolver = null,
-        ISettingsResolver? settingsResolver = null)
+        ISettingsResolver? settingsResolver = null,
+        Microsoft.Extensions.Caching.Memory.IMemoryCache? memoryCache = null)
     {
         _storageProvider = storageProvider;
         _urlRepository = urlRepository;
@@ -54,20 +57,63 @@ public class PhotoVersionUrlService
         // Load configuration
         _defaultTtlDays = _configuration.GetValue("BlobStorage:PreSignedUrlTTLDays", 7);
         _refreshWindowDays = _configuration.GetValue("BlobStorage:PreSignedUrlRefreshWindowDays", 5);
-        var cachedQualitiesJson = _configuration.GetSection("BlobStorage:CachedQualities").Get<List<string>>() ?? new();
-        _cachedQualities = cachedQualitiesJson;
+        var cachedQualitiesJson = _configuration.GetSection("BlobStorage:CachedQualities").Get<List<string>>();
+        // Default cached set: Thumbnail (album list), Medium (album detail), and
+        // Watermark (public code-gallery view). Low/High remain on-demand because
+        // they're rarely-rendered and signing one fresh is cheap when it happens.
+        _cachedQualities = (cachedQualitiesJson != null && cachedQualitiesJson.Count > 0)
+            ? cachedQualitiesJson
+            : new List<string> { "Thumbnail", "Medium", "Watermark" };
 
         // D008: When true, GetPhotoVersionUrlAsync verifies that a cached pre-signed URL
         // still backs an existing storage object before returning it. Default true to make
         // drift between PhotoVersionUrl rows and MinIO objects fail loudly with self-healing
         // regeneration; operators may disable in production once D007's worker is keeping
         // drift bounded.
-        _defaultVerifyCachedUrls = _configuration.GetValue("BlobStorage:VerifyCachedUrls", true);
+        _defaultVerifyCachedUrls = _configuration.GetValue("BlobStorage:VerifyCachedUrls", false);
         _settingsResolver = settingsResolver;
+        _memoryCache = memoryCache;
     }
 
     /// <summary>
-    /// Get a pre-signed URL for a photo quality. Returns cached URL if valid, otherwise generates new one.
+    /// Batch-resolve cached pre-signed URLs for a set of photos + qualities in
+    /// a single DB round-trip. Used by the album-list / paged-photos endpoints
+    /// where the per-photo GetPhotoVersionUrlAsync loop was N HEAD requests +
+    /// N DB calls on every page load (the cause of slow album refreshes
+    /// observed in trial).
+    ///
+    /// Returns ONLY cached, active, non-expired URLs. Photos missing a cached
+    /// row for a given quality are simply absent from the returned dictionary
+    /// — callers should treat absent keys as "no URL available" and rely on
+    /// the FE thumbnail placeholder + the background PhotoVersionUrlRefreshWorker
+    /// to populate the cache on its next pass.
+    ///
+    /// Does NOT verify the storage object exists — that's what
+    /// StorageConsistencyService does on its sweep. Trading the per-read HEAD
+    /// for a longer drift window is the explicit choice that makes this batch
+    /// path fast enough for paged album rendering.
+    /// </summary>
+    public async Task<Dictionary<(Guid PhotoId, QualityType Quality), string>> GetCachedUrlsAsync(
+        IEnumerable<Guid> photoIds,
+        IEnumerable<QualityType> qualities)
+    {
+        var ids = photoIds as IList<Guid> ?? photoIds.ToList();
+        var quals = qualities as ICollection<QualityType> ?? qualities.ToList();
+        var result = new Dictionary<(Guid, QualityType), string>(ids.Count * quals.Count);
+        if (ids.Count == 0 || quals.Count == 0) return result;
+
+        var now = DateTime.UtcNow;
+        var rows = await _urlRepository.GetByPhotoIdsAsync(ids);
+        foreach (var row in rows)
+        {
+            if (row.ExpiresAt <= now) continue;
+            if (!quals.Contains(row.Quality)) continue;
+            result[(row.PhotoId, row.Quality)] = row.PresignedUrl;
+        }
+        return result;
+    }
+
+    /// <summary>    /// Get a pre-signed URL for a photo quality. Returns cached URL if valid, otherwise generates new one.
     /// Only Thumbnail and Medium are cached in database. Low/High are generated on-demand.
     ///
     /// D008: When <c>BlobStorage:VerifyCachedUrls</c> is true (default), the cached-return path
@@ -183,6 +229,19 @@ public class PhotoVersionUrlService
         int ttlMinutes = 15,
         bool watermarked = false)
     {
+        // Short-lived URL memoization. The public code-gallery polls this for every
+        // photo on every page render — without a cache we hit ExistsAsync + GetUrlAsync
+        // on Azure Blob N times per page (~100ms each), which dominated the trial UI
+        // latency. With a process-local cache keyed by (photoId, quality, watermarked),
+        // a 10-minute slot survives every poll the visitor makes while the page is
+        // open, and ttlMinutes-3min safety margin guarantees we never hand out an
+        // expired URL. Single-replica API topology (min=max=1) makes process-local
+        // safe; if we ever scale the API horizontally, swap IMemoryCache for IDistributedCache.
+        var cacheKey = $"sasv1:{photoId}:{(int)quality}:{(watermarked ? 1 : 0)}";
+        if (_memoryCache != null && _memoryCache.TryGetValue<string>(cacheKey, out var hit) && !string.IsNullOrEmpty(hit))
+        {
+            return hit;
+        }
         if (ttlMinutes <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(ttlMinutes), "TTL must be positive.");
@@ -261,6 +320,15 @@ public class PhotoVersionUrlService
             {
                 _logger.LogError("Failed to generate short-lived URL for storage key: {StorageKey}", storageKey);
                 return null;
+            }
+
+            // Memoize so the public code-gallery polling doesn't re-sign+verify
+            // every photo on every page render. Cache for ttlMinutes minus a
+            // 3-minute safety margin so we never hand out an expired URL.
+            if (_memoryCache != null)
+            {
+                var safety = TimeSpan.FromMinutes(Math.Max(1, ttlMinutes - 3));
+                _memoryCache.Set(cacheKey, presignedUrl, safety);
             }
 
             return presignedUrl;

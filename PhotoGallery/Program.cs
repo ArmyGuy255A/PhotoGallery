@@ -275,7 +275,9 @@ if (workersEnabled)
     builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
 }
 builder.Services.AddSingleton<WorkerScheduleRegistry>();
+builder.Services.AddSingleton<WorkerHeartbeatWriter>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
+builder.Services.AddMemoryCache();
 
 builder.Services.AddDefaultIdentity<User>(options => options.SignIn.RequireConfirmedAccount = true)
     .AddRoles<IdentityRole>()

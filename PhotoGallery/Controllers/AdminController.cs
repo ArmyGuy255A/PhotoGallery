@@ -617,8 +617,56 @@ public class AdminController : ControllerBase
             .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
             .ToListAsync();
 
+        // Merge in-memory registry (this replica) + heartbeat rows (other replicas).
+        // The in-memory entries take precedence for the local replica (real-time
+        // trigger hook availability); rows in the DB for OTHER instances are
+        // surfaced as additional worker statuses so the dashboard sees the
+        // separate worker container app on the split topology.
         var registry = HttpContext.RequestServices.GetRequiredService<WorkerScheduleRegistry>();
         var workers = registry.Snapshot();
+        var localKeys = workers.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var heartbeats = await _ctx.WorkerHeartbeats.AsNoTracking().ToListAsync();
+        // Liveness: heartbeat is fresh if newer than (now - max(2*interval, 90s)).
+        // 90s floor keeps a 5-second interval from being declared dead after a
+        // single missed tick.
+        var now = DateTime.UtcNow;
+        foreach (var hb in heartbeats)
+        {
+            // Find the matching local worker entry (same name) and decorate it
+            // with the metrics from the heartbeat. If absent locally, add a
+            // synthetic entry.
+            var liveness = TimeSpan.FromSeconds(Math.Max(90, hb.IntervalSeconds * 2));
+            var isAlive = (now - hb.LastHeartbeatAt) <= liveness;
+            var dto = new WorkerStatusDto
+            {
+                Name             = hb.WorkerName,
+                DisplayName      = hb.DisplayName,
+                Interval         = TimeSpan.FromSeconds(hb.IntervalSeconds),
+                LastRanAt        = hb.LastRanAt,
+                NextRunAt        = hb.LastHeartbeatAt.AddSeconds(hb.IntervalSeconds),
+                CanTrigger       = false, // remote replica — trigger hook not reachable from here
+                InstanceId       = hb.InstanceId,
+                IsAlive          = isAlive,
+                ItemsProcessedTotal = hb.ItemsProcessedTotal,
+                ItemsInFlight    = hb.ItemsInFlight,
+                LastError        = hb.LastError
+            };
+            // De-dup by (name + instanceId) so the local replica's in-memory
+            // entry and its DB heartbeat row don't both show up.
+            var localInstance = WorkerScheduleRegistry.InstanceId;
+            if (string.Equals(hb.InstanceId, localInstance, StringComparison.OrdinalIgnoreCase) && localKeys.Contains(hb.WorkerName))
+            {
+                // Augment the local entry with the metrics from its own heartbeat row.
+                var local = workers.First(w => string.Equals(w.Name, hb.WorkerName, StringComparison.OrdinalIgnoreCase));
+                local.InstanceId          = hb.InstanceId;
+                local.IsAlive             = isAlive;
+                local.ItemsProcessedTotal = hb.ItemsProcessedTotal;
+                local.ItemsInFlight       = hb.ItemsInFlight;
+                local.LastError           = hb.LastError;
+                continue;
+            }
+            workers.Add(dto);
+        }
 
         var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var workersEnabled = cfg.GetValue("WorkersEnabled", true);
@@ -771,6 +819,16 @@ public class WorkerStatusDto
     public DateTime? LastRanAt { get; set; }
     public DateTime? NextRunAt { get; set; }
     public bool CanTrigger { get; set; }
+    /// <summary>Replica that owns this entry. Local in-memory entries get filled by the heartbeat merge in GetServiceHealth.</summary>
+    public string? InstanceId { get; set; }
+    /// <summary>True if the heartbeat row is fresh (within 2x its interval, min 90s). False = worker has gone silent.</summary>
+    public bool IsAlive { get; set; } = true;
+    /// <summary>Per-replica running total of items processed since startup.</summary>
+    public long ItemsProcessedTotal { get; set; }
+    /// <summary>Size of the batch the worker is currently chewing on, 0 between ticks.</summary>
+    public int ItemsInFlight { get; set; }
+    /// <summary>Last error from the worker (sticky until a successful tick).</summary>
+    public string? LastError { get; set; }
 }
 
 public class SetRolesRequest

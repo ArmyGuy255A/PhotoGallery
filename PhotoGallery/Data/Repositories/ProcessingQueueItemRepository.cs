@@ -146,7 +146,12 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                 ;WITH leasable AS (
                     SELECT TOP (@batch) Id, LeaseExpiresAt
                     FROM ProcessingQueueItems WITH (UPDLOCK, READPAST)
-                    WHERE (Status = 0 OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
+                    -- Status 0 = Pending, 1 = Processing (orphaned by a dead worker — recover if lease expired),
+                    -- 3 = Error (retry due). Without orphan recovery, an OOM-killed worker leaves Processing
+                    -- rows with an expired lease that NEVER drain — observed in trial as 808 stuck items.
+                    WHERE (Status = 0
+                           OR (Status = 1 AND LeaseExpiresAt IS NOT NULL AND LeaseExpiresAt < GETUTCDATE())
+                           OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
                       AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE())
                     ORDER BY
                         CASE Quality
@@ -159,9 +164,13 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                         END,
                         CreatedAt
                 )
-                UPDATE leasable
-                SET LeaseExpiresAt = DATEADD(SECOND, @leaseSeconds, GETUTCDATE())
-                OUTPUT inserted.Id;";
+                UPDATE pqi
+                SET LeaseExpiresAt = DATEADD(SECOND, @leaseSeconds, GETUTCDATE()),
+                    Status = CASE WHEN pqi.Status = 1 THEN 0 ELSE pqi.Status END,
+                    UpdatedAt = GETUTCDATE()
+                OUTPUT inserted.Id
+                FROM ProcessingQueueItems pqi
+                INNER JOIN leasable l ON l.Id = pqi.Id;";
 
             var ids = await _context.Database
                 .SqlQueryRaw<Guid>(
@@ -184,6 +193,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
         var candidates = await _dbSet
             .Where(item =>
                 (item.Status == ProcessingStatus.Pending ||
+                 (item.Status == ProcessingStatus.Processing && item.LeaseExpiresAt != null && item.LeaseExpiresAt < now) ||
                  (item.Status == ProcessingStatus.Error &&
                   (item.NextRetryTime == null || item.NextRetryTime <= now)))
                 && (item.LeaseExpiresAt == null || item.LeaseExpiresAt < now))
@@ -193,6 +203,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
 
         foreach (var c in candidates)
         {
+            if (c.Status == ProcessingStatus.Processing) c.Status = ProcessingStatus.Pending;
             c.LeaseExpiresAt = leaseUntil;
             c.UpdatedAt = now;
         }

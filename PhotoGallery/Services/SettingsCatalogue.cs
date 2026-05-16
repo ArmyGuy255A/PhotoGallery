@@ -93,8 +93,8 @@ public static class SettingsCatalogue
             "Tick interval for the pre-signed-URL refresh worker. Hot-reload — takes effect on the next sleep cycle.",
             RestartRequired: false),
         new SettingCatalogueEntry(
-            "BlobStorage:VerifyCachedUrls", "Storage", "bool", "true",
-            "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Hot-reload — takes effect on the next URL fetch.",
+            "BlobStorage:VerifyCachedUrls", "Storage", "bool", "false",
+            "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Default is false so paged album rendering doesn't pay N HEAD-request round-trips per page; StorageConsistencyService catches drift on its sweep instead. Hot-reload — takes effect on the next URL fetch.",
             RestartRequired: false),
     };
 }
