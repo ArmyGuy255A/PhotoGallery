@@ -119,6 +119,9 @@
         // Give each worker its own bin/obj so they don't fight the API
         // (same .csproj, same default output dir => locked DLLs). Suffix is
         // baked in too so worker-1 and worker-2 don't lock each other either.
+        // The repo-root Directory.Build.props extends DefaultItemExcludes to
+        // cover all bin/**, obj/** so stale dirs don't get globbed into the
+        // compile (CS0579 duplicate AssemblyInfo).
         "-p:BaseOutputPath=bin/Worker-${input:workerSuffix}/",
         "-p:BaseIntermediateOutputPath=obj/Worker-${input:workerSuffix}/"
       ],
