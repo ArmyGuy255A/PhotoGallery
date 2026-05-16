@@ -128,6 +128,12 @@
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
+          // --no-launch-profile skips Properties/launchSettings.json, so we
+          // must set ASPNETCORE_ENVIRONMENT here. Without this it defaults
+          // to "Production", which loads appsettings.Production.json with
+          // Storage:Type=Azure + an empty connection string and crashes the
+          // worker on first storage call.
+          "ASPNETCORE_ENVIRONMENT": "Development",
           // WorkersEnabled=true is the only thing that flips this same image
           // from API-mode into worker-mode. The four hosted services
           // (PhotoProcessingWorker / OrphanedBlobReaperWorker /
