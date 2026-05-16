@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Photo Gallery">
+  <title>Photo Gallery</title>
+  <!--
+    Filmstrip favicon for Photo Gallery.
+    Dark body with golden sprocket holes and three colored frames inside.
+    Picked from icon-picker.html option #6.
+  -->
+  <rect x="4" y="14" width="56" height="36" rx="3" fill="#111827"/>
+  <g fill="#fbbf24">
+    <rect x="7"  y="17" width="4" height="4"/><rect x="7"  y="43" width="4" height="4"/>
+    <rect x="15" y="17" width="4" height="4"/><rect x="15" y="43" width="4" height="4"/>
+    <rect x="23" y="17" width="4" height="4"/><rect x="23" y="43" width="4" height="4"/>
+    <rect x="31" y="17" width="4" height="4"/><rect x="31" y="43" width="4" height="4"/>
+    <rect x="39" y="17" width="4" height="4"/><rect x="39" y="43" width="4" height="4"/>
+    <rect x="47" y="17" width="4" height="4"/><rect x="47" y="43" width="4" height="4"/>
+    <rect x="55" y="17" width="4" height="4"/><rect x="55" y="43" width="4" height="4"/>
+  </g>
+  <rect x="13" y="24" width="14" height="16" fill="#0d6efd"/>
+  <rect x="29" y="24" width="14" height="16" fill="#10b981"/>
+  <rect x="45" y="24" width="14" height="16" fill="#ef4444"/>
+</svg>
