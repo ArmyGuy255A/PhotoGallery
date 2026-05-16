@@ -71,7 +71,10 @@ public class AccessCodeController : ControllerBase
         if (accessCode.ExpirationDate.HasValue && accessCode.ExpirationDate < DateTime.UtcNow)
             return StatusCode(403, "Access code has expired");
 
-        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId);
+        if (accessCode.AlbumId == null)
+            return NotFound("Album not found");
+
+        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId.Value);
         if (album == null)
             return NotFound("Album not found");
 
@@ -143,12 +146,15 @@ public class AccessCodeController : ControllerBase
         if (accessCode.ExpirationDate.HasValue && accessCode.ExpirationDate < DateTime.UtcNow)
             return StatusCode(403, "Access code has expired");
 
-        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId);
+        if (accessCode.AlbumId == null)
+            return NotFound("Album not found");
+
+        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId.Value);
         if (album == null)
             return NotFound("Album not found");
 
         // Use scoped query (not full table scan)
-        var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(accessCode.AlbumId);
+        var albumPhotos = await _photoRepository.GetAlbumPhotosAsync(accessCode.AlbumId.Value);
 
         // Sort: FileName ASC so DSC_8000.JPG precedes DSC_8001.JPG. Stable order is
         // required for progressive paging — see AlbumsController for the same rationale.
@@ -245,7 +251,10 @@ public class AccessCodeController : ControllerBase
         if (accessCode.ExpirationDate.HasValue && accessCode.ExpirationDate < DateTime.UtcNow)
             return StatusCode(403, "Access code has expired");
 
-        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId);
+        if (accessCode.AlbumId == null)
+            return NotFound("Album not found");
+
+        var album = await _albumRepository.GetByIdAsync(accessCode.AlbumId.Value);
         if (album == null)
             return NotFound("Album not found");
 

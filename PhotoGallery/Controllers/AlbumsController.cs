@@ -201,44 +201,47 @@ public class AlbumsController : ControllerBase
         if (album.OwnerId != userId && !User.IsInRole("Admin"))
             return Forbid();
 
-        // Best-effort storage cleanup BEFORE the DB delete — list everything
-        // under photogallery/{albumId}/ (every photo's originals + variants
-        // + watermarks) and delete each key. Mirrors the per-photo cleanup
-        // in PhotosController.DeletePhoto. Failures are logged and the DB
-        // delete still proceeds; orphaned blobs are reclaimed by
-        // OrphanedBlobReaperService on its next sweep.
-        var prefix = $"photogallery/{albumId}/";
-        try
+        // Soft-delete every access code on this album. Codes survive as
+        // analytics records (admin downloads-by-code, IP/UA breakdown) but
+        // disappear from the user's Shared Albums view and from
+        // /code/{code}/validate. The Album→AccessCode FK is configured
+        // SetNull-on-delete (see AccessCodeConfiguration), so the
+        // hard-delete of the Album below will null out AlbumId on these
+        // rows automatically — we snapshot the title here first so admin
+        // analytics still have a meaningful label.
+        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
+        var codes = await ctx.AccessCodes.Where(c => c.AlbumId == albumId).ToListAsync();
+        if (codes.Count > 0)
         {
-            var keys = await _storageProvider.ListAsync(prefix);
-            var keyList = keys?.ToList() ?? new List<string>();
-            foreach (var key in keyList)
+            var now = DateTime.UtcNow;
+            foreach (var c in codes)
             {
-                try { await _storageProvider.DeleteAsync(key); }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "Failed to delete storage object {Key} while deleting album {AlbumId} (continuing)",
-                        key, albumId);
-                }
+                c.IsDeleted = true;
+                c.DeletedAt = now;
+                c.DeletedAlbumTitle = album.Title;
             }
-            _logger.LogInformation(
-                "Deleted {Count} storage object(s) under {Prefix} for album {AlbumId}",
-                keyList.Count, prefix, albumId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to list storage objects under {Prefix} while deleting album {AlbumId} (continuing — orphan reaper will reclaim)",
-                prefix, albumId);
+            await ctx.SaveChangesAsync();
         }
 
-        // EF Core cascades Album -> Photo + AccessCode automatically, but the
+        // Storage cleanup is intentionally NOT done synchronously here.
+        // Listing + deleting every blob under photogallery/{albumId}/ took
+        // 60+ seconds on Azure for an album of ~400 photos (each photo has
+        // 6 variants ⇒ 2400+ HTTP DELETEs serialised against the storage
+        // account) and the SPA timed out before the response landed. The
+        // OrphanedBlobReaperService runs every 6 hours, scans the
+        // photogallery/{albumGuid}/ prefix, and reclaims every blob whose
+        // album row is gone — that's the supported async cleanup path
+        // here. Admins can trigger an immediate sweep via the Admin page's
+        // 🧹 Reap orphaned blobs button if they don't want to wait.
+        _logger.LogInformation(
+            "Hard-deleted album {AlbumId} ({Title}). Storage cleanup deferred to OrphanedBlobReaperService.",
+            albumId, album.Title);
+
+        // EF Core cascades Album -> Photo automatically, but the
         // photo-level RESTRICT-FK children (Downloads, UserCartItems,
         // ProcessingQueueItems, ProcessingQueues) block the cascade with
         // FK constraint errors. Scrub them in album scope first, mirroring
         // what DeletePhoto does for a single photo.
-        var ctx = HttpContext.RequestServices.GetRequiredService<PhotoGallery.Data.ApplicationDbContext>();
         var photoIds = await ctx.Photos
             .Where(p => p.AlbumId == albumId)
             .Select(p => p.Id)

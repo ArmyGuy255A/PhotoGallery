@@ -72,7 +72,7 @@ public class GdprService
             .ToListAsync();
 
         var accessCodes = await _db.AccessCodes.AsNoTracking()
-            .Where(ac => albumIds.Contains(ac.AlbumId) || ac.CreatedBy == userId)
+            .Where(ac => (ac.AlbumId != null && albumIds.Contains(ac.AlbumId.Value)) || ac.CreatedBy == userId)
             .Select(ac => new AccessCodeExport
             {
                 Id = ac.Id,
@@ -141,7 +141,7 @@ public class GdprService
         var storageKeys = photos.Select(p => p.StorageKey).ToList();
 
         var accessCodeIds = await _db.AccessCodes
-            .Where(ac => albumIds.Contains(ac.AlbumId))
+            .Where(ac => ac.AlbumId != null && albumIds.Contains(ac.AlbumId.Value))
             .Select(ac => ac.Id)
             .ToListAsync();
 
