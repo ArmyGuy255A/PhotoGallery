@@ -375,15 +375,19 @@ public class AdminController : ControllerBase
 
         var codes = await (
             from c in _ctx.AccessCodes
-            join a in _ctx.Albums on c.AlbumId equals a.Id
+            // Left-join the album so soft-deleted codes (AlbumId now null
+            // via the SetNull cascade) still surface in admin analytics.
+            // We fall back to c.DeletedAlbumTitle when the album row is gone.
+            from a in _ctx.Albums.Where(a => a.Id == c.AlbumId).DefaultIfEmpty()
             select new
             {
                 CodeId = c.Id,
                 c.Code,
-                AlbumId = a.Id,
-                AlbumTitle = a.Title,
+                AlbumId = a != null ? (Guid?)a.Id : null,
+                AlbumTitle = a != null ? a.Title : c.DeletedAlbumTitle ?? "(album deleted)",
                 c.CreatedDate,
-                c.ExpirationDate
+                c.ExpirationDate,
+                c.IsDeleted
             }).ToListAsync();
 
         var dtos = codes.Select(c =>
@@ -394,8 +398,9 @@ public class AdminController : ControllerBase
             {
                 CodeId = c.CodeId.ToString(),
                 Code = c.Code,
-                AlbumId = c.AlbumId.ToString(),
+                AlbumId = c.AlbumId?.ToString() ?? string.Empty,
                 AlbumTitle = c.AlbumTitle,
+                IsDeleted = c.IsDeleted,
                 AccessCount = a?.AccessCount ?? 0,
                 DistinctIps = a?.DistinctIps ?? 0,
                 DistinctUserAgents = a?.DistinctUserAgents ?? 0,
@@ -478,6 +483,7 @@ public class AccessCodeStatDto
     public string Code { get; set; } = string.Empty;
     public string AlbumId { get; set; } = string.Empty;
     public string AlbumTitle { get; set; } = string.Empty;
+    public bool IsDeleted { get; set; }
     public int AccessCount { get; set; }
     public int DistinctIps { get; set; }
     public int DistinctUserAgents { get; set; }
