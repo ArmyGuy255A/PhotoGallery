@@ -63,6 +63,30 @@ output "container_app_id" {
 }
 
 ###############################################################################
+# Container Apps (worker compute) — sibling app, scales 0→N on queue depth.
+###############################################################################
+
+output "worker_container_app_name" {
+  value = module.compute_worker.container_app_name
+}
+
+output "worker_container_app_id" {
+  description = "Resource ID of the worker Container App. Used by the CI deploy step to keep the worker's image tag in lockstep with the API."
+  value       = module.compute_worker.container_app_id
+}
+
+output "worker_container_app_uami_name" {
+  description = "Name of the worker's user-assigned MI. terraform/scripts/Register-SqlPrincipals.ps1 grants this principal db_datareader/db_datawriter/db_ddladmin on the photogallery DB."
+  value       = module.compute_worker.uami_name
+}
+
+# Alias used by Apply.ps1 to discover the DB name without depending on the
+# slightly older `sql_database_name` output (which already exists above).
+output "sql_database" {
+  value = module.sql.database_name
+}
+
+###############################################################################
 # Container Registry
 ###############################################################################
 
