@@ -11,13 +11,10 @@ name: Release Deploy
 on:
   release:
     types: [published]
-  # Manual escape hatch for two cases:
-  #   1. cut-release.yml created the release via GITHUB_TOKEN, which does NOT
-  #      cascade to other workflows by GitHub design — so `release: published`
-  #      from that source is silently dropped. (Fix is to swap GITHUB_TOKEN
-  #      for a PAT in cut-release.yml; tracked as follow-up.)
-  #   2. Re-running a deploy against an existing release tag (e.g. ACA fell
-  #      over and needs the image re-pushed).
+  # Manual escape hatch for re-running a deploy against an existing release
+  # tag (e.g. ACA fell over and needs the image re-pushed). cut-release.yml
+  # now uses `gh workflow run` with `actions: write` to dispatch this
+  # workflow directly on every merge to main, so the auto path is reliable.
   workflow_dispatch:
     inputs:
       tag:
