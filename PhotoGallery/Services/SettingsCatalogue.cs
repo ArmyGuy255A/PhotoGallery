@@ -50,16 +50,16 @@ public static class SettingsCatalogue
     {
         new SettingCatalogueEntry(
             "PhotoProcessing:IntervalSeconds", "Processing", "int", "5",
-            "Tick interval for the background image-processing worker. Lower values drain the queue faster but use more CPU.",
-            RestartRequired: true),
+            "Tick interval for the background image-processing worker. Lower values drain the queue faster but use more CPU. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
         new SettingCatalogueEntry(
             "PhotoProcessing:WorkerParallelism", "Processing", "int", "5",
-            "Max concurrent image-resize consumers per worker tick. On a 0.5 vCPU ACA instance, dropping this to 2 prevents the worker from starving the API of CPU during a bulk upload (the cause of 503s seen during 400-photo uploads). The DB-level lease keeps cross-replica safety.",
-            RestartRequired: true),
+            "Max concurrent image-resize consumers per worker tick. On a 0.5 vCPU ACA instance, dropping this to 2 prevents the worker from starving the API of CPU during a bulk upload (the cause of 503s seen during 400-photo uploads). The DB-level lease keeps cross-replica safety. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
         new SettingCatalogueEntry(
             "PhotoProcessing:LeaseBatchMultiplier", "Processing", "int", "4",
-            "Number of queue items leased per tick is WorkerParallelism × this multiplier. Lower values reduce DB pressure but underfeed consumers; raise only if workers are sitting idle waiting for the next lease.",
-            RestartRequired: true),
+            "Number of queue items leased per tick is WorkerParallelism × this multiplier. Lower values reduce DB pressure but underfeed consumers; raise only if workers are sitting idle waiting for the next lease. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
         new SettingCatalogueEntry(
             "PhotoProcessing:ConsistencyCheckEnabled", "Processing", "bool", "true",
             "Master switch for the periodic DB ↔ storage consistency sweep.",
