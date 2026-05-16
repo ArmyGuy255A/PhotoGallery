@@ -688,6 +688,9 @@ namespace PhotoGallery.Data.Migrations
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("LoginCount")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
@@ -741,6 +744,9 @@ namespace PhotoGallery.Data.Migrations
 
                     b.Property<string>("IpAddress")
                         .HasMaxLength(45)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserAgent")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("UserId")

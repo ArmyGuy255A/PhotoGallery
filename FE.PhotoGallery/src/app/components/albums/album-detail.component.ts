@@ -870,6 +870,36 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
       this.loadAccessCodes();
       this.startPhotoStatusPolling();
     });
+
+    // Deep-link: /albums/:id?photoId=:guid opens the carousel directly to
+    // the requested photo. The admin "top downloaded photos" table and the
+    // per-user downloads modal both pass this query param. We re-evaluate
+    // on every page-load tick so the modal opens as soon as the loader
+    // pulls in the page that contains the target photoId. Some test
+    // doubles for ActivatedRoute omit queryParams — guard against it.
+    if (this.route.queryParams) {
+      this.route.queryParams.pipe(takeUntil(this.destroy$)).subscribe(qp => {
+        this.pendingPhotoId = qp['photoId'] || null;
+        this.tryOpenPendingPhoto();
+      });
+    }
+    this.loader.onLoadCompleted = () => {
+      // Re-attached on each ngOnInit because reset() doesn't clear it;
+      // safe to overwrite — the sentinel observer setup also assigns it.
+      this.tryOpenPendingPhoto();
+    };
+  }
+
+  /** Set by ?photoId=… query param; cleared after we've opened the modal. */
+  private pendingPhotoId: string | null = null;
+
+  private tryOpenPendingPhoto(): void {
+    if (!this.pendingPhotoId) return;
+    const idx = this.photos.findIndex(p => p.id === this.pendingPhotoId);
+    if (idx >= 0) {
+      this.openModal(idx);
+      this.pendingPhotoId = null;
+    }
   }
 
   ngAfterViewInit(): void {
@@ -910,7 +940,10 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
     // out of the viewport it stays "intersecting" silently, and the user's
     // scroll never reloads. Re-observing the same element forces a fresh
     // evaluation that fires loadNext again if the sentinel is still visible.
-    this.loader.onLoadCompleted = () => this.reobserveSentinel();
+    this.loader.onLoadCompleted = () => {
+      this.reobserveSentinel();
+      this.tryOpenPendingPhoto();
+    };
   }
 
   private reobserveSentinel(): void {

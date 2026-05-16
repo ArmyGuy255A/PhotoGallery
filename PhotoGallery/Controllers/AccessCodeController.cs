@@ -24,6 +24,7 @@ public class AccessCodeController : ControllerBase
     private readonly IPhotoRepository _photoRepository;
     private readonly IRepository<PhotoVersion> _photoVersionRepository;
     private readonly IRepository<Album> _albumRepository;
+    private readonly IRepository<UserAccessLog> _accessLogRepository;
     private readonly IStorageProvider _storageProvider;
     private readonly IImageProcessor _imageProcessor;
     private readonly PhotoVersionUrlService _urlService;
@@ -35,6 +36,7 @@ public class AccessCodeController : ControllerBase
         IPhotoRepository photoRepository,
         IRepository<PhotoVersion> photoVersionRepository,
         IRepository<Album> albumRepository,
+        IRepository<UserAccessLog> accessLogRepository,
         IStorageProvider storageProvider,
         IImageProcessor imageProcessor,
         PhotoVersionUrlService urlService,
@@ -45,6 +47,7 @@ public class AccessCodeController : ControllerBase
         _photoRepository = photoRepository;
         _photoVersionRepository = photoVersionRepository;
         _albumRepository = albumRepository;
+        _accessLogRepository = accessLogRepository;
         _storageProvider = storageProvider;
         _imageProcessor = imageProcessor;
         _urlService = urlService;
@@ -73,6 +76,36 @@ public class AccessCodeController : ControllerBase
             return NotFound("Album not found");
 
         _logger.LogInformation("Access code {Code} validated successfully", code);
+
+        // Log this validation for the Admin access-code analytics view.
+        // Capped strings keep abusive User-Agents (or buggy clients sending
+        // megabyte UAs) from blowing up the row. Best-effort: a logging
+        // failure must not break the user's access to the gallery.
+        try
+        {
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            var ua = Request.Headers.UserAgent.ToString();
+            if (ua.Length > 256) ua = ua.Substring(0, 256);
+            if (ip != null && ip.Length > 45) ip = ip.Substring(0, 45);
+            await _accessLogRepository.AddAsync(new UserAccessLog
+            {
+                Id = Guid.NewGuid(),
+                AccessCodeId = accessCode.Id,
+                AccessDate = DateTime.UtcNow,
+                IpAddress = ip,
+                UserAgent = string.IsNullOrWhiteSpace(ua) ? null : ua,
+                UserId = User.Identity?.IsAuthenticated == true
+                    ? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                    : null
+            });
+            await _accessLogRepository.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to write UserAccessLog for code {Code} (non-fatal — validation continues)",
+                code);
+        }
 
         return Ok(new CodeValidationResponse
         {

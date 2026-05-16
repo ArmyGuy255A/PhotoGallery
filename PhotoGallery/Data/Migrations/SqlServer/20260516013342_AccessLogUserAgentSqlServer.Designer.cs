@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PhotoGallery.Data;
 
@@ -11,9 +12,11 @@ using PhotoGallery.Data;
 namespace PhotoGallery.Data.Migrations.SqlServer
 {
     [DbContext(typeof(ApplicationDbContextSqlServer))]
-    partial class ApplicationDbContextSqlServerModelSnapshot : ModelSnapshot
+    [Migration("20260516013342_AccessLogUserAgentSqlServer")]
+    partial class AccessLogUserAgentSqlServer
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -693,9 +696,6 @@ namespace PhotoGallery.Data.Migrations.SqlServer
 
                     b.Property<DateTimeOffset?>("LockoutEnd")
                         .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("LoginCount")
-                        .HasColumnType("int");
 
                     b.Property<string>("NormalizedEmail")
                         .HasMaxLength(256)

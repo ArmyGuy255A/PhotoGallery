@@ -61,7 +61,9 @@ public class ExternalAuthService : IExternalAuthService
                 Email = userInfo.Email,
                 EmailConfirmed = true,
                 CreatedDate = DateTime.UtcNow,
-                IsActive = true
+                IsActive = true,
+                FirstName = string.IsNullOrWhiteSpace(userInfo.GivenName) ? null : userInfo.GivenName,
+                LastName = string.IsNullOrWhiteSpace(userInfo.FamilyName) ? null : userInfo.FamilyName
             };
 
             var result = await _userManager.CreateAsync(user);
@@ -103,6 +105,14 @@ public class ExternalAuthService : IExternalAuthService
         try
         {
             user.LastLoginAt = DateTime.UtcNow;
+            user.LoginCount = user.LoginCount + 1;
+            // Backfill First/Last name if the row was created before we started
+            // capturing them, or if Google has supplied them for the first
+            // time (e.g. the user filled out their profile after sign-up).
+            if (string.IsNullOrWhiteSpace(user.FirstName) && !string.IsNullOrWhiteSpace(userInfo.GivenName))
+                user.FirstName = userInfo.GivenName;
+            if (string.IsNullOrWhiteSpace(user.LastName) && !string.IsNullOrWhiteSpace(userInfo.FamilyName))
+                user.LastName = userInfo.FamilyName;
             await _userManager.UpdateAsync(user);
         }
         catch (Exception ex)

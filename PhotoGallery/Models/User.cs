@@ -17,6 +17,14 @@ public class User : IdentityUser
     /// </summary>
     public DateTime? LastLoginAt { get; set; }
 
+    /// <summary>
+    /// Running count of successful OAuth logins. Incremented on every
+    /// <c>ExternalAuthService.HandleExternalLoginAsync</c> success — same
+    /// best-effort path as <see cref="LastLoginAt"/>, so a transient
+    /// ConcurrencyFailure is tolerable.
+    /// </summary>
+    public int LoginCount { get; set; }
+
     // Navigation properties
     public virtual ICollection<Album> Albums { get; set; } = new List<Album>();
     public virtual ICollection<Photo> Photos { get; set; } = new List<Photo>();

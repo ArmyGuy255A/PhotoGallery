@@ -44,14 +44,47 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
-    /// Full user list, sorted by most-recent login (nulls last). Includes
-    /// roles, last login, album count and aggregate download count per user
-    /// so the Admin UI can render a single table without N+1 round-trips.
+    /// Paginated, filterable, sortable user list for the Admin page. Returns
+    /// the items plus total-count + page metadata so the SPA can render
+    /// "Page 3 of 12 (250 users)" without a second round-trip.
+    ///
+    /// Query params:
+    ///   search   — substring match against email + first/last name (case-insensitive)
+    ///   sortBy   — one of: email, name, lastLogin, loginCount, downloads, created
+    ///   sortDir  — 'asc' or 'desc' (default email asc, lastLogin desc)
+    ///   page     — 1-based page number (default 1)
+    ///   pageSize — items per page (default 25, max 200)
     /// </summary>
     [HttpGet("users")]
-    public async Task<ActionResult<IEnumerable<AdminUserDto>>> GetUsers()
+    public async Task<ActionResult<AdminUserPage>> GetUsers(
+        [FromQuery] string? search = null,
+        [FromQuery] string? sortBy = "email",
+        [FromQuery] string? sortDir = "asc",
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25)
     {
-        var users = await _ctx.Users.AsNoTracking().ToListAsync();
+        if (page < 1) page = 1;
+        if (pageSize < 1 || pageSize > 200) pageSize = 25;
+
+        var query = _ctx.Users.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            // Use ToLower() in EF translation rather than EF.Functions.Like
+            // so the filter works identically on Sqlite (case-insensitive
+            // FOLD via ToLower) and SqlServer (case-insensitive default
+            // collation; ToLower is a no-op there but still correct).
+            var sl = s.ToLower();
+            query = query.Where(u =>
+                (u.Email != null && u.Email.ToLower().Contains(sl)) ||
+                (u.FirstName != null && u.FirstName.ToLower().Contains(sl)) ||
+                (u.LastName != null && u.LastName.ToLower().Contains(sl)));
+        }
+
+        var descending = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        // Precompute the per-user album + download counts in two grouped
+        // queries — joining inside ORDER BY would multi-count rows when the
+        // user owns more than one album.
         var albumCounts = await _ctx.Albums
             .GroupBy(a => a.OwnerId)
             .Select(g => new { OwnerId = g.Key, Count = g.Count() })
@@ -64,27 +97,60 @@ public class AdminController : ControllerBase
         var albumByOwner = albumCounts.ToDictionary(x => x.OwnerId, x => x.Count);
         var dlByUser = downloadCounts.ToDictionary(x => x.UserId, x => x.Count);
 
-        var dtos = new List<AdminUserDto>(users.Count);
-        foreach (var u in users)
+        // Pull all users into memory for sorting on derived columns
+        // (album / download counts). The Admin user table is bounded by
+        // total-signup count, which for v1 is small enough that this is
+        // cheaper than building a SQL-side projection for the counts.
+        var all = await query.ToListAsync();
+        var withCounts = new List<(User U, int AlbumCount, int DownloadCount, IList<string> Roles)>();
+        foreach (var u in all)
         {
             var roles = await _userManager.GetRolesAsync(u);
-            dtos.Add(new AdminUserDto
-            {
-                Id = u.Id,
-                Email = u.Email ?? string.Empty,
-                FirstName = u.FirstName,
-                LastName = u.LastName,
-                Roles = roles.ToList(),
-                LastLoginAt = u.LastLoginAt,
-                CreatedDate = u.CreatedDate,
-                IsActive = u.IsActive,
-                AlbumCount = albumByOwner.TryGetValue(u.Id, out var ac) ? ac : 0,
-                DownloadCount = dlByUser.TryGetValue(u.Id, out var dc) ? dc : 0
-            });
+            withCounts.Add((u,
+                albumByOwner.TryGetValue(u.Id, out var ac) ? ac : 0,
+                dlByUser.TryGetValue(u.Id, out var dc) ? dc : 0,
+                roles));
         }
-        return Ok(dtos
-            .OrderByDescending(d => d.LastLoginAt ?? DateTime.MinValue)
-            .ThenBy(d => d.Email));
+
+        IEnumerable<(User U, int AlbumCount, int DownloadCount, IList<string> Roles)> sorted = (sortBy?.ToLowerInvariant()) switch
+        {
+            "name" => withCounts.OrderBy(x => (x.U.FirstName ?? "") + " " + (x.U.LastName ?? "")),
+            "lastlogin" => withCounts.OrderBy(x => x.U.LastLoginAt ?? DateTime.MinValue),
+            "logincount" => withCounts.OrderBy(x => x.U.LoginCount),
+            "downloads" => withCounts.OrderBy(x => x.DownloadCount),
+            "albums" => withCounts.OrderBy(x => x.AlbumCount),
+            "created" => withCounts.OrderBy(x => x.U.CreatedDate),
+            _ => withCounts.OrderBy(x => x.U.Email)
+        };
+        if (descending) sorted = sorted.Reverse();
+
+        var ordered = sorted.ToList();
+        var total = ordered.Count;
+        var pageItems = ordered.Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new AdminUserDto
+            {
+                Id = x.U.Id,
+                Email = x.U.Email ?? string.Empty,
+                FirstName = x.U.FirstName,
+                LastName = x.U.LastName,
+                Roles = x.Roles.ToList(),
+                LastLoginAt = x.U.LastLoginAt,
+                LoginCount = x.U.LoginCount,
+                CreatedDate = x.U.CreatedDate,
+                IsActive = x.U.IsActive,
+                AlbumCount = x.AlbumCount,
+                DownloadCount = x.DownloadCount
+            })
+            .ToList();
+
+        return Ok(new AdminUserPage
+        {
+            Items = pageItems,
+            TotalCount = total,
+            Page = page,
+            PageSize = pageSize,
+            HasMore = page * pageSize < total
+        });
     }
 
     /// <summary>
@@ -148,6 +214,7 @@ public class AdminController : ControllerBase
             LastName = user.LastName,
             Roles = roles,
             LastLoginAt = user.LastLoginAt,
+            LoginCount = user.LoginCount,
             CreatedDate = user.CreatedDate,
             IsActive = user.IsActive
         });
@@ -238,6 +305,113 @@ public class AdminController : ControllerBase
             }).Take(limit).ToListAsync();
         return Ok(rows);
     }
+
+    /// <summary>
+    /// Top-downloaded photos within a single album, sorted by download
+    /// count (desc). Drives the "click an album to see its top photos"
+    /// drill-down modal on the Admin stats tab. Each row includes a
+    /// thumbnail URL so the modal can render visual rather than just
+    /// filename text.
+    /// </summary>
+    [HttpGet("stats/album/{albumId:guid}/top-photos")]
+    public async Task<ActionResult<IEnumerable<TopPhotoDto>>> GetAlbumTopDownloadedPhotos(
+        Guid albumId,
+        [FromQuery] int limit = 20)
+    {
+        if (limit <= 0 || limit > 500) limit = 20;
+        var rows = await (
+            from d in _ctx.Downloads
+            join p in _ctx.Photos on d.PhotoId equals p.Id
+            join a in _ctx.Albums on p.AlbumId equals a.Id
+            where a.Id == albumId
+            group d by new { p.Id, p.FileName, p.AlbumId, a.Title } into g
+            select new TopPhotoDto
+            {
+                PhotoId = g.Key.Id.ToString(),
+                FileName = g.Key.FileName,
+                AlbumId = g.Key.AlbumId.ToString(),
+                AlbumTitle = g.Key.Title,
+                DownloadCount = g.Count(),
+                LastDownloadedAt = g.Max(d => (DateTime?)d.DownloadedAt)
+            })
+            .OrderByDescending(r => r.DownloadCount)
+            .Take(limit)
+            .ToListAsync();
+        return Ok(rows);
+    }
+
+    /// <summary>
+    /// Per-access-code analytics: how many times the code has been entered
+    /// into the URL (UserAccessLog rows), how many distinct IPs and
+    /// User-Agents it's been served to, how many photos have been
+    /// downloaded through it (Downloads rows where AccessCodeId matches),
+    /// and the most recent access timestamp. Drives the Admin "code usage"
+    /// table on the stats tab.
+    /// </summary>
+    [HttpGet("stats/access-codes")]
+    public async Task<ActionResult<IEnumerable<AccessCodeStatDto>>> GetAccessCodeStats([FromQuery] int limit = 100)
+    {
+        if (limit <= 0 || limit > 500) limit = 100;
+
+        var accessRows = await (
+            from log in _ctx.Set<UserAccessLog>()
+            group log by log.AccessCodeId into g
+            select new
+            {
+                AccessCodeId = g.Key,
+                AccessCount = g.Count(),
+                DistinctIps = g.Select(l => l.IpAddress).Distinct().Count(),
+                DistinctUserAgents = g.Select(l => l.UserAgent).Distinct().Count(),
+                LastAccessedAt = g.Max(l => (DateTime?)l.AccessDate)
+            }).ToListAsync();
+        var accessByCode = accessRows.ToDictionary(r => r.AccessCodeId);
+
+        var downloadRows = await _ctx.Downloads
+            .Where(d => d.AccessCodeId != null)
+            .GroupBy(d => d.AccessCodeId!.Value)
+            .Select(g => new { AccessCodeId = g.Key, DownloadCount = g.Count() })
+            .ToListAsync();
+        var dlByCode = downloadRows.ToDictionary(r => r.AccessCodeId, r => r.DownloadCount);
+
+        var codes = await (
+            from c in _ctx.AccessCodes
+            join a in _ctx.Albums on c.AlbumId equals a.Id
+            select new
+            {
+                CodeId = c.Id,
+                c.Code,
+                AlbumId = a.Id,
+                AlbumTitle = a.Title,
+                c.CreatedDate,
+                c.ExpirationDate
+            }).ToListAsync();
+
+        var dtos = codes.Select(c =>
+        {
+            accessByCode.TryGetValue(c.CodeId, out var a);
+            dlByCode.TryGetValue(c.CodeId, out var dl);
+            return new AccessCodeStatDto
+            {
+                CodeId = c.CodeId.ToString(),
+                Code = c.Code,
+                AlbumId = c.AlbumId.ToString(),
+                AlbumTitle = c.AlbumTitle,
+                AccessCount = a?.AccessCount ?? 0,
+                DistinctIps = a?.DistinctIps ?? 0,
+                DistinctUserAgents = a?.DistinctUserAgents ?? 0,
+                PhotoDownloadCount = dl,
+                LastAccessedAt = a?.LastAccessedAt,
+                CreatedDate = c.CreatedDate,
+                ExpirationDate = c.ExpirationDate
+            };
+        })
+        .OrderByDescending(r => r.AccessCount)
+        .ThenByDescending(r => r.LastAccessedAt ?? DateTime.MinValue)
+        .Take(limit)
+        .ToList();
+
+        return Ok(dtos);
+    }
 }
 
 public class AdminUserDto
@@ -248,10 +422,20 @@ public class AdminUserDto
     public string? LastName { get; set; }
     public List<string> Roles { get; set; } = new();
     public DateTime? LastLoginAt { get; set; }
+    public int LoginCount { get; set; }
     public DateTime CreatedDate { get; set; }
     public bool IsActive { get; set; }
     public int AlbumCount { get; set; }
     public int DownloadCount { get; set; }
+}
+
+public class AdminUserPage
+{
+    public List<AdminUserDto> Items { get; set; } = new();
+    public int TotalCount { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public bool HasMore { get; set; }
 }
 
 public class SetRolesRequest
@@ -286,4 +470,19 @@ public class UserDownloadDto
     public string AlbumTitle { get; set; } = string.Empty;
     public string Quality { get; set; } = string.Empty;
     public DateTime DownloadedAt { get; set; }
+}
+
+public class AccessCodeStatDto
+{
+    public string CodeId { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string AlbumId { get; set; } = string.Empty;
+    public string AlbumTitle { get; set; } = string.Empty;
+    public int AccessCount { get; set; }
+    public int DistinctIps { get; set; }
+    public int DistinctUserAgents { get; set; }
+    public int PhotoDownloadCount { get; set; }
+    public DateTime? LastAccessedAt { get; set; }
+    public DateTime CreatedDate { get; set; }
+    public DateTime? ExpirationDate { get; set; }
 }
