@@ -323,12 +323,37 @@ public class PhotoVersionUrlService
             }
 
             // Memoize so the public code-gallery polling doesn't re-sign+verify
-            // every photo on every page render. Cache for ttlMinutes minus a
-            // 3-minute safety margin so we never hand out an expired URL.
+            // every photo on every page render.
+            //
+            // Cache shape:
+            //   - SlidingExpiration  = BlobStorage:UrlCacheSlidingMinutes (default 30m).
+            //     Each access bumps the entry forward by this much — popular
+            //     thumbnails stay hot indefinitely while inactive ones expire.
+            //   - AbsoluteExpiration = ttlMinutes − 3-minute safety margin.
+            //     Hard cap that guarantees we never hand out an expired SAS even
+            //     if the entry has been sliding forward for hours.
+            //
+            // For the default {ttlMinutes=60, sliding=30}, a quiet thumbnail
+            // expires after 30 minutes of no traffic, but a hot one keeps
+            // getting re-served until its underlying SAS is within 3 minutes
+            // of dying, at which point the absolute cap forces a fresh sign.
             if (_memoryCache != null)
             {
-                var safety = TimeSpan.FromMinutes(Math.Max(1, ttlMinutes - 3));
-                _memoryCache.Set(cacheKey, presignedUrl, safety);
+                int slidingMinutes = 30;
+                if (_settingsResolver != null)
+                {
+                    try { slidingMinutes = await _settingsResolver.GetIntAsync("BlobStorage:UrlCacheSlidingMinutes", 30); }
+                    catch { /* keep default */ }
+                }
+                // Never let sliding exceed the SAS lifetime.
+                var absolute = TimeSpan.FromMinutes(Math.Max(1, ttlMinutes - 3));
+                var sliding  = TimeSpan.FromMinutes(Math.Max(1, Math.Min(slidingMinutes, ttlMinutes - 3)));
+                var options = new Microsoft.Extensions.Caching.Memory.MemoryCacheEntryOptions
+                {
+                    SlidingExpiration  = sliding,
+                    AbsoluteExpirationRelativeToNow = absolute
+                };
+                _memoryCache.Set(cacheKey, presignedUrl, options);
             }
 
             return presignedUrl;
