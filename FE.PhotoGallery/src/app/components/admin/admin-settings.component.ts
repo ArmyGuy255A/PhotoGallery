@@ -122,8 +122,16 @@ interface WorkerStatus {
   canTrigger: boolean;
 }
 
+interface ReplicaInfo {
+  instanceId: string;
+  hostName: string;
+  workersEnabled: boolean;
+  role: string;
+}
+
 interface ServiceHealth {
   generatedAt: string;
+  replica: ReplicaInfo;
   photos: {
     total: number;
     uploading: number;
@@ -631,6 +639,19 @@ type SortDir = 'asc' | 'desc';
         <div *ngIf="healthLoading() && !health()" class="loading-row">Loading service health…</div>
 
         <div *ngIf="health() as h" class="health-grid">
+          <div class="stat-card">
+            <h3>This replica</h3>
+            <dl class="stat-list">
+              <dt>Role</dt><dd><code>{{ h.replica.role }}</code></dd>
+              <dt>Instance</dt><dd><code class="muted small">{{ h.replica.instanceId }}</code></dd>
+              <dt>Workers</dt><dd>{{ h.replica.workersEnabled ? 'enabled' : 'disabled' }}</dd>
+            </dl>
+            <p class="muted small">
+              When scaled out, refresh repeatedly to see other replicas
+              answer. Workers + queue counts below reflect all replicas
+              (shared DB); the Workers table reflects only this one.
+            </p>
+          </div>
           <div class="stat-card">
             <h3>Photos</h3>
             <dl class="stat-list">

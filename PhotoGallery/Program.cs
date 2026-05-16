@@ -253,11 +253,27 @@ builder.Services.AddScoped<StorageConsistencyService>();
 // idempotency at the storage layer.
 builder.Services.AddScoped<OrphanedBlobReaperService>();
 
-// Register background services for photo processing and URL refresh
-builder.Services.AddHostedService<PhotoProcessingWorker>();
-builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
-builder.Services.AddHostedService<StorageConsistencyWorker>();
-builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
+// Register background services for photo processing and URL refresh.
+//
+// Scale-out topology: the same image runs in two modes, gated by the
+//   WorkersEnabled environment variable / config key.
+//     true  (default) — process runs API + background workers (single-replica dev / trial).
+//     false           — process runs API only; background workers do NOT register.
+//                       Pair with a sibling "pg-worker" ACA app where WorkersEnabled=true
+//                       and ingress is disabled, so:
+//                         - API replicas stay responsive at 0.5 vCPU (no image processing
+//                           starving the request thread pool)
+//                         - worker replicas scale on queue depth via KEDA SQL custom metric.
+//                       The ProcessingQueueItem lease (UPDLOCK + READPAST on SqlServer)
+//                       makes N worker replicas safe — each replica claims its own batch.
+var workersEnabled = builder.Configuration.GetValue("WorkersEnabled", true);
+if (workersEnabled)
+{
+    builder.Services.AddHostedService<PhotoProcessingWorker>();
+    builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
+    builder.Services.AddHostedService<StorageConsistencyWorker>();
+    builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
+}
 builder.Services.AddSingleton<WorkerScheduleRegistry>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
 

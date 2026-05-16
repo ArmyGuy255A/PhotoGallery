@@ -620,9 +620,18 @@ public class AdminController : ControllerBase
         var registry = HttpContext.RequestServices.GetRequiredService<WorkerScheduleRegistry>();
         var workers = registry.Snapshot();
 
+        var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var workersEnabled = cfg.GetValue("WorkersEnabled", true);
         return Ok(new ServiceHealthDto
         {
             GeneratedAt = DateTime.UtcNow,
+            Replica = new ReplicaInfoDto
+            {
+                InstanceId = Environment.GetEnvironmentVariable("CONTAINER_APP_REPLICA_NAME") ?? Environment.MachineName,
+                HostName = Environment.MachineName,
+                WorkersEnabled = workersEnabled,
+                Role = workersEnabled ? "api+worker" : "api-only"
+            },
             Photos = new PhotoCountsDto
             {
                 Total = photoStatuses.Sum(x => x.Count),
@@ -721,9 +730,18 @@ public class AnonymousVisitorCodeDto
 public class ServiceHealthDto
 {
     public DateTime GeneratedAt { get; set; }
+    public ReplicaInfoDto Replica { get; set; } = new();
     public PhotoCountsDto Photos { get; set; } = new();
     public QueueCountsDto Queue { get; set; } = new();
     public List<WorkerStatusDto> Workers { get; set; } = new();
+}
+
+public class ReplicaInfoDto
+{
+    public string InstanceId { get; set; } = string.Empty;
+    public string HostName { get; set; } = string.Empty;
+    public bool WorkersEnabled { get; set; }
+    public string Role { get; set; } = string.Empty;
 }
 
 public class PhotoCountsDto
