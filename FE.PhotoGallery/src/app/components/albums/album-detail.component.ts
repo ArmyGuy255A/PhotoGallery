@@ -77,6 +77,17 @@ interface Album {
           <section class="photos-section">
             <div class="section-header">
               <h2 data-testid="photos-count">Photos ({{ photos.length }})</h2>
+              <button type="button"
+                class="action-btn"
+                [disabled]="reconcileState === 'running'"
+                (click)="runReconcile()"
+                data-testid="album-reconcile-button"
+                title="Re-scan storage for missing thumbnails / variants and re-queue any that need to be regenerated.">
+                {{ reconcileState === 'running' ? 'Reconciling…' : '🔄 Reconcile' }}
+              </button>
+            </div>
+            <div *ngIf="reconcileMessage" class="reconcile-summary" data-testid="album-reconcile-summary">
+              {{ reconcileMessage }}
             </div>
 
             <!--
@@ -1309,5 +1320,61 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
     photo.thumbnailUrl = undefined;
   }
 
+  // ---------------------------------------------------------------------------
+  // Per-album reconciliation. POSTs to /api/photos/albums/{id}/reconcile-storage,
+  // which re-scans every photo in the album for missing variants and re-queues
+  // the worker to regenerate them. Owner OR admin can trigger this; the BE
+  // authorizes the same way GetAlbumProcessingSummary does. The actual image
+  // regeneration runs on the worker app on its next 5s tick, so the report
+  // counters (requeued, backFilled) are the immediate user-visible signal.
+  // ---------------------------------------------------------------------------
+
+  reconcileState: 'idle' | 'running' | 'success' | 'error' = 'idle';
+  reconcileMessage: string | null = null;
+
+  runReconcile(): void {
+    if (this.reconcileState === 'running') return;
+    this.reconcileState = 'running';
+    this.reconcileMessage = null;
+    const apiUrl = environment.apiUrl || '';
+    this.http.post<ReconcileReport>(`${apiUrl}/api/photos/albums/${this.albumId}/reconcile-storage`, {})
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: (report) => {
+          this.reconcileState = 'success';
+          const parts: string[] = [];
+          if (report.photosScanned != null) parts.push(`${report.photosScanned} scanned`);
+          if (report.itemsRequeued)        parts.push(`${report.itemsRequeued} requeued`);
+          if (report.itemsBackFilledComplete) parts.push(`${report.itemsBackFilledComplete} back-filled`);
+          if (report.itemsCreatedPending)  parts.push(`${report.itemsCreatedPending} new pending`);
+          if (report.originalsMissing)     parts.push(`${report.originalsMissing} originals missing`);
+          if (report.urlsInvalidated)      parts.push(`${report.urlsInvalidated} URLs invalidated`);
+          this.reconcileMessage = parts.length
+            ? `Reconcile complete: ${parts.join(', ')}. Worker will regenerate any pending items within ~5s.`
+            : 'Reconcile complete: nothing to fix.';
+          // Refresh the grid so newly-regenerated thumbnails appear once the
+          // worker finishes (refreshLoaded merges by id so the visible scroll
+          // position is preserved).
+          this.loader.refreshLoaded(p => p.id);
+        },
+        error: (err) => {
+          this.reconcileState = 'error';
+          this.reconcileMessage = err?.error?.message
+            ? `Reconcile failed: ${err.error.message}`
+            : 'Reconcile failed.';
+        }
+      });
+  }
+
   /** Photos transformed for the PhotoModalComponent. (single definition — see Cart integration block) */
+}
+
+interface ReconcileReport {
+  photosScanned?: number;
+  itemsCreatedPending?: number;
+  itemsBackFilledComplete?: number;
+  itemsRequeued?: number;
+  originalsMissing?: number;
+  queuesCreated?: number;
+  urlsInvalidated?: number;
 }

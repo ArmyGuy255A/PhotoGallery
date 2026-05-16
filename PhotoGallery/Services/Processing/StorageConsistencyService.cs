@@ -295,6 +295,51 @@ public class StorageConsistencyService
         // Pending + missing: nothing to do — PhotoProcessingWorker will pick it up on its next tick.
     }
 
+    /// <summary>
+    /// Album-scoped variant of <see cref="RunOnceAsync"/>. Reconciles only the
+    /// photos in one album so the admin / album-owner can trigger a quick
+    /// catch-up after spotting drift (e.g. an album says "still processing"
+    /// after workers stopped, or photos render with a broken thumbnail).
+    /// Same per-photo logic, just a narrower scan window.
+    /// </summary>
+    public async Task<ConsistencyReport> RunForAlbumAsync(Guid albumId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _runLock.WaitAsync(cancellationToken);
+        try
+        {
+            var report = new ConsistencyReport();
+            var mutations = new MutationFlags();
+
+            // Pull only this album's photos. Includes Uploading rows
+            // intentionally — Uploading photos missing their original.jpg
+            // get logged as OriginalsMissing rather than triggering a
+            // pointless requeue.
+            var photos = await _photoRepository.GetAlbumPhotosIncludingUploadingAsync(albumId);
+            foreach (var photo in photos)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await ReconcilePhotoAsync(photo, report, mutations, cancellationToken);
+                report.PhotosScanned++;
+            }
+
+            if (mutations.ItemsChanged)   await _itemRepository.SaveChangesAsync();
+            if (mutations.QueuesChanged)  await _queueRepository.SaveChangesAsync();
+            if (mutations.UrlsChanged)    await _urlRepository.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "StorageConsistencyService album-scoped cycle for {AlbumId}: scanned={Scanned} pending={Pending} backFilled={BackFilled} requeued={Requeued} originalsMissing={OriginalsMissing} queuesCreated={QueuesCreated} urlsInvalidated={UrlsInvalidated}",
+                albumId, report.PhotosScanned, report.ItemsCreatedPending, report.ItemsBackFilledComplete,
+                report.ItemsRequeued, report.OriginalsMissing, report.QueuesCreated, report.UrlsInvalidated);
+
+            return report;
+        }
+        finally
+        {
+            _runLock.Release();
+        }
+    }
+
     private static string BuildPrefix(Photo photo) => $"photogallery/{photo.AlbumId}/{photo.Id}/";
 
     private static string BuildKey(Photo photo, string qualityLowercase) => $"{BuildPrefix(photo)}{qualityLowercase}.jpg";

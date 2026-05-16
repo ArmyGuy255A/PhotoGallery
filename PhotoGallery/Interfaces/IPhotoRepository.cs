@@ -5,6 +5,13 @@ namespace PhotoGallery.Interfaces;
 public interface IPhotoRepository : IRepository<Photo>
 {
     Task<List<Photo>> GetAlbumPhotosAsync(Guid albumId);
+
+    /// <summary>
+    /// Same as <see cref="GetAlbumPhotosAsync"/> but also includes Uploading-status
+    /// rows. Used by the processing-summary endpoint so the user sees pending
+    /// uploads in the totals. Album-scoped to avoid full-table scans.
+    /// </summary>
+    Task<List<Photo>> GetAlbumPhotosIncludingUploadingAsync(Guid albumId);
     Task<Photo?> GetWithVersionsAsync(Guid photoId);
     Task<List<Photo>> GetUnprocessedPhotosAsync();
 
