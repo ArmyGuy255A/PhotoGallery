@@ -1,7 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule, DecimalPipe, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { catchError, of, Subject, debounceTime, distinctUntilChanged } from 'rxjs';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
@@ -201,7 +201,7 @@ type SortDir = 'asc' | 'desc';
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'maintenance'"
           [class.active]="activeTab() === 'maintenance'"
-          (click)="activeTab.set('maintenance')"
+          (click)="onSelectTab('maintenance')"
           data-testid="admin-tab-maintenance">🧹 Maintenance</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'users'"
@@ -853,9 +853,9 @@ type SortDir = 'asc' | 'desc';
                 {{ j.requestedAt | date:'short' }}
                 <div *ngIf="j.requestedBy" class="muted">by {{ j.requestedBy }}</div>
               </td>
-              <td class="small">{{ j.startedAt ? (j.startedAt | date:'mediumTime') : '—' }}</td>
+              <td class="small">{{ j.startedAt ? (j.startedAt | date:'short') : '—' }}</td>
               <td class="small">
-                {{ j.completedAt ? (j.completedAt | date:'mediumTime') : '—' }}
+                {{ j.completedAt ? (j.completedAt | date:'short') : '—' }}
                 <div *ngIf="j.errorMessage" class="job-error small" [title]="j.errorMessage">
                   {{ j.errorMessage.length > 60 ? (j.errorMessage.substring(0, 60) + '…') : j.errorMessage }}
                 </div>
@@ -1164,6 +1164,8 @@ type SortDir = 'asc' | 'desc';
 })
 export class AdminSettingsComponent {
   private readonly http = inject(HttpClient);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   /** Exposed so the template can reach Math.ceil without a method wrapper. */
   readonly Math = Math;
 
@@ -1263,9 +1265,23 @@ export class AdminSettingsComponent {
         this.page.set(1);
         this.loadUsers();
       });
+
+    // Restore the active tab from the URL on initial load + every navigation
+    // (back/forward, manual edit, deep link). Falls back to 'maintenance'
+    // when the param is absent or unrecognized.
+    this.route.queryParamMap.subscribe(params => {
+      const raw = (params.get('tab') ?? '').toLowerCase();
+      const known: AdminTab[] = ['maintenance', 'users', 'stats', 'settings', 'visitors', 'health'];
+      const tab = (known as string[]).includes(raw) ? (raw as AdminTab) : 'maintenance';
+      if (tab !== this.activeTab()) {
+        this.activateTab(tab);
+      }
+    });
   }
 
-  onSelectTab(tab: AdminTab): void {
+  /** Internal: apply the tab (load its data) without re-writing the URL.
+   *  Used by both the queryParam subscription and onSelectTab. */
+  private activateTab(tab: AdminTab): void {
     this.activeTab.set(tab);
     if (tab === 'users' && !this.usersLoaded) { this.loadUsers(); this.loadAssignableRoles(); }
     if (tab === 'stats' && !this.statsLoaded) this.loadStats();
@@ -1277,6 +1293,21 @@ export class AdminSettingsComponent {
     } else {
       this.stopHealthPolling();
     }
+  }
+
+  onSelectTab(tab: AdminTab): void {
+    if (tab === this.activeTab()) return;
+    // Write the new tab to the URL — the queryParamMap subscription above
+    // picks up the change and calls activateTab(). queryParamsHandling:'merge'
+    // keeps any other params (e.g. status filters) intact, and
+    // replaceUrl:true avoids polluting browser history with one entry per
+    // click while still surviving F5.
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { tab },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   // ---- Runtime settings ----------------------------------------------------
