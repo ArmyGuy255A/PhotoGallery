@@ -329,7 +329,7 @@ module "compute" {
 
   extra_env = merge({
     # Provider selectors
-    "Storage__Provider"  = "AzureBlob"
+    "Storage__Provider" = "AzureBlob"
 
     # The API container app is ingress-only. It NEVER processes photos —
     # ImageSharp + the 0.5 vCPU container starves Kestrel's request thread
@@ -350,15 +350,19 @@ module "compute" {
     # CORS allowlist — origin(s) the API will permit cross-origin requests
     # from. Indexed (`__0`, `__1`, ...) so .NET binds them into the
     # `Cors:AllowedOrigins` List<string>. Slot 0 is the SWA default
-    # hostname; slots 1..N come from var.frontend_origin_extra (e.g.
-    # http://localhost:4200 when running the FE locally against the cloud
-    # API). Frontend.Url is also pointed at the SWA so OAuth return URLs
-    # land back on the deployed SPA.
+    # hostname; slot 1 (when configured) is the custom-domain URL; further
+    # slots come from var.frontend_origin_extra (e.g. http://localhost:4200
+    # when running the FE locally against the cloud API). Frontend.Url
+    # points at the custom domain when set (so OAuth return URLs land on
+    # the production hostname) and otherwise falls back to the SWA default.
     "Cors__AllowedOrigins__0" = module.staticwebapp.default_host_url
-    "Frontend__Url"           = module.staticwebapp.default_host_url
-    }, {
+    "Frontend__Url"           = local.custom_domain_enabled ? "https://${var.custom_domain_name}" : module.staticwebapp.default_host_url
+    }, local.custom_domain_enabled ? {
+    "Cors__AllowedOrigins__1" = "https://${var.custom_domain_name}"
+    "Cors__AllowedOrigins__2" = "https://www.${var.custom_domain_name}"
+    } : {}, {
     for idx, origin in var.frontend_origin_extra :
-    "Cors__AllowedOrigins__${idx + 1}" => origin
+    "Cors__AllowedOrigins__${idx + (local.custom_domain_enabled ? 3 : 1)}" => origin
   })
 
   app_insights_connection_string = module.observability.app_insights_connection_string
@@ -524,5 +528,72 @@ module "staticwebapp" {
   # The FE GH Actions deploy step sets BACKEND_API_URL out of band after
   # both resources exist (`az staticwebapp appsettings set ...`).
 
+  custom_domain_name = var.custom_domain_name
+
   tags = local.common_tags
+}
+
+###############################################################################
+# DNS — Azure DNS zone for the custom domain (when configured).
+#
+# Flow (one-time):
+#   1. terraform apply with custom_domain_name set. The zone is created and
+#      its nameservers are surfaced via the `dns_zone_nameservers` output.
+#   2. At the registrar (GoDaddy), replace the default nameservers with the
+#      four returned by Azure. Wait 15 min – 1 hr for propagation.
+#   3. Re-run terraform apply. The SWA custom-domain validations succeed
+#      and managed SSL certs (DigiCert) are issued automatically.
+#
+# All future DNS records for appeid.app MUST live in this zone — the
+# registrar's DNS UI becomes a no-op once nameservers are delegated.
+###############################################################################
+
+locals {
+  custom_domain_enabled = var.custom_domain_name != ""
+}
+
+resource "azurerm_dns_zone" "custom_domain" {
+  count               = local.custom_domain_enabled ? 1 : 0
+  name                = var.custom_domain_name
+  resource_group_name = data.azurerm_resource_group.this.name
+  tags                = local.common_tags
+}
+
+# Apex A-alias → SWA. Azure DNS alias records support Static Web Apps as a
+# target, which is the trick that lets us bind a SWA to the zone apex
+# (GoDaddy and most registrars don't support ALIAS at apex).
+resource "azurerm_dns_a_record" "swa_apex" {
+  count               = local.custom_domain_enabled ? 1 : 0
+  name                = "@"
+  zone_name           = azurerm_dns_zone.custom_domain[0].name
+  resource_group_name = data.azurerm_resource_group.this.name
+  ttl                 = 300
+  target_resource_id  = module.staticwebapp.id
+}
+
+# www.<domain> CNAME → SWA default hostname. Used for cname-delegation
+# validation of the www binding and as the actual answer for www traffic.
+resource "azurerm_dns_cname_record" "swa_www" {
+  count               = local.custom_domain_enabled ? 1 : 0
+  name                = "www"
+  zone_name           = azurerm_dns_zone.custom_domain[0].name
+  resource_group_name = data.azurerm_resource_group.this.name
+  ttl                 = 300
+  record              = module.staticwebapp.default_host_name
+}
+
+# Apex validation TXT — the SWA module emits the token after the apex
+# custom-domain resource starts creation. The TXT must be live before
+# Azure's validator polls; the 30m create timeout on the SWA custom-domain
+# resource gives Terraform room to schedule and propagate the TXT first.
+resource "azurerm_dns_txt_record" "swa_apex_validation" {
+  count               = local.custom_domain_enabled ? 1 : 0
+  name                = "@"
+  zone_name           = azurerm_dns_zone.custom_domain[0].name
+  resource_group_name = data.azurerm_resource_group.this.name
+  ttl                 = 300
+
+  record {
+    value = module.staticwebapp.apex_validation_token
+  }
 }

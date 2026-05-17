@@ -1291,8 +1291,11 @@ export class AlbumDetailComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   copyShareLink(code: string): void {
-    // Build share link for unauthenticated client access (per requirement #4: /code/{albumcode})
-    const shareUrl = `${window.location.origin}/code/${code}`;
+    // Build share link for unauthenticated client access (per requirement #4: /code/{albumcode}).
+    // document.baseURI bakes in the production <base href> (e.g. /photogallery/),
+    // so the resulting absolute URL is correct under both the SWA default
+    // hostname and the appeid.app/photogallery custom-domain deployment.
+    const shareUrl = new URL(`code/${code}`, document.baseURI).href;
     navigator.clipboard.writeText(shareUrl).then(() => {
       this.copiedLink = code;
       setTimeout(() => {

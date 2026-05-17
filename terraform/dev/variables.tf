@@ -124,3 +124,29 @@ variable "container_app_target_port" {
   type        = number
   default     = 8080
 }
+
+variable "custom_domain_name" {
+  description = <<-EOT
+    Apex custom domain to bind to the Static Web App, e.g. "appeid.app".
+    When set:
+      * An Azure DNS zone of the same name is provisioned (the zone's NS
+        records must be delegated at the registrar — e.g. GoDaddy).
+      * The SWA gets two custom-domain bindings: the apex (dns-txt-token)
+        and www.<domain> (cname-delegation). Azure issues and auto-renews
+        managed SSL certs (DigiCert) for both — no BYO cert needed.
+      * The apex A-alias + www CNAME + validation TXT records are populated
+        automatically.
+      * The API's CORS allowlist and Frontend__Url are updated to include
+        the custom-domain URL alongside the default *.azurestaticapps.net.
+
+    Leave empty to skip custom-domain provisioning entirely (default; the
+    SWA remains reachable at its *.azurestaticapps.net hostname).
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.custom_domain_name == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.custom_domain_name))
+    error_message = "custom_domain_name must be an apex domain (e.g. 'appeid.app'), all lower-case, no scheme, no trailing dot."
+  }
+}

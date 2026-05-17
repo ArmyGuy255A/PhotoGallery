@@ -719,6 +719,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   logout(): void {
     this.authService.logout();
-    window.location.href = '/login';
+    // Use document.baseURI so the redirect respects the production <base href>
+    // (e.g. /photogallery/) — a bare "/login" would bypass the sub-path bind.
+    window.location.href = new URL('login', document.baseURI).href;
   }
 }
