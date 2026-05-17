@@ -128,6 +128,7 @@ public class StorageConsistencyService
         public bool ItemsChanged;
         public bool QueuesChanged;
         public bool UrlsChanged;
+        public bool PhotoChanged;
     }
 
     private async Task ReconcilePhotoAsync(Photo photo, ConsistencyReport report, MutationFlags mutations, CancellationToken cancellationToken)

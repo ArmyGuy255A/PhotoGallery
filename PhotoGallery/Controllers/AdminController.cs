@@ -6,6 +6,7 @@ using PhotoGallery.Data;
 using PhotoGallery.Enums;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
+using PhotoGallery.Services.Storage;
 
 namespace PhotoGallery.Controllers;
 
@@ -647,21 +648,18 @@ public class AdminController : ControllerBase
             .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
             .ToListAsync();
 
-        // Storage footprint computed from PhotoVersion.FileSize (derived
-        // qualities) + PhotoFile.FileSize (the original upload). Cheap query
-        // vs. enumerating the storage backend, and the reconciler keeps
-        // these honest after every processing tick.
-        var versionStats = await _ctx.PhotoVersions
-            .GroupBy(v => v.Quality)
-            .Select(g => new
-            {
-                Quality = g.Key,
-                Count = g.Count(),
-                TotalBytes = (long?)g.Sum(v => (long?)v.FileSize) ?? 0L
-            })
-            .ToListAsync();
-        var originalsCount = await _ctx.Set<PhotoFile>().CountAsync();
-        var originalsBytes = await _ctx.Set<PhotoFile>().SumAsync(f => (long?)f.FileSize) ?? 0L;
+        // Storage footprint — computed from the storage backend itself, which
+        // is the only source of truth (PhotoVersion + PhotoFile DB tables are
+        // not consistently maintained across the legacy code paths, so a DB
+        // aggregate would massively under-report). Enumerates with metadata
+        // (key + size) and aggregates by the key naming convention:
+        //   photogallery/{albumId}/{photoId}/{quality}.jpg
+        // The quality segment is the last path part minus .jpg.
+        //
+        // Cached in-process for 30s so back-to-back dashboard refreshes don't
+        // re-list. A storage backend with N blobs costs one paginated LIST,
+        // which is fast even at 10k+ blobs.
+        var storageStats = await GetStorageFootprintAsync();
 
         // Merge in-memory registry (this replica) + heartbeat rows (other replicas).
         // The in-memory entries take precedence for the local replica (real-time
@@ -807,28 +805,91 @@ public class AdminController : ControllerBase
                 Error = queueFor(PhotoGallery.Models.ProcessingStatus.Error),
                 ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
             },
-            Storage = new StorageFootprintDto
-            {
-                OriginalsCount = originalsCount,
-                OriginalsBytes = originalsBytes,
-                DerivedCount = versionStats.Sum(s => s.Count),
-                DerivedBytes = versionStats.Sum(s => s.TotalBytes),
-                TotalCount = originalsCount + versionStats.Sum(s => s.Count),
-                TotalBytes = originalsBytes + versionStats.Sum(s => s.TotalBytes),
-                ByQuality = versionStats
-                    .OrderBy(s => s.Quality)
-                    .Select(s => new StorageQualityDto
-                    {
-                        Quality = s.Quality.ToString(),
-                        Count = s.Count,
-                        TotalBytes = s.TotalBytes
-                    })
-                    .ToList()
-            },
+            Storage = storageStats,
             Workers = workers,
             Replicas = replicas,
             AdminJobs = await GetRecentAdminJobsAsync()
         });
+    }
+
+    // Process-level cache for the storage footprint. The storage backend
+    // is the only honest source (PhotoVersion + PhotoFile tables are not
+    // consistently maintained), and enumerating it on every dashboard refresh
+    // would be wasteful — 30s is short enough that admins iterating on chaos
+    // see fresh numbers but long enough to absorb FE polling.
+    private static (DateTime ExpiresAt, StorageFootprintDto Data)? _storageCache;
+    private static readonly object _storageCacheLock = new();
+    private static readonly TimeSpan _storageCacheTtl = TimeSpan.FromSeconds(30);
+
+    private async Task<StorageFootprintDto> GetStorageFootprintAsync()
+    {
+        lock (_storageCacheLock)
+        {
+            if (_storageCache.HasValue && DateTime.UtcNow < _storageCache.Value.ExpiresAt)
+            {
+                return _storageCache.Value.Data;
+            }
+        }
+
+        var storage = HttpContext.RequestServices.GetRequiredService<IStorageProvider>();
+        var dto = new StorageFootprintDto();
+        try
+        {
+            // Photogallery layout: photogallery/{albumId}/{photoId}/{quality}.jpg.
+            // Bucket-wide ListWithMetadataAsync streams (paginates internally on
+            // Azure Blob + S3) so the wall-clock cost scales with N blobs, not
+            // round-trips.
+            var blobs = (await storage.ListWithMetadataAsync("photogallery/")).ToList();
+            var qualityBuckets = new Dictionary<string, (int count, long bytes)>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var b in blobs)
+            {
+                // Last path segment minus .jpg = quality name. Anything that
+                // doesn't fit the convention (e.g. legacy keys) buckets to "other".
+                var slash = b.Key.LastIndexOf('/');
+                var leaf = slash >= 0 ? b.Key.Substring(slash + 1) : b.Key;
+                var dot  = leaf.LastIndexOf('.');
+                var quality = dot > 0 ? leaf.Substring(0, dot) : leaf;
+                if (string.IsNullOrEmpty(quality)) quality = "other";
+
+                if (!qualityBuckets.TryGetValue(quality, out var agg))
+                    agg = (0, 0L);
+                qualityBuckets[quality] = (agg.count + 1, agg.bytes + b.Size);
+
+                if (string.Equals(quality, "original", StringComparison.OrdinalIgnoreCase))
+                {
+                    dto.OriginalsCount++;
+                    dto.OriginalsBytes += b.Size;
+                }
+                else
+                {
+                    dto.DerivedCount++;
+                    dto.DerivedBytes += b.Size;
+                }
+                dto.TotalCount++;
+                dto.TotalBytes += b.Size;
+            }
+
+            dto.ByQuality = qualityBuckets
+                .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => new StorageQualityDto
+                {
+                    Quality = kv.Key,
+                    Count = kv.Value.count,
+                    TotalBytes = kv.Value.bytes
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to compute storage footprint; returning zeros");
+        }
+
+        lock (_storageCacheLock)
+        {
+            _storageCache = (DateTime.UtcNow + _storageCacheTtl, dto);
+        }
+        return dto;
     }
 
     /// <summary>
