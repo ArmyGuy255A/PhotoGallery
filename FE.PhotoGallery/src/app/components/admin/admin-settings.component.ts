@@ -1,8 +1,8 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule, DecimalPipe, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { RouterLink, ActivatedRoute, Router } from '@angular/router';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { catchError, of, Subject, debounceTime, distinctUntilChanged } from 'rxjs';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 import { environment } from '../../../environments/environment';
@@ -120,6 +120,22 @@ interface WorkerStatus {
   lastRanAt?: string | null;
   nextRunAt?: string | null;
   canTrigger: boolean;
+  instanceId?: string | null;
+  isAlive?: boolean;
+  itemsProcessedTotal?: number;
+  itemsInFlight?: number;
+  lastError?: string | null;
+}
+
+/** Replica-centric grouping returned by the BE: one entry per hostname, jobs nested. */
+interface ReplicaWorkerStatus {
+  instanceId: string;
+  isAlive: boolean;
+  /** Most recent heartbeat across all of this replica's workers. Null for synthetic API entries. */
+  lastHeartbeatAt?: string | null;
+  /** 'api-only', 'worker', or 'api+worker'. */
+  role: string;
+  jobs: WorkerStatus[];
 }
 
 interface ReplicaInfo {
@@ -147,7 +163,32 @@ interface ServiceHealth {
     error: number;
     byQuality: Record<string, number>;
   };
+  storage: {
+    originalsCount: number;
+    originalsBytes: number;
+    derivedCount: number;
+    derivedBytes: number;
+    totalCount: number;
+    totalBytes: number;
+    byQuality: { quality: string; count: number; totalBytes: number }[];
+  };
   workers: WorkerStatus[];
+  replicas: ReplicaWorkerStatus[];
+  adminJobs: AdminJobSnapshot[];
+}
+
+/** Snapshot of an AdminJob row for the Service Health table. */
+interface AdminJobSnapshot {
+  id: string;
+  jobType: string;
+  albumId?: string | null;
+  status: string;
+  requestedAt: string;
+  requestedBy?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  completedByInstanceId?: string | null;
+  errorMessage?: string | null;
 }
 type UserSortKey = 'email' | 'name' | 'lastLogin' | 'loginCount' | 'downloads' | 'albums' | 'created';
 type SortDir = 'asc' | 'desc';
@@ -169,33 +210,33 @@ type SortDir = 'asc' | 'desc';
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'maintenance'"
           [class.active]="activeTab() === 'maintenance'"
-          (click)="activeTab.set('maintenance')"
-          data-testid="admin-tab-maintenance">🧹 Maintenance</button>
+          (click)="onSelectTab('maintenance')"
+          data-testid="admin-tab-maintenance">Maintenance</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'users'"
           [class.active]="activeTab() === 'users'"
           (click)="onSelectTab('users')"
-          data-testid="admin-tab-users">👥 Users</button>
+          data-testid="admin-tab-users">Users</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'stats'"
           [class.active]="activeTab() === 'stats'"
           (click)="onSelectTab('stats')"
-          data-testid="admin-tab-stats">📊 Download stats</button>
+          data-testid="admin-tab-stats">Download stats</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'settings'"
           [class.active]="activeTab() === 'settings'"
           (click)="onSelectTab('settings')"
-          data-testid="admin-tab-settings">⚙️ Settings</button>
+          data-testid="admin-tab-settings">Settings</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'visitors'"
           [class.active]="activeTab() === 'visitors'"
           (click)="onSelectTab('visitors')"
-          data-testid="admin-tab-visitors">👁️ Visitors</button>
+          data-testid="admin-tab-visitors">Visitors</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'health'"
           [class.active]="activeTab() === 'health'"
           (click)="onSelectTab('health')"
-          data-testid="admin-tab-health">❤️ Service Health</button>
+          data-testid="admin-tab-health">Service Health</button>
       </nav>
 
       <!-- Maintenance tab -->
@@ -212,7 +253,7 @@ type SortDir = 'asc' | 'desc';
             data-testid="admin-reap-orphans-button"
             [disabled]="reapState() === 'running'"
             (click)="runReapOrphans()">
-            <ng-container *ngIf="reapState() !== 'running'; else reapingTpl">🧹 Reap orphaned blobs</ng-container>
+            <ng-container *ngIf="reapState() !== 'running'; else reapingTpl">Reap orphaned blobs</ng-container>
             <ng-template #reapingTpl>Reaping…</ng-template>
           </button>
           <span class="action-hint">
@@ -549,8 +590,9 @@ type SortDir = 'asc' | 'desc';
                   [attr.data-testid]="'admin-setting-input-' + s.key" />
                 <select *ngIf="s.dataType === 'bool'"
                   class="form-input"
-                  [value]="settingValueFor(s)"
-                  (change)="setSettingDraft(s.key, $any($event.target).value)"
+                  [ngModel]="settingValueFor(s)"
+                  (ngModelChange)="setSettingDraft(s.key, $event)"
+                  [ngModelOptions]="{ standalone: true }"
                   [attr.data-testid]="'admin-setting-input-' + s.key">
                   <option value="true">true</option>
                   <option value="false">false</option>
@@ -651,9 +693,9 @@ type SortDir = 'asc' | 'desc';
               <dt>Workers</dt><dd>{{ h.replica.workersEnabled ? 'enabled' : 'disabled' }}</dd>
             </dl>
             <p class="muted small">
-              When scaled out, refresh repeatedly to see other replicas
-              answer. Workers + queue counts below reflect all replicas
-              (shared DB); the Workers table reflects only this one.
+              Photos + queue counts below reflect all replicas (shared DB).
+              The Replicas table lists every replica that has heartbeated
+              recently, grouped by hostname, with their active jobs nested.
             </p>
           </div>
           <div class="stat-card">
@@ -682,36 +724,244 @@ type SortDir = 'asc' | 'desc';
               </ng-container>
             </dl>
           </div>
+          <div class="stat-card">
+            <h3>Storage footprint</h3>
+            <dl class="stat-list" data-testid="admin-health-storage">
+              <dt>Originals</dt>
+              <dd>
+                <span class="num">{{ h.storage.originalsCount | number }}</span>
+                <span class="muted small">{{ formatBytes(h.storage.originalsBytes) }}</span>
+              </dd>
+              <dt>Versions</dt>
+              <dd>
+                <span class="num">{{ h.storage.derivedCount | number }}</span>
+                <span class="muted small">{{ formatBytes(h.storage.derivedBytes) }}</span>
+              </dd>
+              <dt class="total-row">Total files</dt>
+              <dd class="total-row"><span class="num">{{ h.storage.totalCount | number }}</span></dd>
+              <dt class="total-row">Total size</dt>
+              <dd class="total-row"><span class="num">{{ formatBytes(h.storage.totalBytes) }}</span></dd>
+            </dl>
+            <h4 class="sub-h">By quality</h4>
+            <dl class="stat-list" data-testid="admin-health-storage-by-quality">
+              <ng-container *ngFor="let q of h.storage.byQuality">
+                <dt>{{ q.quality }}</dt>
+                <dd>
+                  <span class="num">{{ q.count | number }}</span>
+                  <span class="muted small">{{ formatBytes(q.totalBytes) }}</span>
+                </dd>
+              </ng-container>
+            </dl>
+          </div>
         </div>
 
-        <h3 *ngIf="health()">Workers</h3>
-        <table *ngIf="health() as h2" class="admin-table" data-testid="admin-health-workers">
+        <h3 *ngIf="health()">Replicas</h3>
+        <table *ngIf="health() as h2" class="admin-table replicas-table" data-testid="admin-health-replicas">
           <thead>
             <tr>
-              <th>Worker</th>
-              <th>Interval</th>
-              <th>Last ran</th>
-              <th>Next run</th>
+              <th>Hostname</th>
+              <th>Role</th>
+              <th>Alive</th>
+              <th>Active jobs</th>
+            </tr>
+          </thead>
+          <tbody>
+            <ng-container *ngFor="let r of h2.replicas; trackBy: trackReplica">
+              <tr class="replica-row" [class.replica-offline]="!r.isAlive" [attr.data-replica]="r.instanceId">
+                <td>
+                  <code class="hostname">{{ r.instanceId }}</code>
+                </td>
+                <td>
+                  <span class="role-badge" [class.role-worker]="r.role === 'worker'"
+                                            [class.role-api]="r.role === 'api-only'"
+                                            [class.role-both]="r.role === 'api+worker'">
+                    {{ r.role }}
+                  </span>
+                </td>
+                <td>
+                  <span class="alive-dot" [class.alive]="r.isAlive"></span>
+                  <strong>{{ r.isAlive ? 'alive' : 'offline' }}</strong>
+                  <div class="muted small" *ngIf="r.lastHeartbeatAt">
+                    last heartbeat {{ formatRelative(r.lastHeartbeatAt) }} ago
+                    <div class="muted" style="font-size:10px">{{ r.lastHeartbeatAt | date:'mediumTime' }}</div>
+                  </div>
+                  <div class="muted small" *ngIf="!r.lastHeartbeatAt">
+                    no heartbeat yet
+                  </div>
+                </td>
+                <td class="jobs-cell">
+                  <div class="replica-totals small muted">
+                    <span class="totals-pill"><strong>{{ replicaTotals(r).photosProcessed }}</strong> photos</span>
+                    <span class="totals-pill"><strong>{{ replicaTotals(r).adminJobsCompleted }}</strong> admin jobs</span>
+                  </div>
+                  <span *ngIf="!r.jobs?.length" class="muted small">no active jobs</span>
+                  <ul *ngIf="r.jobs?.length" class="jobs-list">
+                    <li *ngFor="let w of r.jobs" [attr.data-job]="w.name">
+                      <div class="job-line">
+                        <strong>{{ w.displayName }}</strong>
+                        <code class="muted small">{{ w.name }}</code>
+                      </div>
+                      <div class="job-meta small">
+                        every {{ formatInterval(w.interval) }}
+                        · last {{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}
+                        · <strong class="next-tick" [class.imminent]="isImminent(w.nextRunAt)">next {{ formatRelative(w.nextRunAt) }}</strong>
+                        <span *ngIf="w.itemsInFlight !== undefined && w.itemsInFlight > 0">
+                          · {{ w.itemsInFlight }} in flight
+                        </span>
+                        <span *ngIf="w.itemsProcessedTotal !== undefined && w.itemsProcessedTotal > 0">
+                          · {{ w.itemsProcessedTotal }} processed
+                        </span>
+                      </div>
+                      <div *ngIf="w.lastError" class="job-error small">{{ w.lastError }}</div>
+                    </li>
+                  </ul>
+                </td>
+              </tr>
+            </ng-container>
+            <tr *ngIf="health() && !h2.replicas?.length">
+              <td colspan="4" class="muted">No replicas reporting yet — heartbeat takes ~30s after first start.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 *ngIf="health()">Admin job queue</h3>
+        <p *ngIf="health()" class="muted small" style="margin-top:-4px">
+          Reap / Reconcile clicks enqueue here. Workers drain the queue at the top of every tick.
+          Click a column header to sort; server-side sort fetches only the page you're viewing.
+        </p>
+        <div *ngIf="health()" class="jobs-toolbar small">
+          <label>
+            Status filter
+            <select [(ngModel)]="jobsStatusFilter" name="jobsStatusFilter" (change)="onJobsFilterChange()">
+              <option value="">All</option>
+              <option value="pending,running">Pending + Running</option>
+              <option value="pending">Pending</option>
+              <option value="running">Running</option>
+              <option value="complete">Complete</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <label>
+            Page size
+            <select [(ngModel)]="jobsPageSize" name="jobsPageSize" (change)="onJobsFilterChange()">
+              <option [ngValue]="10">10</option>
+              <option [ngValue]="25">25</option>
+              <option [ngValue]="50">50</option>
+              <option [ngValue]="100">100</option>
+            </select>
+          </label>
+          <button type="button" class="btn-secondary btn-sm" (click)="loadAdminJobs()" [disabled]="jobsLoading()">
+            {{ jobsLoading() ? 'Loading…' : 'Refresh' }}
+          </button>
+        </div>
+        <table *ngIf="health()" class="admin-table admin-jobs-table sortable" data-testid="admin-health-jobs">
+          <thead>
+            <tr>
+              <th class="sortable-th" (click)="sortJobs('jobType')">
+                Type <span class="sort-indicator">{{ jobsSortIndicator('jobType') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('status')">
+                Status <span class="sort-indicator">{{ jobsSortIndicator('status') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('requestedAt')">
+                Requested <span class="sort-indicator">{{ jobsSortIndicator('requestedAt') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('startedAt')">
+                Started <span class="sort-indicator">{{ jobsSortIndicator('startedAt') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('completedAt')">
+                Completed <span class="sort-indicator">{{ jobsSortIndicator('completedAt') }}</span>
+              </th>
+              <th>By replica</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let w of h2.workers" [attr.data-worker]="w.name">
-              <td><strong>{{ w.displayName }}</strong><br /><code class="muted small">{{ w.name }}</code></td>
-              <td>{{ formatInterval(w.interval) }}</td>
-              <td>{{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}</td>
-              <td>{{ w.nextRunAt ? (w.nextRunAt | date:'short') : '—' }}</td>
+            <tr *ngFor="let j of adminJobs(); trackBy: trackAdminJob"
+                [attr.data-job-id]="j.id"
+                [class.job-active]="j.status === 'pending' || j.status === 'running'"
+                [class.job-failed]="j.status === 'failed'">
               <td>
-                <button type="button" class="btn-primary btn-sm"
-                  [disabled]="!w.canTrigger || triggeringWorker() === w.name"
-                  (click)="triggerWorker(w)"
-                  [attr.data-testid]="'admin-health-trigger-' + w.name">
-                  {{ triggeringWorker() === w.name ? 'Triggering…' : 'Trigger now' }}
+                <code class="job-type">{{ j.jobType }}</code>
+                <div *ngIf="j.albumId" class="muted small">album {{ j.albumId.substring(0, 8) }}…</div>
+              </td>
+              <td>
+                <span class="status-pill" [class]="'status-' + j.status">{{ j.status }}</span>
+              </td>
+              <td class="small">
+                {{ j.requestedAt | date:'short' }}
+                <div *ngIf="j.requestedBy" class="muted">by {{ j.requestedBy }}</div>
+              </td>
+              <td class="small">{{ j.startedAt ? (j.startedAt | date:'short') : '—' }}</td>
+              <td class="small">
+                {{ j.completedAt ? (j.completedAt | date:'short') : '—' }}
+                <div *ngIf="j.errorMessage" class="job-error small" [title]="j.errorMessage">
+                  {{ j.errorMessage.length > 60 ? (j.errorMessage.substring(0, 60) + '…') : j.errorMessage }}
+                </div>
+              </td>
+              <td><code class="muted small">{{ j.completedByInstanceId || '—' }}</code></td>
+              <td>
+                <button type="button" class="btn-danger btn-sm"
+                        [disabled]="deletingJobId() === j.id"
+                        (click)="deleteAdminJob(j)"
+                        [attr.data-testid]="'admin-health-delete-' + j.id"
+                        [title]="j.status === 'pending' ? 'Cancel and remove this queued job' : 'Remove this job from the history'">
+                  {{ deletingJobId() === j.id ? '…' : '✕' }}
                 </button>
               </td>
             </tr>
+            <tr *ngIf="!adminJobs().length && !jobsLoading()">
+              <td colspan="7" class="muted">No admin jobs match the current filter.</td>
+            </tr>
           </tbody>
         </table>
+        <div *ngIf="health()" class="jobs-pager small muted">
+          <span>
+            Showing <strong>{{ jobsPageStart() }}</strong>–<strong>{{ jobsPageEnd() }}</strong>
+            of <strong>{{ jobsTotal() }}</strong>
+            (page {{ jobsPage() }} of {{ jobsTotalPages() || 1 }})
+          </span>
+          <button type="button" class="btn-secondary btn-sm"
+                  [disabled]="jobsPage() <= 1 || jobsLoading()"
+                  (click)="gotoJobsPage(jobsPage() - 1)">‹ Prev</button>
+          <button type="button" class="btn-secondary btn-sm"
+                  [disabled]="jobsPage() >= jobsTotalPages() || jobsLoading()"
+                  (click)="gotoJobsPage(jobsPage() + 1)">Next ›</button>
+        </div>
+
+        <h3 *ngIf="health()">Enqueue admin job</h3>
+        <p *ngIf="health()" class="muted small" style="margin-top:-4px">
+          Add a maintenance job to the queue manually. The worker picks it up on its next tick (~5s).
+          Duplicate jobs of the same type are deduped automatically — re-clicking won't pile up rows.
+        </p>
+        <form *ngIf="health()" class="enqueue-form" (ngSubmit)="enqueueManualJob()">
+          <label>
+            Job type
+            <select [(ngModel)]="manualJobType" name="manualJobType" data-testid="admin-enqueue-type">
+              <option value="reconcile-storage">reconcile-storage</option>
+              <option value="reconcile-album-storage">reconcile-album-storage</option>
+              <option value="reap-orphans">reap-orphans</option>
+              <option value="purge-failed-photos">purge-failed-photos (deletes Photo rows)</option>
+              <option value="chaos-storage">chaos-storage (DEV ONLY)</option>
+            </select>
+          </label>
+          <label *ngIf="manualJobType === 'reconcile-album-storage'">
+            Album ID
+            <input type="text" [(ngModel)]="manualJobAlbumId" name="manualJobAlbumId"
+                   placeholder="00000000-0000-0000-0000-000000000000"
+                   data-testid="admin-enqueue-album-id" />
+          </label>
+          <button type="submit" class="btn-primary btn-sm"
+                  [disabled]="enqueuingManual()"
+                  data-testid="admin-enqueue-submit">
+            {{ enqueuingManual() ? 'Enqueuing…' : 'Enqueue' }}
+          </button>
+          <span *ngIf="enqueueResult()" class="enqueue-result small"
+                [class.success]="enqueueResult()?.ok"
+                [class.error]="!enqueueResult()?.ok">
+            {{ enqueueResult()?.message }}
+          </span>
+        </form>
       </section>
     </section>
   `,
@@ -796,6 +1046,94 @@ type SortDir = 'asc' | 'desc';
     .center { text-align: center; }
     .small { font-size: 12px; }
 
+    /* Replica-centric Service Health table */
+    .replicas-table .hostname { font-size: 12px; color: #374151; word-break: break-all; }
+    .replicas-table .role-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; background: #f3f4f6; color: #374151;
+      text-transform: lowercase;
+    }
+    .replicas-table .role-badge.role-worker { background: #dbeafe; color: #1e40af; }
+    .replicas-table .role-badge.role-api    { background: #f3f4f6; color: #4b5563; }
+    .replicas-table .role-badge.role-both   { background: #fef3c7; color: #92400e; }
+    .replicas-table .alive-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #d1d5db; margin-right: 4px; vertical-align: middle;
+    }
+    .replicas-table .alive-dot.alive { background: #10b981; }
+    .replicas-table tr.replica-row.replica-offline { opacity: 0.7; }
+    .replicas-table tr.replica-row.replica-offline .hostname { text-decoration: line-through; }
+    .replicas-table .jobs-cell { min-width: 320px; }
+    .replicas-table .jobs-list { list-style: none; padding: 0; margin: 0; }
+    .replicas-table .jobs-list > li {
+      padding: 6px 0; border-bottom: 1px dashed #e5e7eb;
+    }
+    .replicas-table .jobs-list > li:last-child { border-bottom: 0; }
+    .replicas-table .job-line { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .replicas-table .job-line strong { font-size: 13px; }
+    .replicas-table .job-meta { color: #6b7280; margin-top: 2px; }
+    .replicas-table .job-error { color: #b91c1c; margin-top: 2px; }
+    .replicas-table .btn-sm { margin-top: 4px; }
+
+    /* "Next tick" emphasis */
+    .next-tick { color: #1f2937; }
+    .next-tick.imminent { color: #b45309; font-weight: 600; }
+
+    /* Admin job queue */
+    .admin-jobs-table .job-type { font-size: 12px; color: #1f2937; }
+    .admin-jobs-table tr.job-active { background: #fffbeb; }
+    .admin-jobs-table tr.job-active:hover { background: #fef3c7; }
+    .admin-jobs-table tr.job-failed { background: #fef2f2; }
+    .admin-jobs-table .status-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; text-transform: lowercase;
+      background: #e5e7eb; color: #374151;
+    }
+    .admin-jobs-table .status-pill.status-pending  { background: #fef3c7; color: #92400e; }
+    .admin-jobs-table .status-pill.status-running  { background: #dbeafe; color: #1e40af; }
+    .admin-jobs-table .status-pill.status-complete { background: #d1fae5; color: #065f46; }
+    .admin-jobs-table .status-pill.status-failed   { background: #fee2e2; color: #991b1b; }
+
+    /* Admin jobs toolbar + pager */
+    .jobs-toolbar { display: flex; gap: 12px; align-items: center; margin: 6px 0 4px; }
+    .jobs-toolbar label { display: inline-flex; align-items: center; gap: 6px; color: #6b7280; }
+    .jobs-toolbar select { padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; }
+    .jobs-pager { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+    .jobs-pager > span { margin-right: auto; }
+    .btn-secondary { background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    .btn-secondary:hover:not(:disabled) { background: #e5e7eb; }
+    .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Per-replica totals chips */
+    .replica-totals { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .replica-totals .totals-pill {
+      background: #f3f4f6; padding: 2px 8px; border-radius: 999px; font-size: 11px; color: #374151;
+    }
+    .replica-totals .totals-pill strong { color: #1f2937; }
+
+    /* Delete-job button */
+    .btn-danger {
+      background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;
+      padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;
+    }
+    .btn-danger:hover:not(:disabled) { background: #fecaca; }
+    .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Manual enqueue form */
+    .enqueue-form {
+      display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+      padding: 12px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;
+    }
+    .enqueue-form label {
+      display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6b7280;
+    }
+    .enqueue-form select, .enqueue-form input[type=text] {
+      padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;
+      min-width: 240px; background: white;
+    }
+    .enqueue-form .enqueue-result.success { color: #065f46; }
+    .enqueue-form .enqueue-result.error   { color: #991b1b; }
+
     .role-chip {
       display: inline-block; padding: 2px 8px; margin: 0 4px 2px 0;
       border-radius: 999px; font-size: 11px; background: #f3f4f6; color: #374151;
@@ -856,16 +1194,23 @@ type SortDir = 'asc' | 'desc';
     .drilldown-row td { background: #f9fafb; padding: 8px 16px; }
     .admin-table.inner { box-shadow: none; border: 1px solid #e5e7eb; }
     .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 8px 0 16px; }
-    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; background: #fafbfd; }
-    .stat-card h3 { margin: 0 0 6px; font-size: 13px; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; }
-    .stat-card .sub-h { margin: 12px 0 4px; font-size: 12px; color: #6b7280; }
-    .stat-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; }
+    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; background: #fafbfd; font-size: 13px; }
+    .stat-card h3 { margin: 0 0 6px; font-size: 12px; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+    .stat-card .sub-h { margin: 14px 0 4px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+    .stat-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; align-items: baseline; }
     .stat-list dt { color: #6b7280; font-size: 12px; }
-    .stat-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .stat-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; text-align: right; }
+    .stat-list dd .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .stat-list dd .muted.small { display: inline-block; margin-left: 6px; font-weight: 400; color: #9ca3af; }
+    .stat-list dt.total-row, .stat-list dd.total-row { padding-top: 6px; margin-top: 4px; border-top: 1px solid #e5e7eb; }
+    .stat-list dt.total-row { color: #1f2937; font-weight: 600; }
+    .stat-list dd.total-row { color: #1f2937; }
   `]
 })
 export class AdminSettingsComponent {
   private readonly http = inject(HttpClient);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   /** Exposed so the template can reach Math.ceil without a method wrapper. */
   readonly Math = Math;
 
@@ -939,6 +1284,22 @@ export class AdminSettingsComponent {
   readonly healthLoading = signal<boolean>(false);
   readonly healthError = signal<string | null>(null);
   readonly triggeringWorker = signal<string | null>(null);
+  readonly deletingJobId = signal<string | null>(null);
+  readonly enqueuingManual = signal<boolean>(false);
+  readonly enqueueResult = signal<{ ok: boolean; message: string } | null>(null);
+  manualJobType: 'reconcile-storage' | 'reconcile-album-storage' | 'reap-orphans' | 'chaos-storage' | 'purge-failed-photos' = 'reconcile-storage';
+  manualJobAlbumId = '';
+
+  // Paginated / sortable admin job queue (server-side).
+  readonly adminJobs = signal<AdminJobSnapshot[]>([]);
+  readonly jobsLoading = signal<boolean>(false);
+  readonly jobsTotal = signal<number>(0);
+  readonly jobsPage = signal<number>(1);
+  readonly jobsTotalPages = signal<number>(0);
+  jobsPageSize = 10;
+  jobsSortBy: 'requestedAt' | 'startedAt' | 'completedAt' | 'jobType' | 'status' = 'requestedAt';
+  jobsSortDir: 'asc' | 'desc' = 'desc';
+  jobsStatusFilter = '';
   private healthTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -949,9 +1310,23 @@ export class AdminSettingsComponent {
         this.page.set(1);
         this.loadUsers();
       });
+
+    // Restore the active tab from the URL on initial load + every navigation
+    // (back/forward, manual edit, deep link). Falls back to 'maintenance'
+    // when the param is absent or unrecognized.
+    this.route.queryParamMap.subscribe(params => {
+      const raw = (params.get('tab') ?? '').toLowerCase();
+      const known: AdminTab[] = ['maintenance', 'users', 'stats', 'settings', 'visitors', 'health'];
+      const tab = (known as string[]).includes(raw) ? (raw as AdminTab) : 'maintenance';
+      if (tab !== this.activeTab()) {
+        this.activateTab(tab);
+      }
+    });
   }
 
-  onSelectTab(tab: AdminTab): void {
+  /** Internal: apply the tab (load its data) without re-writing the URL.
+   *  Used by both the queryParam subscription and onSelectTab. */
+  private activateTab(tab: AdminTab): void {
     this.activeTab.set(tab);
     if (tab === 'users' && !this.usersLoaded) { this.loadUsers(); this.loadAssignableRoles(); }
     if (tab === 'stats' && !this.statsLoaded) this.loadStats();
@@ -963,6 +1338,21 @@ export class AdminSettingsComponent {
     } else {
       this.stopHealthPolling();
     }
+  }
+
+  onSelectTab(tab: AdminTab): void {
+    if (tab === this.activeTab()) return;
+    // Write the new tab to the URL — the queryParamMap subscription above
+    // picks up the change and calls activateTab(). queryParamsHandling:'merge'
+    // keeps any other params (e.g. status filters) intact, and
+    // replaceUrl:true avoids polluting browser history with one entry per
+    // click while still surviving F5.
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { tab },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   // ---- Runtime settings ----------------------------------------------------
@@ -1061,6 +1451,72 @@ export class AdminSettingsComponent {
         }
         this.healthLoading.set(false);
       });
+    // Admin job table is a separate, server-paginated/sorted query so the
+    // user can click headers without re-fetching everything else.
+    this.loadAdminJobs();
+  }
+
+  /** Fetches the current page of admin jobs with the chosen sort + filter. */
+  loadAdminJobs(): void {
+    this.jobsLoading.set(true);
+    let params = new HttpParams()
+      .set('page', String(this.jobsPage()))
+      .set('pageSize', String(this.jobsPageSize))
+      .set('sortBy', this.jobsSortBy)
+      .set('sortDir', this.jobsSortDir);
+    if (this.jobsStatusFilter) {
+      params = params.set('status', this.jobsStatusFilter);
+    }
+    this.http.get<{
+      items: AdminJobSnapshot[]; total: number; page: number; totalPages: number;
+    }>(`${environment.apiUrl}/api/photos/admin/jobs`, { params })
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(res => {
+        this.jobsLoading.set(false);
+        if (!res) return;
+        this.adminJobs.set(res.items);
+        this.jobsTotal.set(res.total);
+        this.jobsPage.set(res.page);
+        this.jobsTotalPages.set(res.totalPages);
+      });
+  }
+
+  sortJobs(column: 'requestedAt' | 'startedAt' | 'completedAt' | 'jobType' | 'status'): void {
+    if (this.jobsSortBy === column) {
+      this.jobsSortDir = this.jobsSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.jobsSortBy = column;
+      // Default direction per column: dates desc, strings asc.
+      this.jobsSortDir = (column === 'jobType' || column === 'status') ? 'asc' : 'desc';
+    }
+    this.jobsPage.set(1);
+    this.loadAdminJobs();
+  }
+
+  /** Sort indicator for the admin-jobs table. Named distinctly from the
+   *  users-table sortIndicator(UserSortKey) so the two don't conflict. */
+  jobsSortIndicator(column: string): string {
+    if (this.jobsSortBy !== column) return '↕';
+    return this.jobsSortDir === 'asc' ? '↑' : '↓';
+  }
+
+  onJobsFilterChange(): void {
+    this.jobsPage.set(1);
+    this.loadAdminJobs();
+  }
+
+  gotoJobsPage(page: number): void {
+    if (page < 1 || page > this.jobsTotalPages()) return;
+    this.jobsPage.set(page);
+    this.loadAdminJobs();
+  }
+
+  jobsPageStart(): number {
+    return this.jobsTotal() === 0 ? 0 : (this.jobsPage() - 1) * this.jobsPageSize + 1;
+  }
+
+  jobsPageEnd(): number {
+    return Math.min(this.jobsPage() * this.jobsPageSize, this.jobsTotal());
   }
 
   healthQueueByQuality(): Array<{ quality: string; count: number }> {
@@ -1079,6 +1535,52 @@ export class AdminSettingsComponent {
       clearInterval(this.healthTimer);
       this.healthTimer = null;
     }
+  }
+
+  trackReplica(_index: number, r: ReplicaWorkerStatus): string {
+    return r.instanceId;
+  }
+
+  /**
+   * Aggregate per-replica counters. PhotoProcessing's ItemsProcessedTotal is
+   * photo-versions completed; everything else is admin-job rows drained from
+   * the queue. Split into separate buckets so the UI shows both at a glance.
+   */
+  replicaTotals(r: ReplicaWorkerStatus): { photosProcessed: number; adminJobsCompleted: number } {
+    let photos = 0;
+    let admins = 0;
+    for (const w of r.jobs ?? []) {
+      const n = w.itemsProcessedTotal ?? 0;
+      if (w.name === 'PhotoProcessing') photos += n;
+      else admins += n;
+    }
+    return { photosProcessed: photos, adminJobsCompleted: admins };
+  }
+
+  trackAdminJob(_index: number, j: AdminJobSnapshot): string {
+    return j.id;
+  }
+
+  /** Compact relative timestamp ("12s", "3m", "in 5s") for the worker "next tick" cell. */
+  formatRelative(iso: string | null | undefined): string {
+    if (!iso) return '—';
+    const ts = new Date(iso).getTime();
+    if (Number.isNaN(ts)) return '—';
+    const deltaMs = ts - Date.now();
+    const sign = deltaMs >= 0 ? 'in ' : '';
+    const abs = Math.abs(deltaMs);
+    if (abs < 60_000) return `${sign}${Math.round(abs / 1000)}s`;
+    if (abs < 3_600_000) return `${sign}${Math.round(abs / 60_000)}m`;
+    if (abs < 86_400_000) return `${sign}${Math.round(abs / 3_600_000)}h`;
+    return new Date(iso).toLocaleString();
+  }
+
+  /** "Next tick" is imminent when it's already due or within the next 5 seconds. */
+  isImminent(iso: string | null | undefined): boolean {
+    if (!iso) return false;
+    const ts = new Date(iso).getTime();
+    if (Number.isNaN(ts)) return false;
+    return ts - Date.now() <= 5_000;
   }
 
   formatInterval(iso: string | null | undefined): string {
@@ -1108,6 +1610,66 @@ export class AdminSettingsComponent {
       });
   }
 
+  /** Delete (cancel) a queued or completed admin job. */
+  deleteAdminJob(j: AdminJobSnapshot): void {
+    if (this.deletingJobId()) return;
+    const confirmed = (j.status === 'pending' || j.status === 'running')
+      ? confirm(`Cancel and remove the queued ${j.jobType} job?`)
+      : true;
+    if (!confirmed) return;
+
+    this.deletingJobId.set(j.id);
+    this.http.delete(`${environment.apiUrl}/api/photos/admin/jobs/${j.id}`)
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(() => {
+        this.deletingJobId.set(null);
+        this.loadHealth();
+      });
+  }
+
+  /** Enqueue an arbitrary admin job from the Service Health form. */
+  enqueueManualJob(): void {
+    if (this.enqueuingManual()) return;
+
+    // Destructive job types require an explicit confirmation. The reconcile
+    // and reap jobs are idempotent so they don't need one.
+    if (this.manualJobType === 'purge-failed-photos') {
+      if (!confirm('This will HARD-DELETE every Photo row whose ProcessingStatus is Failed. Continue?')) return;
+    } else if (this.manualJobType === 'chaos-storage') {
+      if (!confirm('Chaos will deliberately delete random blobs to manufacture inconsistency. Continue?')) return;
+    }
+
+    const body: { jobType: string; albumId?: string } = { jobType: this.manualJobType };
+    if (this.manualJobType === 'reconcile-album-storage') {
+      const id = this.manualJobAlbumId.trim();
+      if (!id) {
+        this.enqueueResult.set({ ok: false, message: 'Album ID is required for album reconcile.' });
+        return;
+      }
+      body.albumId = id;
+    }
+
+    this.enqueuingManual.set(true);
+    this.enqueueResult.set(null);
+    this.http.post<{ jobId: string; deduped?: boolean }>(`${environment.apiUrl}/api/photos/admin/jobs`, body)
+      .pipe(catchError(err => {
+        this.enqueuingManual.set(false);
+        this.enqueueResult.set({ ok: false, message: this.extractErrorMessage(err) });
+        return of(null);
+      }))
+      .subscribe(res => {
+        this.enqueuingManual.set(false);
+        if (!res) return;
+        this.enqueueResult.set({
+          ok: true,
+          message: res.deduped
+            ? `Already queued — reused existing job ${res.jobId.substring(0, 8)}…`
+            : `Enqueued ${this.manualJobType} as ${res.jobId.substring(0, 8)}…`
+        });
+        this.loadHealth();
+      });
+  }
+
 
   // ---- Maintenance ---------------------------------------------------------
 
@@ -1115,18 +1677,53 @@ export class AdminSettingsComponent {
     this.reapState.set('running');
     this.reapReport.set(null);
     this.reapError.set(null);
-    this.http.post<OrphanReapReport>(`${environment.apiUrl}/api/photos/admin/reap-orphans`, {})
+    this.http.post<{ jobId: string }>(`${environment.apiUrl}/api/photos/admin/reap-orphans`, {})
       .pipe(catchError(err => { this.reapState.set('error'); this.reapError.set(this.extractErrorMessage(err)); return of(null); }))
-      .subscribe(report => { if (!report) return; this.reapState.set('success'); this.reapReport.set(report); });
+      .subscribe(env => {
+        if (!env?.jobId) { this.reapState.set('idle'); return; }
+        this.pollAdminJob(env.jobId, 0,
+          report => { this.reapState.set('success'); this.reapReport.set(report as OrphanReapReport); },
+          err    => { this.reapState.set('error');   this.reapError.set(err); });
+      });
   }
 
   runReconcile(): void {
     this.reconcileState.set('running');
     this.reconcileReport.set(null);
     this.reconcileError.set(null);
-    this.http.post<ReconcileReport>(`${environment.apiUrl}/api/photos/admin/reconcile-storage`, {})
+    this.http.post<{ jobId: string }>(`${environment.apiUrl}/api/photos/admin/reconcile-storage`, {})
       .pipe(catchError(err => { this.reconcileState.set('error'); this.reconcileError.set(this.extractErrorMessage(err)); return of(null); }))
-      .subscribe(report => { if (!report) return; this.reconcileState.set('success'); this.reconcileReport.set(report); });
+      .subscribe(env => {
+        if (!env?.jobId) { this.reconcileState.set('idle'); return; }
+        this.pollAdminJob(env.jobId, 0,
+          report => { this.reconcileState.set('success'); this.reconcileReport.set(report as ReconcileReport); },
+          err    => { this.reconcileState.set('error');   this.reconcileError.set(err); });
+      });
+  }
+
+  /**
+   * Generic admin-job poller used by Reap + Reconcile. Both endpoints now
+   * return 202 Accepted with a jobId; the worker drains the queue and writes
+   * back ResultJson. Polls every 2s for up to 5 minutes.
+   */
+  private pollAdminJob(
+    jobId: string,
+    attempt: number,
+    onComplete: (report: unknown) => void,
+    onError: (msg: string) => void
+  ): void {
+    if (attempt > 150) {
+      onError('Timed out after 5 minutes waiting for a worker.');
+      return;
+    }
+    this.http.get<any>(`${environment.apiUrl}/api/photos/admin/jobs/${jobId}`)
+      .pipe(catchError(() => of(null)))
+      .subscribe(job => {
+        if (!job) { setTimeout(() => this.pollAdminJob(jobId, attempt + 1, onComplete, onError), 3000); return; }
+        if (job.status === 'complete') { onComplete(job.result || {}); return; }
+        if (job.status === 'error')    { onError(job.error || 'Worker reported error'); return; }
+        setTimeout(() => this.pollAdminJob(jobId, attempt + 1, onComplete, onError), 2000);
+      });
   }
 
   // ---- Users ---------------------------------------------------------------
@@ -1294,11 +1891,16 @@ export class AdminSettingsComponent {
     this.drilldownError.set(null);
   }
 
-  formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  /** Compact human-readable byte size: 4.20 GB / 512 MB / 3.14 KB / 256 B.
+   *  Handles null/undefined/negative gracefully for the storage card. */
+  formatBytes(bytes: number | null | undefined): string {
+    if (bytes == null || isNaN(bytes) || bytes < 0) return '—';
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const value = bytes / Math.pow(1024, i);
+    const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
+    return `${value.toFixed(decimals)} ${units[i]}`;
   }
 
   private extractErrorMessage(err: unknown): string {

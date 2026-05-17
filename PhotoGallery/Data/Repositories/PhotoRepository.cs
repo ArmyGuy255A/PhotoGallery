@@ -66,8 +66,7 @@ public class PhotoRepository : Repository<Photo>, IPhotoRepository
         // upload paths agree on what counts as a duplicate, regardless of the
         // database collation. Last-write-wins on case-only collisions, which
         // matches the behavior of the unique filtered index in
-        // UniquePhotoFileNamePerAlbum (case-insensitive collation in
-        // SqlServer; this client-side dedup keeps Sqlite consistent).
+        // UniquePhotoFileNamePerAlbum (case-insensitive collation in SqlServer).
         var rows = await _dbSet
             .Where(p => p.AlbumId == albumId)
             .Select(p => new { p.FileName, p.Id, p.ProcessingStatus })

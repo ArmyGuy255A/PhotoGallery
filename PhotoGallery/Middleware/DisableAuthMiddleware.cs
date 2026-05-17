@@ -20,7 +20,7 @@ public class DisableAuthMiddleware
             ?? config["DISABLE_AUTH"]
             ?? "false";
         
-        logger.LogInformation("DisableAuthMiddleware: DISABLE_AUTH = '{DisableAuth}'", disableAuth);
+        logger.LogTrace("DisableAuthMiddleware: DISABLE_AUTH = '{DisableAuth}'", disableAuth);
         
         if (disableAuth.Equals("true", StringComparison.OrdinalIgnoreCase))
         {

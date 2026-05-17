@@ -1,116 +1,94 @@
+using PhotoGallery.Models;
+using PhotoGallery.Services;
 namespace PhotoGallery.Services.Processing;
 
 /// <summary>
-/// Background service that periodically invokes
-/// <see cref="OrphanedBlobReaperService.RunOnceAsync"/> to delete orphaned
-/// blobs from storage.
+/// Background service that drains <see cref="AdminJobTypes.ReapOrphans"/>
+/// rows from the AdminJob queue. Routine reaps are enqueued by the API's
+/// <see cref="AdminJobScheduler"/>; admin-clicked reaps are enqueued by
+/// the PhotosController.
 ///
 /// Reference: PhotoGallery v2 plan, Phase 5.
-///
-/// Configuration (hot-reloadable via <see cref="ISettingsResolver"/>):
-/// <list type="bullet">
-///   <item><c>Storage:OrphanReapEnabled</c> (default true) — kill switch. Disabling
-///   skips the cycle without stopping the loop, so re-enabling resumes on the
-///   next tick.</item>
-///   <item><c>Storage:OrphanReapIntervalHours</c> (default 6) — tick interval.
-///   Changes take effect on the next sleep cycle.</item>
-///   <item><c>Storage:OrphanReapGraceMinutes</c> (default 60) — read by
-///   <see cref="OrphanedBlobReaperService"/> per run.</item>
-/// </list>
-///
-/// Registers with <see cref="WorkerScheduleRegistry"/> so the admin Service
-/// Health page can see it and trigger a manual run.
 /// </summary>
 public sealed class OrphanedBlobReaperWorker : BackgroundService
 {
     public const string WorkerName = "OrphanedBlobReaper";
 
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan HeartbeatMinInterval = TimeSpan.FromSeconds(30);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<OrphanedBlobReaperWorker> _logger;
     private readonly WorkerScheduleRegistry _registry;
-    private readonly bool _defaultEnabled;
-    private readonly int _defaultIntervalHours;
-    private readonly ManualResetEventSlim _triggerSignal = new(initialState: false);
 
     public OrphanedBlobReaperWorker(
         IServiceProvider serviceProvider,
         ILogger<OrphanedBlobReaperWorker> logger,
-        IConfiguration configuration,
         WorkerScheduleRegistry registry)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
         _registry = registry;
-
-        _defaultEnabled = configuration.GetValue("Storage:OrphanReapEnabled", true);
-        _defaultIntervalHours = Math.Max(1,
-            configuration.GetValue("Storage:OrphanReapIntervalHours", 6));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "OrphanedBlobReaperWorker started (default enabled={Enabled}, default interval={IntervalHours}h, hot-reloadable)",
-            _defaultEnabled, _defaultIntervalHours);
+            "OrphanedBlobReaperWorker started — drains AdminJob queue every {Interval}s",
+            TickInterval.TotalSeconds);
 
         _registry.Register(
             WorkerName,
             displayName: "Orphaned-blob reaper",
-            interval: TimeSpan.FromHours(_defaultIntervalHours),
-            triggerHook: () => _triggerSignal.Set());
+            interval: TickInterval,
+            triggerHook: null);
+
+        // Stamp a heartbeat IMMEDIATELY on startup so the dashboard sees this
+        // worker the moment it boots, instead of waiting up to TickInterval.
+        try
+        {
+            var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+            await hb.StampAsync(WorkerName, "Orphaned-blob reaper", TickInterval, lastRanAt: null, stoppingToken);
+        }
+        catch { /* heartbeat is best-effort */ }
 
         try
         {
+            DateTime lastHeartbeatAt = DateTime.UtcNow;
             while (!stoppingToken.IsCancellationRequested)
             {
-                // Read enabled + interval live so admin changes take effect
-                // on the next tick.
-                bool enabled = _defaultEnabled;
-                int intervalHours = _defaultIntervalHours;
+                var tickInterval = await ResolveTickIntervalAsync(stoppingToken);
+
+                int drained = 0;
                 try
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
-                    enabled = await resolver.GetBoolAsync("Storage:OrphanReapEnabled", _defaultEnabled, stoppingToken);
-                    intervalHours = Math.Max(1,
-                        await resolver.GetIntAsync("Storage:OrphanReapIntervalHours", _defaultIntervalHours, stoppingToken));
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to resolve live settings; using defaults");
-                }
-
-                if (enabled)
-                {
-                    try
+                    var dispatcher = _serviceProvider.GetRequiredService<AdminJobDispatcher>();
+                    drained = await dispatcher.DrainAsync(new[] { AdminJobTypes.ReapOrphans }, stoppingToken);
+                    if (drained > 0)
                     {
-                        await RunCycleAsync(stoppingToken);
-                        _registry.RecordTick(WorkerName);
+                        var hbWriter = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+                        hbWriter.IncrementProcessed(WorkerName, drained);
+                        _logger.LogInformation("OrphanedBlobReaperWorker drained {Count} admin jobs", drained);
+                    }
+                    _registry.RecordTick(WorkerName);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger.LogError(ex, "AdminJobDispatcher drain failed"); }
+
+                var now = DateTime.UtcNow;
+                if (drained > 0 || (now - lastHeartbeatAt) >= HeartbeatMinInterval)
+                {
                     try
                     {
                         var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
-                        await hb.StampAsync(WorkerName, "Orphaned-blob reaper", TimeSpan.FromHours(intervalHours), DateTime.UtcNow, stoppingToken);
+                        await hb.StampAsync(WorkerName, "Orphaned-blob reaper", tickInterval, now, stoppingToken);
+                        lastHeartbeatAt = now;
                     }
                     catch { /* heartbeat is best-effort */ }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error in orphaned blob reaper cycle");
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug("OrphanedBlobReaperWorker tick skipped — disabled via Storage:OrphanReapEnabled");
                 }
 
-                var triggered = await Task.Run(
-                    () => _triggerSignal.Wait(TimeSpan.FromHours(intervalHours), stoppingToken),
-                    stoppingToken);
-                if (triggered) _triggerSignal.Reset();
+                try { await Task.Delay(tickInterval, stoppingToken); }
+                catch (OperationCanceledException) { break; }
             }
         }
         catch (OperationCanceledException)
@@ -124,10 +102,20 @@ public sealed class OrphanedBlobReaperWorker : BackgroundService
         }
     }
 
-    private async Task RunCycleAsync(CancellationToken cancellationToken)
+    private async Task<TimeSpan> ResolveTickIntervalAsync(CancellationToken ct)
     {
-        using var scope = _serviceProvider.CreateScope();
-        var service = scope.ServiceProvider.GetRequiredService<OrphanedBlobReaperService>();
-        await service.RunOnceAsync(cancellationToken);
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+            var seconds = Math.Max(1, await resolver.GetIntAsync(
+                "Workers:OrphanedBlobReaper:TickIntervalSeconds",
+                (int)TickInterval.TotalSeconds, ct));
+            return TimeSpan.FromSeconds(seconds);
+        }
+        catch
+        {
+            return TickInterval;
+        }
     }
 }

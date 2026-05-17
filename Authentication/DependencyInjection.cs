@@ -148,7 +148,7 @@ public static class DependencyInjection
                             .Select(c => $"{c.Type}={c.Value}")
                             .ToArray() ?? Array.Empty<string>();
 
-                        logger.LogInformation(
+                        logger.LogTrace(
                             "JwtBearer token VALIDATED for {Method} {Path}: sub={Sub} roles=[{Roles}]",
                             ctx.Request.Method, ctx.Request.Path,
                             ctx.Principal?.FindFirst("sub")?.Value

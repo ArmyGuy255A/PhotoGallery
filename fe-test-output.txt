@@ -1,0 +1,14 @@
+- Generating browser application bundles (phase: setup)...
+Γ£ö Browser application bundle generation complete.
+[91m15 05 2026 14:23:47.348:ERROR [reporter]: [39mCan not load reporter "spec", it is not registered!
+  Perhaps you are missing some plugin?
+[32m15 05 2026 14:23:47.354:INFO [karma-server]: [39mKarma v6.4.4 server started at http://localhost:9876/
+[32m15 05 2026 14:23:47.354:INFO [launcher]: [39mLaunching browsers ChromeHeadless with concurrency unlimited
+[91m15 05 2026 14:23:47.355:ERROR [karma-server]: [39mError: Found 1 load error
+    at Server.<anonymous> (D:\repos\PhotoGallery\PhotoGallery\FE.PhotoGallery\node_modules\karma\lib\server.js:243:26)
+    at Object.onceWrapper (node:events:638:28)
+    at Server.emit (node:events:536:35)
+    at emitListeningNT (node:net:1980:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+Γ£ö Browser application bundle generation complete.
+Γ£ö Browser application bundle generation complete.

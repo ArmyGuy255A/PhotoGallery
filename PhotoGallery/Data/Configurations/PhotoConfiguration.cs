@@ -56,10 +56,7 @@ public class PhotoConfiguration : IEntityTypeConfiguration<Photo>
         // does not permanently block re-attempts of the same name. The
         // OrphanedBlobReaperService eventually deletes those rows.
         //
-        // SqlServer honours the HasFilter clause as a filtered unique
-        // index. Sqlite ignores HasFilter and applies the index over all
-        // rows; that is acceptable for the local-dev path because the
-        // controller-level check is the primary line of defence.
+        // SqlServer honours the HasFilter clause as a filtered unique index.
         builder.HasIndex(p => new { p.AlbumId, p.FileName })
             .IsUnique()
             .HasFilter("[ProcessingStatus] <> 4");

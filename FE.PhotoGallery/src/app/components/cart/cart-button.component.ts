@@ -21,7 +21,7 @@ import { CartService } from '../../services/cart.service';
       (click)="toggle()"
       aria-label="Open cart"
       data-testid="global-cart-button">
-      <span class="cart-icon" aria-hidden="true">🛒</span>
+      <span class="cart-icon" aria-hidden="true"></span>
       <span *ngIf="count > 0" class="badge" data-testid="cart-badge">{{ count }}</span>
     </button>
   `,

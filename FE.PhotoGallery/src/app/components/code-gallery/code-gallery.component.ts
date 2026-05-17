@@ -67,7 +67,7 @@ interface CodeValidation {
                   (click)="cartOpen = true"
                   [class.has-items]="cartCount > 0"
                   data-testid="gallery-cart-button">
-            🛒 Cart
+            Cart
             <span *ngIf="cartCount > 0" class="badge">{{ cartCount }}</span>
           </button>
           <!--
@@ -158,7 +158,7 @@ interface CodeValidation {
                  (keydown.enter)="openModal(i)" (keydown.space)="openModal(i)"
                  [attr.aria-label]="'View ' + photo.fileName">
               <img *ngIf="photo.thumbnailUrl" [src]="photo.thumbnailUrl" [alt]="photo.fileName">
-              <div *ngIf="!photo.thumbnailUrl" class="thumb-placeholder">📷</div>
+              <div *ngIf="!photo.thumbnailUrl" class="thumb-placeholder"></div>
               <div class="thumb-hover-overlay">🔍 View</div>
             </div>
             <div class="photo-meta">

@@ -50,6 +50,16 @@ public class PhotoProcessingWorker : BackgroundService
             interval: TimeSpan.FromSeconds(_defaultIntervalSeconds),
             triggerHook: () => _triggerSignal.Set());
 
+        // Stamp an initial heartbeat so the dashboard sees this worker the
+        // moment it boots, instead of waiting up to one tick interval.
+        try
+        {
+            var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+            await hb.StampAsync(WorkerName, "Image processing queue",
+                TimeSpan.FromSeconds(_defaultIntervalSeconds), lastRanAt: null, stoppingToken);
+        }
+        catch { /* heartbeat is best-effort */ }
+
         try
         {
             int currentInterval = _defaultIntervalSeconds;

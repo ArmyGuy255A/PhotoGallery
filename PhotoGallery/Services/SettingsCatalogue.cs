@@ -38,6 +38,13 @@ public static class SettingsCatalogue
                         return false;
                     }
                     return true;
+                case "double":
+                    if (!double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+                    {
+                        error = $"'{value}' is not a valid decimal number.";
+                        return false;
+                    }
+                    return true;
                 default:
                     return true;
             }
@@ -104,6 +111,59 @@ public static class SettingsCatalogue
             "BlobStorage:VerifyCachedUrls", "Storage", "bool", "false",
             "If true, GetPhotoVersionUrlAsync HEAD-checks each cached URL before reuse — safer but slower. Default is false so paged album rendering doesn't pay N HEAD-request round-trips per page; StorageConsistencyService catches drift on its sweep instead. Hot-reload — takes effect on the next URL fetch.",
             RestartRequired: false),
+
+        // ---------------------------------------------------------------
+        // Chaos engineering — Trial only. The Chaos:Enabled kill switch is
+        // explicit-off in appsettings.Production.json AND guarded at the
+        // controller edge with a 403, so even toggling these via the admin
+        // page can't enable chaos in prod without a redeploy + env-var
+        // override. Tunables below let you scale the destructiveness for
+        // different test scenarios without code changes.
+        // ---------------------------------------------------------------
+        new SettingCatalogueEntry(
+            "Chaos:Enabled", "Chaos", "bool", "false",
+            "Master kill-switch for ChaosStorageService. Must be true for any chaos-storage admin job to run; the service refuses otherwise. Defaults to false everywhere; appsettings.Trial.json overrides to true.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Chaos:DeleteFraction", "Chaos", "double", "0.10",
+            "Fraction of the listed blobs (0..1) to delete per chaos run. 0.10 = 10%. The MaxDeletionsPerRun cap still applies on top of this.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Chaos:MaxDeletionsPerRun", "Chaos", "int", "50",
+            "Hard ceiling on blob deletions per chaos run. Stops a single click from nuking the entire bucket regardless of what DeleteFraction resolves to.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Chaos:IncludeOriginals", "Chaos", "bool", "true",
+            "If true, original.jpg blobs are eligible for deletion. Set false to test recovery of derived versions without losing source files.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Chaos:IncludeDerivedVersions", "Chaos", "bool", "true",
+            "If true, derived quality variants (thumbnail/low/medium/high/watermark) are eligible for deletion.",
+            RestartRequired: false),
+
+        // ---------------------------------------------------------------
+        // Worker tick intervals — how often each BackgroundService wakes up.
+        // The two admin-job-draining workers (StorageConsistency,
+        // OrphanedBlobReaper) only poll the AdminJob queue, so a longer
+        // interval just means admin clicks take slightly longer to pick up.
+        // The AdminJobScheduler enqueue cadence is separate.
+        // ---------------------------------------------------------------
+        new SettingCatalogueEntry(
+            "Workers:StorageConsistency:TickIntervalSeconds", "Workers", "int", "10",
+            "How often the StorageConsistencyWorker polls the AdminJob queue for reconcile-storage / reconcile-album-storage / chaos-storage jobs. Lower = snappier admin clicks but more DB poll traffic. Default 10s. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:OrphanedBlobReaper:TickIntervalSeconds", "Workers", "int", "10",
+            "How often the OrphanedBlobReaperWorker polls the AdminJob queue for reap-orphans jobs. Reaps are rare; 30-60s is fine in production. Default 10s. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:Scheduler:ReconcileIntervalHours", "Workers", "int", "1",
+            "How often the API-side AdminJobScheduler enqueues a routine reconcile-storage job (idempotently — duplicates are deduped). Hourly is fine for steady-state; lower if you want faster catch of corruption / chaos. Hot-reload — takes effect on the next scheduler tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:Scheduler:ReapIntervalHours", "Workers", "int", "6",
+            "How often the API-side AdminJobScheduler enqueues a routine reap-orphans job (idempotently). 6-12h is fine; reaps are heavy and rarely-needed at steady state. Hot-reload — takes effect on the next scheduler tick.",
+            RestartRequired: false),
     };
 }
 
@@ -119,4 +179,5 @@ public interface ISettingsResolver
     Task<string?> GetAsync(string key, CancellationToken cancellationToken = default);
     Task<int> GetIntAsync(string key, int fallback, CancellationToken cancellationToken = default);
     Task<bool> GetBoolAsync(string key, bool fallback, CancellationToken cancellationToken = default);
+    Task<double> GetDoubleAsync(string key, double fallback, CancellationToken cancellationToken = default);
 }

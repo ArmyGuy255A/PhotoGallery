@@ -71,7 +71,7 @@ interface UploadFile {
                   (error)="onThumbnailError(item)"
                 />
                 <div *ngIf="!item.thumbnailUrl || item.status !== 'complete'" class="thumbnail-placeholder" data-testid="upload-item-thumbnail-placeholder">
-                  📷
+                  
                 </div>
               </div>
 
@@ -99,8 +99,8 @@ interface UploadFile {
                 <!-- Status text -->
                 <small class="status-text" data-testid="upload-item-status">
                   <span *ngIf="item.status === 'uploading'">📤 Uploading {{ item.uploadProgress }}%</span>
-                  <span *ngIf="item.status === 'complete'">✅ Queued for processing</span>
-                  <span *ngIf="item.status === 'duplicate'">⚠️ Already in album — skipped</span>
+                  <span *ngIf="item.status === 'complete'">Queued for processing</span>
+                  <span *ngIf="item.status === 'duplicate'">Already in album — skipped</span>
                   <span *ngIf="item.status === 'error'">❌ Error</span>
                 </small>
                 <small *ngIf="item.errorMessage" class="error-message">{{ item.errorMessage }}</small>

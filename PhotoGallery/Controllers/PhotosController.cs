@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using PhotoGallery.Data;
 using PhotoGallery.Data.Repositories;
 using PhotoGallery.Enums;
 using PhotoGallery.Hubs;
@@ -47,6 +48,7 @@ public class PhotosController : ControllerBase
     private readonly StorageConsistencyService _storageConsistencyService;
     private readonly IHubContext<PhotoProgressHub> _progressHub;
     private readonly OrphanedBlobReaperService _orphanedBlobReaperService;
+    private readonly ApplicationDbContext _ctx;
     private readonly ILogger<PhotosController> _logger;
 
     // Single-file upload ceiling for direct-to-blob tickets. Picked to match
@@ -72,6 +74,7 @@ public class PhotosController : ControllerBase
         StorageConsistencyService storageConsistencyService,
         IHubContext<PhotoProgressHub> progressHub,
         OrphanedBlobReaperService orphanedBlobReaperService,
+        ApplicationDbContext ctx,
         ILogger<PhotosController> logger)
     {
         _imageProcessor = imageProcessor;
@@ -84,6 +87,7 @@ public class PhotosController : ControllerBase
         _storageConsistencyService = storageConsistencyService;
         _orphanedBlobReaperService = orphanedBlobReaperService;
         _progressHub = progressHub;
+        _ctx = ctx;
         _logger = logger;
     }
 
@@ -921,24 +925,9 @@ public class PhotosController : ControllerBase
     /// </summary>
     [HttpPost("admin/reconcile-storage")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ReconcileStorage(CancellationToken cancellationToken)
+    public async Task<IActionResult> ReconcileStorage()
     {
-        try
-        {
-            _logger.LogInformation("Admin {User} triggered storage reconciliation", User.Identity?.Name);
-            var report = await _storageConsistencyService.RunOnceAsync(cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("Admin storage reconciliation was cancelled");
-            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Admin storage reconciliation failed");
-            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
-        }
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReconcileStorage, albumId: null);
     }
 
     /// <summary>
@@ -951,7 +940,7 @@ public class PhotosController : ControllerBase
     /// Returns a JSON ConsistencyReport with counters (requeued, backFilled, ...).
     /// </summary>
     [HttpPost("albums/{albumId:guid}/reconcile-storage")]
-    public async Task<IActionResult> ReconcileAlbumStorage(Guid albumId, CancellationToken cancellationToken)
+    public async Task<IActionResult> ReconcileAlbumStorage(Guid albumId)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId)) return Unauthorized();
@@ -962,23 +951,7 @@ public class PhotosController : ControllerBase
         var isAdmin = User.IsInRole("Admin");
         if (!isAdmin && album.OwnerId != userId) return Forbid();
 
-        try
-        {
-            _logger.LogInformation(
-                "User {User} triggered album storage reconciliation for {AlbumId}",
-                User.Identity?.Name, albumId);
-            var report = await _storageConsistencyService.RunForAlbumAsync(albumId, cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
-        {
-            return StatusCode(499, new { message = "Reconciliation cancelled by client" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Album storage reconciliation failed for {AlbumId}", albumId);
-            return StatusCode(500, new { message = "Reconciliation failed", error = ex.Message });
-        }
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReconcileAlbumStorage, albumId);
     }
 
     /// <summary>    /// Admin-only: synchronously trigger a single orphaned-blob reap pass
@@ -998,25 +971,275 @@ public class PhotosController : ControllerBase
     /// </summary>
     [HttpPost("admin/reap-orphans")]
     [Authorize(Roles = "Admin")]
-    public async Task<IActionResult> ReapOrphans(CancellationToken cancellationToken)
+    public async Task<IActionResult> ReapOrphans()
     {
-        try
-        {
-            _logger.LogInformation("Admin {User} triggered orphaned-blob reap", User.Identity?.Name);
-            var report = await _orphanedBlobReaperService.RunOnceAsync(cancellationToken);
-            return Ok(report);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("Admin orphaned-blob reap was cancelled");
-            return StatusCode(499, new { message = "Reap cancelled by client" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Admin orphaned-blob reap failed");
-            return StatusCode(500, new { message = "Reap failed", error = ex.Message });
-        }
+        return await EnqueueAdminJobAsync(AdminJobTypes.ReapOrphans, albumId: null);
     }
+
+    /// <summary>
+    /// Shared helper: insert an AdminJob row + return 202 Accepted with the
+    /// row's Id so the FE can poll for completion. The API never runs these
+    /// jobs itself — a worker drains them at the top of its next tick (~5s).
+    ///
+    /// Idempotent: if a job with the same (JobType, AlbumId) is already
+    /// Pending or Running, returns 202 with the EXISTING job id rather than
+    /// inserting a duplicate. The AdminJobScheduler relies on this so its
+    /// periodic enqueues don't pile up rows during a worker outage, and
+    /// admins clicking "Reap" twice rapidly get a no-op the second time.
+    /// </summary>
+    private async Task<IActionResult> EnqueueAdminJobAsync(string jobType, Guid? albumId)
+    {
+        var existing = await _ctx.AdminJobs
+            .Where(j => j.JobType == jobType
+                     && j.AlbumId == albumId
+                     && (j.Status == AdminJobStatuses.Pending || j.Status == AdminJobStatuses.Running))
+            .OrderBy(j => j.RequestedAt)
+            .FirstOrDefaultAsync();
+        if (existing != null)
+        {
+            _logger.LogInformation(
+                "AdminJob {JobType} (album={AlbumId}) already queued as {JobId} ({Status}); returning existing",
+                jobType, albumId, existing.Id, existing.Status);
+            return Accepted(new
+            {
+                jobId       = existing.Id,
+                jobType     = existing.JobType,
+                albumId     = existing.AlbumId,
+                status      = existing.Status,
+                requestedAt = existing.RequestedAt,
+                statusUrl   = $"/api/photos/admin/jobs/{existing.Id}",
+                deduped     = true
+            });
+        }
+
+        var job = new AdminJob
+        {
+            Id            = Guid.NewGuid(),
+            JobType       = jobType,
+            AlbumId       = albumId,
+            Status        = AdminJobStatuses.Pending,
+            RequestedAt   = DateTime.UtcNow,
+            RequestedBy   = User.Identity?.Name
+        };
+        _ctx.AdminJobs.Add(job);
+        await _ctx.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Enqueued AdminJob {JobId} ({JobType}, album={AlbumId}) by {User}",
+            job.Id, job.JobType, job.AlbumId, job.RequestedBy);
+
+        return Accepted(new
+        {
+            jobId       = job.Id,
+            jobType     = job.JobType,
+            albumId     = job.AlbumId,
+            status      = job.Status,
+            requestedAt = job.RequestedAt,
+            statusUrl   = $"/api/photos/admin/jobs/{job.Id}"
+        });
+    }
+
+    /// <summary>
+    /// Generic admin endpoint: enqueue any supported job type. Backs the
+    /// "Enqueue job" form on the Service Health admin page so admins can
+    /// add work to the queue without dedicated FE buttons for each type.
+    /// </summary>
+    [HttpPost("admin/jobs")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> EnqueueGenericAdminJob([FromBody] EnqueueAdminJobRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.JobType))
+            return BadRequest(new { error = "jobType is required" });
+
+        var allowed = new[]
+        {
+            AdminJobTypes.ReconcileStorage,
+            AdminJobTypes.ReconcileAlbumStorage,
+            AdminJobTypes.ReapOrphans,
+            AdminJobTypes.ChaosStorage,
+            AdminJobTypes.PurgeFailedPhotos
+        };
+        if (!allowed.Contains(request.JobType, StringComparer.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Unknown jobType '{request.JobType}'. Allowed: {string.Join(", ", allowed)}" });
+
+        // Chaos is gated by Development:ChaosEnabled. Refuse upfront in
+        // environments where it's off (e.g. Production) so an enqueue
+        // attempt fails fast with a 403 instead of silently sitting in the
+        // queue as a Blocked no-op. The service also self-guards, but the
+        // controller refusal gives the FE a clean error to render.
+        if (string.Equals(request.JobType, AdminJobTypes.ChaosStorage, StringComparison.OrdinalIgnoreCase))
+        {
+            var chaos = HttpContext.RequestServices.GetRequiredService<ChaosStorageService>();
+            if (!chaos.IsEnabled)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = "Chaos engineering is disabled on this environment. " +
+                            "Set Development:ChaosEnabled=true (Trial only) to enable."
+                });
+            }
+        }
+
+        // Album-scoped reconcile MUST have an albumId; the others MUST NOT.
+        if (string.Equals(request.JobType, AdminJobTypes.ReconcileAlbumStorage, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!request.AlbumId.HasValue)
+                return BadRequest(new { error = "albumId is required for reconcile-album-storage" });
+            var album = await _albumRepository.GetByIdAsync(request.AlbumId.Value);
+            if (album == null) return NotFound(new { error = $"Album {request.AlbumId} not found" });
+        }
+        else if (request.AlbumId.HasValue)
+        {
+            return BadRequest(new { error = $"albumId must be null for {request.JobType}" });
+        }
+
+        return await EnqueueAdminJobAsync(request.JobType, request.AlbumId);
+    }
+
+    /// <summary>
+    /// Admin-only: paginated + server-sortable list of admin jobs for the
+    /// Service Health table. Server-side sort means the FE doesn't have to
+    /// fetch the whole table to sort by a column — each click POSTs a new
+    /// query with the desired (sortBy, sortDir, page, pageSize).
+    ///
+    /// Supported sort fields: requestedAt (default), startedAt, completedAt,
+    /// jobType, status. Direction: asc | desc (default desc on time fields,
+    /// asc on string fields).
+    /// </summary>
+    [HttpGet("admin/jobs")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ListAdminJobs(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string sortBy = "requestedAt",
+        [FromQuery] string sortDir = "desc",
+        [FromQuery] string? status = null,
+        [FromQuery] string? jobType = null)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100;
+
+        var q = _ctx.AdminJobs.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            // Allow comma-separated list: ?status=pending,running
+            var allowed = status.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            q = q.Where(j => allowed.Contains(j.Status));
+        }
+        if (!string.IsNullOrWhiteSpace(jobType))
+        {
+            q = q.Where(j => j.JobType == jobType);
+        }
+
+        var desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        q = (sortBy?.ToLowerInvariant()) switch
+        {
+            "startedat"   => desc ? q.OrderByDescending(j => j.StartedAt)   : q.OrderBy(j => j.StartedAt),
+            "completedat" => desc ? q.OrderByDescending(j => j.CompletedAt) : q.OrderBy(j => j.CompletedAt),
+            "jobtype"     => desc ? q.OrderByDescending(j => j.JobType)     : q.OrderBy(j => j.JobType),
+            "status"      => desc ? q.OrderByDescending(j => j.Status)      : q.OrderBy(j => j.Status),
+            _             => desc ? q.OrderByDescending(j => j.RequestedAt) : q.OrderBy(j => j.RequestedAt),
+        };
+
+        var total = await q.CountAsync();
+        var items = await q
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(j => new AdminJobStatusDto
+            {
+                Id                    = j.Id,
+                JobType               = j.JobType,
+                AlbumId               = j.AlbumId,
+                Status                = j.Status,
+                RequestedAt           = j.RequestedAt,
+                RequestedBy           = j.RequestedBy,
+                StartedAt             = j.StartedAt,
+                CompletedAt           = j.CompletedAt,
+                CompletedByInstanceId = j.CompletedByInstanceId,
+                ErrorMessage          = j.ErrorMessage
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling((double)total / pageSize),
+            sortBy,
+            sortDir
+        });
+    }
+
+    /// <summary>
+    /// Admin-only: cancel/remove a queued or in-flight admin job. The DB row
+    /// is hard-deleted; the worker tick checks Status before processing so
+    /// a deleted row will simply be a no-op. Useful for clearing duplicates
+    /// or aborting a long-running reconcile.
+    /// </summary>
+    [HttpDelete("admin/jobs/{jobId:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> DeleteAdminJob(Guid jobId)
+    {
+        var job = await _ctx.AdminJobs.FirstOrDefaultAsync(j => j.Id == jobId);
+        if (job == null) return NotFound();
+
+        _ctx.AdminJobs.Remove(job);
+        await _ctx.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Admin {User} deleted AdminJob {JobId} ({JobType}, status was {Status})",
+            User.Identity?.Name, jobId, job.JobType, job.Status);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Poll endpoint for the FE to learn when an enqueued admin job
+    /// completes. Returns the full row including the worker-written
+    /// ResultJson (a ConsistencyReport / OrphanReapReport) when done.
+    /// </summary>
+    [HttpGet("admin/jobs/{jobId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> GetAdminJob(Guid jobId)
+    {
+        var job = await _ctx.AdminJobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId);
+        if (job == null) return NotFound();
+
+        // Per-album reconcile is owner-or-admin; the other job types are admin-only
+        // and the [Authorize] on the controller handles that.
+        if (job.JobType == AdminJobTypes.ReconcileAlbumStorage && job.AlbumId.HasValue)
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var album  = await _albumRepository.GetByIdAsync(job.AlbumId.Value);
+            if (album != null && album.OwnerId != userId && !User.IsInRole("Admin")) return Forbid();
+        }
+
+        return Ok(new
+        {
+            jobId                 = job.Id,
+            jobType               = job.JobType,
+            albumId               = job.AlbumId,
+            status                = job.Status,
+            requestedAt           = job.RequestedAt,
+            requestedBy           = job.RequestedBy,
+            startedAt             = job.StartedAt,
+            completedAt           = job.CompletedAt,
+            completedByInstanceId = job.CompletedByInstanceId,
+            result                = job.ResultJson == null ? (System.Text.Json.JsonElement?)null : System.Text.Json.JsonDocument.Parse(job.ResultJson).RootElement,
+            error                 = job.ErrorMessage
+        });
+    }
+}
+
+/// <summary>
+/// Body for POST /api/photos/admin/jobs.
+/// </summary>
+public class EnqueueAdminJobRequest
+{
+    public string JobType { get; set; } = string.Empty;
+    public Guid? AlbumId { get; set; }
 }
 
 /// <summary>

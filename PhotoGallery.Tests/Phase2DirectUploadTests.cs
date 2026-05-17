@@ -112,6 +112,8 @@ public class Phase2DirectUploadTests
                 Mock.Of<IStorageProvider>(),
                 new ConfigurationBuilder().AddInMemoryCollection().Build(),
                 NullLogger<OrphanedBlobReaperService>.Instance),
+            new ApplicationDbContext(new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseInMemoryDatabase("phase2-direct-upload-" + Guid.NewGuid()).Options),
             NullLogger<PhotosController>.Instance);
 
         var identity = new ClaimsIdentity(new[]

@@ -118,8 +118,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
     /// Atomically claim a batch of work via the DB-level lease. On SQL Server uses the
     /// <c>UPDATE TOP (N) ... OUTPUT inserted.Id ...</c> pattern so the SELECT + UPDATE is
     /// one statement and two workers (in-instance or cross-instance) cannot pick the same
-    /// row. On Sqlite / InMemory falls back to a select-then-update (sufficient for tests
-    /// and single-instance dev). Reference: Phase 4 scope §4.
+    /// row. On the InMemory test provider falls back to a select-then-update. Reference: Phase 4 scope §4.
     /// </summary>
     public async Task<IReadOnlyList<ProcessingQueueItem>> LeaseNextBatchAsync(
         int batchSize,
@@ -149,8 +148,12 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                     -- Status 0 = Pending, 1 = Processing (orphaned by a dead worker — recover if lease expired),
                     -- 3 = Error (retry due). Without orphan recovery, an OOM-killed worker leaves Processing
                     -- rows with an expired lease that NEVER drain — observed in trial as 808 stuck items.
+                    -- Status 0 = Pending, 1 = Processing (orphaned if lease is NULL or expired),
+                    -- 3 = Error (retry due). The NULL-lease branch catches rows where a worker hit
+                    -- OperationCanceledException and called ReleaseLeaseAsync (which nulls the lease but
+                    -- doesn't reset the status) — without this we observed 41 stuck items in trial.
                     WHERE (Status = 0
-                           OR (Status = 1 AND LeaseExpiresAt IS NOT NULL AND LeaseExpiresAt < GETUTCDATE())
+                           OR (Status = 1 AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE()))
                            OR (Status = 3 AND (NextRetryTime IS NULL OR NextRetryTime <= GETUTCDATE())))
                       AND (LeaseExpiresAt IS NULL OR LeaseExpiresAt < GETUTCDATE())
                     ORDER BY
@@ -187,13 +190,13 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                 .ToListAsync(cancellationToken);
         }
 
-        // Non-SqlServer fallback. Best-effort lease — tests + single-instance Sqlite dev.
+        // InMemory test-provider fallback. Best-effort lease — only used by the test suite.
         var now = DateTime.UtcNow;
         var leaseUntil = now.Add(leaseDuration);
         var candidates = await _dbSet
             .Where(item =>
                 (item.Status == ProcessingStatus.Pending ||
-                 (item.Status == ProcessingStatus.Processing && item.LeaseExpiresAt != null && item.LeaseExpiresAt < now) ||
+                 (item.Status == ProcessingStatus.Processing && (item.LeaseExpiresAt == null || item.LeaseExpiresAt < now)) ||
                  (item.Status == ProcessingStatus.Error &&
                   (item.NextRetryTime == null || item.NextRetryTime <= now)))
                 && (item.LeaseExpiresAt == null || item.LeaseExpiresAt < now))

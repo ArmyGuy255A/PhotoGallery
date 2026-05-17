@@ -6,6 +6,7 @@ using PhotoGallery.Data;
 using PhotoGallery.Enums;
 using PhotoGallery.Models;
 using PhotoGallery.Services;
+using PhotoGallery.Services.Storage;
 
 namespace PhotoGallery.Controllers;
 
@@ -77,9 +78,8 @@ public class AdminController : ControllerBase
         {
             var s = search.Trim();
             // Use ToLower() in EF translation rather than EF.Functions.Like
-            // so the filter works identically on Sqlite (case-insensitive
-            // FOLD via ToLower) and SqlServer (case-insensitive default
-            // collation; ToLower is a no-op there but still correct).
+            // so the filter is portable across collations (case-insensitive
+            // on SqlServer regardless of default collation).
             var sl = s.ToLower();
             query = query.Where(u =>
                 (u.Email != null && u.Email.ToLower().Contains(sl)) ||
@@ -573,9 +573,8 @@ public class AdminController : ControllerBase
 
         // Pull every anonymous access-log row joined to the code it touched
         // (so we can list the codes the visitor has used). Then group in
-        // memory by IP + UA — composite GROUP BY through EF on a string
-        // column is supported on SqlServer but trips up on Sqlite at the
-        // sizes we expect this table to be.
+        // memory by IP + UA — composite GROUP BY through EF on string
+        // columns is cheap at the sizes we expect this table to be.
         var rows = await (
             from log in _ctx.Set<UserAccessLog>()
             where log.UserId == null
@@ -628,12 +627,37 @@ public class AdminController : ControllerBase
     [HttpGet("service-health")]
     public async Task<ActionResult<ServiceHealthDto>> GetServiceHealth()
     {
-        var photoStatuses = await _ctx.Photos
-            .GroupBy(p => p.ProcessingStatus)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
+        // Photo lifecycle counts. Uploading + Failed read straight from the
+        // Photo.ProcessingStatus column (only the reconciler / upload path
+        // mutates those). Processing + Pending + Complete are DERIVED from
+        // the per-quality ProcessingQueueItem table so the dashboard reflects
+        // the live worker state without waiting on a reconcile cycle:
+        //   * Processing = photo has >= 1 queue item with Status=Processing
+        //                  (a worker has leased a quality for this photo).
+        //   * Pending    = photo has >= 1 Pending item AND no Processing items
+        //                  (waiting for a worker to pick up).
+        //   * Complete   = every queue item for the photo is Complete.
+        //                  (Final Status=Complete on the photo column is also
+        //                  set by reconcile but this is a faster signal.)
+        var uploading = await _ctx.Photos.CountAsync(p => p.ProcessingStatus == PhotoProcessingStatus.Uploading);
+        var failed    = await _ctx.Photos.CountAsync(p => p.ProcessingStatus == PhotoProcessingStatus.Failed);
+
+        var live = await _ctx.Photos
+            .Where(p => p.ProcessingStatus != PhotoProcessingStatus.Uploading
+                     && p.ProcessingStatus != PhotoProcessingStatus.Failed)
+            .Select(p => new
+            {
+                HasProcessing = _ctx.ProcessingQueueItems
+                    .Any(i => i.PhotoId == p.Id && i.Status == PhotoGallery.Models.ProcessingStatus.Processing),
+                HasPending = _ctx.ProcessingQueueItems
+                    .Any(i => i.PhotoId == p.Id && i.Status == PhotoGallery.Models.ProcessingStatus.Pending),
+                HasAnyItem = _ctx.ProcessingQueueItems.Any(i => i.PhotoId == p.Id),
+            })
             .ToListAsync();
-        int countFor(PhotoProcessingStatus s) =>
-            photoStatuses.FirstOrDefault(x => x.Status == s)?.Count ?? 0;
+        var processing = live.Count(x => x.HasProcessing);
+        var pending    = live.Count(x => !x.HasProcessing && (x.HasPending || !x.HasAnyItem));
+        var complete   = live.Count(x => !x.HasProcessing && !x.HasPending && x.HasAnyItem);
+        var totalPhotos = uploading + failed + live.Count;
 
         var queueByStatus = await _ctx.ProcessingQueueItems
             .GroupBy(i => i.Status)
@@ -649,6 +673,19 @@ public class AdminController : ControllerBase
             .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
             .ToListAsync();
 
+        // Storage footprint — computed from the storage backend itself, which
+        // is the only source of truth (PhotoVersion + PhotoFile DB tables are
+        // not consistently maintained across the legacy code paths, so a DB
+        // aggregate would massively under-report). Enumerates with metadata
+        // (key + size) and aggregates by the key naming convention:
+        //   photogallery/{albumId}/{photoId}/{quality}.jpg
+        // The quality segment is the last path part minus .jpg.
+        //
+        // Cached in-process for 30s so back-to-back dashboard refreshes don't
+        // re-list. A storage backend with N blobs costs one paginated LIST,
+        // which is fast even at 10k+ blobs.
+        var storageStats = await GetStorageFootprintAsync();
+
         // Merge in-memory registry (this replica) + heartbeat rows (other replicas).
         // The in-memory entries take precedence for the local replica (real-time
         // trigger hook availability); rows in the DB for OTHER instances are
@@ -658,17 +695,16 @@ public class AdminController : ControllerBase
         var workers = registry.Snapshot();
         var localKeys = workers.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var heartbeats = await _ctx.WorkerHeartbeats.AsNoTracking().ToListAsync();
-        // Liveness: heartbeat is fresh if newer than (now - max(2*interval, 90s)).
-        // 90s floor keeps a 5-second interval from being declared dead after a
-        // single missed tick.
+        // Liveness: heartbeat is fresh if newer than the OfflineAfter threshold.
+        // Using the shared WorkerHeartbeatThresholds keeps writer + reader in sync.
         var now = DateTime.UtcNow;
+        var aliveCutoff = now - WorkerHeartbeatThresholds.OfflineAfter;
         foreach (var hb in heartbeats)
         {
             // Find the matching local worker entry (same name) and decorate it
             // with the metrics from the heartbeat. If absent locally, add a
             // synthetic entry.
-            var liveness = TimeSpan.FromSeconds(Math.Max(90, hb.IntervalSeconds * 2));
-            var isAlive = (now - hb.LastHeartbeatAt) <= liveness;
+            var isAlive = hb.LastHeartbeatAt >= aliveCutoff;
             var dto = new WorkerStatusDto
             {
                 Name             = hb.WorkerName,
@@ -679,6 +715,7 @@ public class AdminController : ControllerBase
                 CanTrigger       = false, // remote replica — trigger hook not reachable from here
                 InstanceId       = hb.InstanceId,
                 IsAlive          = isAlive,
+                LastHeartbeatAt  = hb.LastHeartbeatAt,
                 ItemsProcessedTotal = hb.ItemsProcessedTotal,
                 ItemsInFlight    = hb.ItemsInFlight,
                 LastError        = hb.LastError
@@ -692,6 +729,7 @@ public class AdminController : ControllerBase
                 var local = workers.First(w => string.Equals(w.Name, hb.WorkerName, StringComparison.OrdinalIgnoreCase));
                 local.InstanceId          = hb.InstanceId;
                 local.IsAlive             = isAlive;
+                local.LastHeartbeatAt     = hb.LastHeartbeatAt;
                 local.ItemsProcessedTotal = hb.ItemsProcessedTotal;
                 local.ItemsInFlight       = hb.ItemsInFlight;
                 local.LastError           = hb.LastError;
@@ -702,6 +740,69 @@ public class AdminController : ControllerBase
 
         var cfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
         var workersEnabled = cfg.GetValue("WorkersEnabled", true);
+        var localInstanceForReplicas = WorkerScheduleRegistry.InstanceId;
+
+        // Build the replica-centric view the FE actually shows: one row per
+        // physical replica (hostname like ca-photogallery-worker-dev--0000003-…),
+        // each row enumerates the jobs that replica is running. Groups the
+        // merged-workers list by InstanceId so a replica running 4 worker types
+        // collapses into a single row with 4 nested jobs.
+        var replicas = workers
+            .GroupBy(w => w.InstanceId ?? localInstanceForReplicas, StringComparer.OrdinalIgnoreCase)
+            .Select(g =>
+            {
+                var jobs = g.OrderBy(j => j.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+                var isLocal = string.Equals(g.Key, localInstanceForReplicas, StringComparison.OrdinalIgnoreCase);
+                // Use the freshest heartbeat across all workers on this replica
+                // as the replica-level alive signal. A local replica with no
+                // workers (api-only) and no heartbeat row yet still counts as
+                // alive — it's literally the process answering the request.
+                var freshestHeartbeat = jobs
+                    .Select(j => j.LastHeartbeatAt)
+                    .Where(t => t.HasValue)
+                    .DefaultIfEmpty(null)
+                    .Max();
+                var isAlive = freshestHeartbeat.HasValue
+                    ? (now - freshestHeartbeat.Value) <= WorkerHeartbeatThresholds.OfflineAfter
+                    : (jobs.Count == 0 && isLocal); // synthetic API-only entry
+                // Heuristic role label: a replica that's running PhotoProcessing
+                // alongside the others is the worker app; a replica with no
+                // workers at all is api-only. Mixed (legacy single-replica) shows
+                // as api+worker.
+                var hasPhotoProc = jobs.Any(j => string.Equals(j.Name, "PhotoProcessing", StringComparison.OrdinalIgnoreCase));
+                var role = jobs.Count == 0
+                    ? "api-only"
+                    : (isLocal && workersEnabled) || hasPhotoProc
+                        ? (isLocal ? "api+worker" : "worker")
+                        : "api+worker";
+                return new ReplicaWorkerStatusDto
+                {
+                    InstanceId      = g.Key,
+                    IsAlive         = isAlive,
+                    LastHeartbeatAt = freshestHeartbeat,
+                    Role            = role,
+                    Jobs            = jobs
+                };
+            })
+            .OrderByDescending(r => r.IsAlive)
+            .ThenByDescending(r => r.LastHeartbeatAt)
+            .ThenBy(r => r.InstanceId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Guarantee the API replica appears even if it has no local workers and
+        // no heartbeat row yet (cold start).
+        if (!replicas.Any(r => string.Equals(r.InstanceId, localInstanceForReplicas, StringComparison.OrdinalIgnoreCase)))
+        {
+            replicas.Insert(0, new ReplicaWorkerStatusDto
+            {
+                InstanceId      = localInstanceForReplicas,
+                IsAlive         = true,
+                LastHeartbeatAt = null,
+                Role            = workersEnabled ? "api+worker" : "api-only",
+                Jobs            = new List<WorkerStatusDto>()
+            });
+        }
+
         return Ok(new ServiceHealthDto
         {
             GeneratedAt = DateTime.UtcNow,
@@ -714,12 +815,12 @@ public class AdminController : ControllerBase
             },
             Photos = new PhotoCountsDto
             {
-                Total = photoStatuses.Sum(x => x.Count),
-                Uploading = countFor(PhotoProcessingStatus.Uploading),
-                Pending = countFor(PhotoProcessingStatus.Pending),
-                Processing = countFor(PhotoProcessingStatus.Processing),
-                Complete = countFor(PhotoProcessingStatus.Complete),
-                Failed = countFor(PhotoProcessingStatus.Failed)
+                Total = totalPhotos,
+                Uploading = uploading,
+                Pending = pending,
+                Processing = processing,
+                Complete = complete,
+                Failed = failed
             },
             Queue = new QueueCountsDto
             {
@@ -729,8 +830,130 @@ public class AdminController : ControllerBase
                 Error = queueFor(PhotoGallery.Models.ProcessingStatus.Error),
                 ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
             },
-            Workers = workers
+            Storage = storageStats,
+            Workers = workers,
+            Replicas = replicas,
+            AdminJobs = await GetRecentAdminJobsAsync()
         });
+    }
+
+    // Process-level cache for the storage footprint. The storage backend
+    // is the only honest source (PhotoVersion + PhotoFile tables are not
+    // consistently maintained), and enumerating it on every dashboard refresh
+    // would be wasteful — 30s is short enough that admins iterating on chaos
+    // see fresh numbers but long enough to absorb FE polling.
+    private static (DateTime ExpiresAt, StorageFootprintDto Data)? _storageCache;
+    private static readonly object _storageCacheLock = new();
+    private static readonly TimeSpan _storageCacheTtl = TimeSpan.FromSeconds(30);
+
+    private async Task<StorageFootprintDto> GetStorageFootprintAsync()
+    {
+        lock (_storageCacheLock)
+        {
+            if (_storageCache.HasValue && DateTime.UtcNow < _storageCache.Value.ExpiresAt)
+            {
+                return _storageCache.Value.Data;
+            }
+        }
+
+        var storage = HttpContext.RequestServices.GetRequiredService<IStorageProvider>();
+        var dto = new StorageFootprintDto();
+        try
+        {
+            // Photogallery layout: photogallery/{albumId}/{photoId}/{quality}.jpg.
+            // Bucket-wide ListWithMetadataAsync streams (paginates internally on
+            // Azure Blob + S3) so the wall-clock cost scales with N blobs, not
+            // round-trips.
+            var blobs = (await storage.ListWithMetadataAsync("photogallery/")).ToList();
+            var qualityBuckets = new Dictionary<string, (int count, long bytes)>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var b in blobs)
+            {
+                // Last path segment minus .jpg = quality name. Anything that
+                // doesn't fit the convention (e.g. legacy keys) buckets to "other".
+                var slash = b.Key.LastIndexOf('/');
+                var leaf = slash >= 0 ? b.Key.Substring(slash + 1) : b.Key;
+                var dot  = leaf.LastIndexOf('.');
+                var quality = dot > 0 ? leaf.Substring(0, dot) : leaf;
+                if (string.IsNullOrEmpty(quality)) quality = "other";
+
+                if (!qualityBuckets.TryGetValue(quality, out var agg))
+                    agg = (0, 0L);
+                qualityBuckets[quality] = (agg.count + 1, agg.bytes + b.Size);
+
+                if (string.Equals(quality, "original", StringComparison.OrdinalIgnoreCase))
+                {
+                    dto.OriginalsCount++;
+                    dto.OriginalsBytes += b.Size;
+                }
+                else
+                {
+                    dto.DerivedCount++;
+                    dto.DerivedBytes += b.Size;
+                }
+                dto.TotalCount++;
+                dto.TotalBytes += b.Size;
+            }
+
+            dto.ByQuality = qualityBuckets
+                .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => new StorageQualityDto
+                {
+                    Quality = kv.Key,
+                    Count = kv.Value.count,
+                    TotalBytes = kv.Value.bytes
+                })
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to compute storage footprint; returning zeros");
+        }
+
+        lock (_storageCacheLock)
+        {
+            _storageCache = (DateTime.UtcNow + _storageCacheTtl, dto);
+        }
+        return dto;
+    }
+
+    /// <summary>
+    /// Returns recent AdminJob rows for the Service Health dashboard:
+    /// every Pending + Running job (regardless of age), plus the last 20
+    /// Completed/Failed jobs from the past 24h. Sized to give admins a
+    /// "what's queued vs. what just ran" view without paginating.
+    /// </summary>
+    private async Task<List<AdminJobStatusDto>> GetRecentAdminJobsAsync()
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var active = await _ctx.AdminJobs
+            .AsNoTracking()
+            .Where(j => j.Status == AdminJobStatuses.Pending || j.Status == AdminJobStatuses.Running)
+            .OrderBy(j => j.RequestedAt)
+            .ToListAsync();
+        var recentDone = await _ctx.AdminJobs
+            .AsNoTracking()
+            .Where(j => j.Status != AdminJobStatuses.Pending
+                     && j.Status != AdminJobStatuses.Running
+                     && j.RequestedAt >= cutoff)
+            .OrderByDescending(j => j.CompletedAt ?? j.RequestedAt)
+            .Take(20)
+            .ToListAsync();
+        return active.Concat(recentDone)
+            .Select(j => new AdminJobStatusDto
+            {
+                Id = j.Id,
+                JobType = j.JobType,
+                AlbumId = j.AlbumId,
+                Status = j.Status,
+                RequestedAt = j.RequestedAt,
+                RequestedBy = j.RequestedBy,
+                StartedAt = j.StartedAt,
+                CompletedAt = j.CompletedAt,
+                CompletedByInstanceId = j.CompletedByInstanceId,
+                ErrorMessage = j.ErrorMessage
+            })
+            .ToList();
     }
 
     [HttpPost("service-health/workers/{name}/trigger")]
@@ -813,7 +1036,43 @@ public class ServiceHealthDto
     public ReplicaInfoDto Replica { get; set; } = new();
     public PhotoCountsDto Photos { get; set; } = new();
     public QueueCountsDto Queue { get; set; } = new();
+    /// <summary>How much storage this deployment is using, computed from PhotoVersion + PhotoFile rows.</summary>
+    public StorageFootprintDto Storage { get; set; } = new();
     public List<WorkerStatusDto> Workers { get; set; } = new();
+    /// <summary>Replica-centric view: one entry per physical replica (hostname), with the jobs it's running nested inside.</summary>
+    public List<ReplicaWorkerStatusDto> Replicas { get; set; } = new();
+    /// <summary>Recent admin-job queue contents: all pending+running, plus last 20 completed/failed from the past 24h.</summary>
+    public List<AdminJobStatusDto> AdminJobs { get; set; } = new();
+}
+
+/// <summary>
+/// Snapshot of an AdminJob row for the Service Health dashboard. Mirrors
+/// the schema but omits ResultJson (separately fetchable via
+/// GET /api/photos/admin/jobs/{id}).
+/// </summary>
+public class AdminJobStatusDto
+{
+    public Guid Id { get; set; }
+    public string JobType { get; set; } = string.Empty;
+    public Guid? AlbumId { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public DateTime RequestedAt { get; set; }
+    public string? RequestedBy { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public string? CompletedByInstanceId { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public class ReplicaWorkerStatusDto
+{
+    public string InstanceId { get; set; } = string.Empty;
+    public bool IsAlive { get; set; }
+    /// <summary>Most recent heartbeat across all of this replica's workers. Null for synthetic API entries that never wrote one.</summary>
+    public DateTime? LastHeartbeatAt { get; set; }
+    /// <summary>Role label: `api-only`, `worker`, or `api+worker`.</summary>
+    public string Role { get; set; } = string.Empty;
+    public List<WorkerStatusDto> Jobs { get; set; } = new();
 }
 
 public class ReplicaInfoDto
@@ -843,6 +1102,34 @@ public class QueueCountsDto
     public Dictionary<string, int> ByQuality { get; set; } = new();
 }
 
+/// <summary>
+/// Storage footprint derived from PhotoVersion.FileSize + PhotoFile.FileSize.
+/// Cheap O(GROUP BY) instead of enumerating the storage backend.
+/// </summary>
+public class StorageFootprintDto
+{
+    /// <summary>Number of original photos (PhotoFile rows).</summary>
+    public int OriginalsCount { get; set; }
+    /// <summary>Total bytes occupied by originals.</summary>
+    public long OriginalsBytes { get; set; }
+    /// <summary>Number of derived quality variants across all photos (thumbnail, low, medium, high, watermark, raw…).</summary>
+    public int DerivedCount { get; set; }
+    /// <summary>Total bytes occupied by derived variants.</summary>
+    public long DerivedBytes { get; set; }
+    /// <summary>Grand total: originals + derived.</summary>
+    public int TotalCount { get; set; }
+    public long TotalBytes { get; set; }
+    /// <summary>Per-quality breakdown of derived variants.</summary>
+    public List<StorageQualityDto> ByQuality { get; set; } = new();
+}
+
+public class StorageQualityDto
+{
+    public string Quality { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public long TotalBytes { get; set; }
+}
+
 public class WorkerStatusDto
 {
     public string Name { get; set; } = string.Empty;
@@ -853,14 +1140,22 @@ public class WorkerStatusDto
     public bool CanTrigger { get; set; }
     /// <summary>Replica that owns this entry. Local in-memory entries get filled by the heartbeat merge in GetServiceHealth.</summary>
     public string? InstanceId { get; set; }
-    /// <summary>True if the heartbeat row is fresh (within 2x its interval, min 90s). False = worker has gone silent.</summary>
+    /// <summary>True if the heartbeat row is fresher than <c>WorkerHeartbeatThresholds.OfflineAfter</c>.</summary>
     public bool IsAlive { get; set; } = true;
+    /// <summary>UTC timestamp of the last heartbeat write from this worker (NULL for the synthetic API-only entry).</summary>
+    public DateTime? LastHeartbeatAt { get; set; }
     /// <summary>Per-replica running total of items processed since startup.</summary>
     public long ItemsProcessedTotal { get; set; }
     /// <summary>Size of the batch the worker is currently chewing on, 0 between ticks.</summary>
     public int ItemsInFlight { get; set; }
     /// <summary>Last error from the worker (sticky until a successful tick).</summary>
     public string? LastError { get; set; }
+    /// <summary>Process CPU% across all cores at the heartbeat instant (0..100). Null on the very first heartbeat from a replica.</summary>
+    public double? CpuPercent { get; set; }
+    /// <summary>Process working-set bytes at the heartbeat instant.</summary>
+    public long? WorkingSetBytes { get; set; }
+    /// <summary>.NET managed heap bytes at the heartbeat instant.</summary>
+    public long? ManagedHeapBytes { get; set; }
 }
 
 public class SetRolesRequest

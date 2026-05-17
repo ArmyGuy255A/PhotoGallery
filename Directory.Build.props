@@ -1,0 +1,21 @@
+<Project>
+  <!--
+    Repo-wide MSBuild defaults.
+
+    DefaultItemExcludes: by default the SDK only excludes the *current*
+    BaseIntermediateOutputPath / BaseOutputPath from the compile glob.
+    That's normally fine, but when a project is built with a non-default
+    output path (e.g. the "Backend: Run as Worker" VS Code task uses
+    bin/Worker-N/ + obj/Worker-N/), any leftover obj/Debug/, obj/Release/,
+    or obj/Worker-M/ dirs from previous builds get globbed back into the
+    compile and produce CS0579 duplicate-AssemblyInfo errors.
+
+    Excluding bin/** and obj/** unconditionally is safe: the SDK's
+    GenerateAssemblyInfo target re-adds the current build's AssemblyInfo
+    via an explicit <Compile Include> (not a glob), so the current build's
+    metadata still flows through.
+  -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

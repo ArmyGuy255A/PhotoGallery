@@ -60,7 +60,7 @@ interface CartGroup {
               <li *ngFor="let item of g.items; trackBy: trackByItem" class="cart-item">
                 <div class="thumb">
                   <img *ngIf="item.thumbnailUrl" [src]="item.thumbnailUrl" [alt]="item.fileName">
-                  <div *ngIf="!item.thumbnailUrl" class="thumb-placeholder">📷</div>
+                  <div *ngIf="!item.thumbnailUrl" class="thumb-placeholder"></div>
                 </div>
                 <div class="item-info">
                   <div class="item-name" [title]="item.fileName">{{ item.fileName }}</div>

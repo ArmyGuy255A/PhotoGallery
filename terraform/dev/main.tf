@@ -330,7 +330,6 @@ module "compute" {
   extra_env = merge({
     # Provider selectors
     "Storage__Provider"  = "AzureBlob"
-    "Database__Provider" = "SqlServer"
 
     # The API container app is ingress-only. It NEVER processes photos —
     # ImageSharp + the 0.5 vCPU container starves Kestrel's request thread
@@ -467,7 +466,6 @@ module "compute_worker" {
 
   extra_env = {
     "Storage__Provider"                 = "AzureBlob"
-    "Database__Provider"                = "SqlServer"
     "Storage__AzureBlob__AccountUrl"    = module.storage.blob_endpoint
     "Storage__AzureBlob__ContainerName" = module.storage.container_name
     "KeyVault__Uri"                     = module.keyvault.vault_uri

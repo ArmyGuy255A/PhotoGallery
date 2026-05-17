@@ -65,4 +65,29 @@ public class WorkerHeartbeat
     /// </summary>
     [MaxLength(512)]
     public string? LastError { get; set; }
+
+    /// <summary>
+    /// Process CPU usage at heartbeat time, averaged across the interval since
+    /// the previous heartbeat from this replica. 0..100*N for an N-vCPU container.
+    /// Lets the dashboard tell at a glance whether a worker is CPU-saturated
+    /// (which would explain a growing queue). Null until the second heartbeat,
+    /// since we need two samples to compute a delta.
+    /// </summary>
+    public double? CpuPercent { get; set; }
+
+    /// <summary>
+    /// Process working set (RAM in MB the OS sees the process using) at
+    /// heartbeat time. The fastest signal that a worker is close to ACA's
+    /// memory limit — once this approaches the configured request, ACA will
+    /// OOMKill the replica.
+    /// </summary>
+    public long? WorkingSetBytes { get; set; }
+
+    /// <summary>
+    /// .NET managed heap size at heartbeat time. Together with
+    /// <see cref="WorkingSetBytes"/> tells you whether memory pressure is
+    /// from GC-tracked allocations (e.g. ImageSharp buffers) or native /
+    /// unmanaged ones (e.g. raw blob streams).
+    /// </summary>
+    public long? ManagedHeapBytes { get; set; }
 }

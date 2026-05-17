@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 namespace PhotoGallery.Data;
 
 /// <summary>
-/// Design-time factory for <see cref="ApplicationDbContextSqlServer"/>.
+/// Design-time factory for <see cref="ApplicationDbContext"/>.
 ///
 /// EF Core tooling (<c>dotnet ef migrations add</c>, <c>dotnet ef migrations script</c>,
 /// <c>dotnet ef database update</c>, etc.) invokes this factory to construct
@@ -20,37 +20,29 @@ namespace PhotoGallery.Data;
 ///
 /// <code>
 ///   $env:EFCORE_SQLSERVER_DESIGNTIME_CONNECTION = "Server=tcp:...;Database=photogallery;Authentication=Active Directory Default;Encrypt=True;"
-///   dotnet ef database update --context ApplicationDbContextSqlServer
+///   dotnet ef database update
 /// </code>
 /// </summary>
-public class SqlServerDesignTimeDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContextSqlServer>
+public class SqlServerDesignTimeDbContextFactory : IDesignTimeDbContextFactory<ApplicationDbContext>
 {
     private const string DefaultDesignTimeConnection =
         "Server=tcp:design-time.invalid,1433;Database=PhotoGalleryDesignTime;" +
         "User Id=design;Password=design;TrustServerCertificate=true;";
 
-    public ApplicationDbContextSqlServer CreateDbContext(string[] args)
+    public ApplicationDbContext CreateDbContext(string[] args)
     {
         var connectionString = Environment.GetEnvironmentVariable("EFCORE_SQLSERVER_DESIGNTIME_CONNECTION")
                                ?? DefaultDesignTimeConnection;
 
-        var options = new DbContextOptionsBuilder<ApplicationDbContextSqlServer>()
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseSqlServer(connectionString, sql =>
             {
-                // Migrations for this context live in a dedicated namespace +
-                // folder so they coexist with the Sqlite migrations bound to
-                // the base ApplicationDbContext.
-                sql.MigrationsAssembly(typeof(ApplicationDbContextSqlServer).Assembly.GetName().Name);
+                sql.MigrationsAssembly(typeof(ApplicationDbContext).Assembly.GetName().Name);
             })
-            // Mirror the runtime suppression from DatabaseProviderSelector so
-            // `dotnet ef database update` doesn't fail with the EF Core 9
-            // PendingModelChangesWarning when the model fingerprint and the
-            // latest migration's snapshot differ in trivia (cross-host
-            // scaffolding differences, etc.). Real schema mismatches still
-            // surface as SqlExceptions on the actual DDL.
             .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning))
             .Options;
 
-        return new ApplicationDbContextSqlServer(options);
+        return new ApplicationDbContext(options);
     }
 }
+
