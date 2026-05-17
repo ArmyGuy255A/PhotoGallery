@@ -172,7 +172,11 @@ public class MinioStorageProvider : IStorageProvider
             do
             {
                 response = await _s3Client.ListObjectsV2Async(request);
-                items.AddRange(response.S3Objects.Select(obj => obj.Key));
+                // S3Objects is NULL (not empty) when the prefix has no
+                // matches — the AWS SDK reuses the wire null. Always-empty
+                // fallback keeps the LINQ chain safe.
+                var objects = response.S3Objects ?? new List<Amazon.S3.Model.S3Object>();
+                items.AddRange(objects.Select(obj => obj.Key));
                 request.ContinuationToken = response.NextContinuationToken;
             }
             while (response.IsTruncated ?? false);
@@ -259,7 +263,8 @@ public class MinioStorageProvider : IStorageProvider
             do
             {
                 response = await _s3Client.ListObjectsV2Async(request);
-                foreach (var obj in response.S3Objects)
+                var objects = response.S3Objects ?? new List<Amazon.S3.Model.S3Object>();
+                foreach (var obj in objects)
                 {
                     items.Add(new BlobInfo(obj.Key, obj.Size ?? 0L, obj.LastModified ?? DateTimeOffset.UtcNow));
                 }

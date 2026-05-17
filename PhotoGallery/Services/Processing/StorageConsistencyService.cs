@@ -175,11 +175,36 @@ public class StorageConsistencyService
 
         // Original-missing short-circuit: regeneration would have nothing to read from,
         // so do not touch any queue/item/url state. Just log and count.
+        // Original-missing handling. Two outcomes depending on age:
+        //   * Photo uploaded > 1h ago: the original is genuinely gone (chaos,
+        //     manual storage cleanup, or partial-restore). Mark Failed so the
+        //     UI stops showing it as Pending forever. Worker cannot re-derive
+        //     thumbnails without a source. Cleanup of the dead Photo row is a
+        //     separate decision the admin can make on the Photos table.
+        //   * Photo within the last hour: probably still mid-upload via the
+        //     Phase 2 direct-to-blob flow. Leave alone.
         if (!originalPresent)
         {
-            _logger.LogWarning(
-                "Photo {PhotoId} (album {AlbumId}) missing original.jpg in storage — skipping per-quality reconciliation",
-                photo.Id, photo.AlbumId);
+            var age = DateTime.UtcNow - photo.UploadDate;
+            if (age > TimeSpan.FromHours(1)
+                && photo.ProcessingStatus != PhotoProcessingStatus.Failed
+                && photo.ProcessingStatus != PhotoProcessingStatus.Uploading)
+            {
+                _logger.LogWarning(
+                    "Photo {PhotoId} (album {AlbumId}) missing original.jpg and uploaded {Age} ago — marking Failed",
+                    photo.Id, photo.AlbumId, age);
+                photo.ProcessingStatus = PhotoProcessingStatus.Failed;
+                photo.ProcessingComplete = false;
+                await _photoRepository.UpdateAsync(photo);
+                await _photoRepository.SaveChangesAsync();
+                mutations.PhotoChanged = true;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Photo {PhotoId} (album {AlbumId}) missing original.jpg in storage — skipping per-quality reconciliation (age={Age})",
+                    photo.Id, photo.AlbumId, age);
+            }
             report.OriginalsMissing++;
             return;
         }
