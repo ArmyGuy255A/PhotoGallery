@@ -126,6 +126,23 @@ output "static_web_app_api_key" {
 }
 
 ###############################################################################
+# Custom domain — apex used for CORS + Frontend__Url. The actual public-edge
+# binding lives in the separate nginx-edge stack; this footprint exposes
+# `static_web_app_default_host_name` (above) so that stack can consume it
+# as its `swa_upstream` Terraform input.
+###############################################################################
+
+output "custom_domain_name" {
+  description = "Configured apex custom domain (empty when running standalone without the nginx edge)."
+  value       = var.custom_domain_name
+}
+
+output "custom_domain_url" {
+  description = "Full https:// URL for the apex custom domain (empty when unbound)."
+  value       = local.custom_domain_enabled ? "https://${var.custom_domain_name}" : ""
+}
+
+###############################################################################
 # GitHub Actions OIDC — values to set as repo variables/secrets so the CI
 # pipeline can authenticate to Azure with no long-lived credentials.
 #

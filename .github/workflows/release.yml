@@ -186,19 +186,38 @@ jobs:
 
       - name: Build (production)
         working-directory: FE.PhotoGallery
-        run: npm run build -- --configuration=production
+        # --base-href=/photogallery/ rewrites <base href> in the emitted
+        # index.html so Angular routes/assets resolve under the sub-path
+        # bound to the appeid.app custom domain.
+        run: npm run build -- --configuration=production --base-href=/photogallery/
+
+      # Stage the deploy payload so SWA serves the app at /photogallery/*:
+      #   deploy/photogallery/                  <- Angular bundle
+      #   deploy/staticwebapp.config.json       <- routes /, fallback to /photogallery/index.html
+      # The app_location below points at deploy/ (not the dist/browser folder).
+      - name: Stage SWA deploy payload under /photogallery/
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/photogallery
+          cp -r FE.PhotoGallery/dist/fe.photo-gallery/browser/. deploy/photogallery/
+          cp FE.PhotoGallery/staticwebapp.config.json deploy/staticwebapp.config.json
+          # Sanity check.
+          test -f deploy/photogallery/index.html
+          test -f deploy/staticwebapp.config.json
+          ls -la deploy deploy/photogallery | head -50
 
       # When skip_app_build is true, the SWA action looks for index.html
       # directly under app_location (it does NOT combine app_location +
-      # output_location). Point app_location at the built browser folder.
+      # output_location). Point app_location at the staged deploy/ folder,
+      # which contains both staticwebapp.config.json (at root) and the
+      # Angular bundle under photogallery/.
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: 'upload'
-          # Angular 19 application builder emits to <outputPath>/browser.
-          app_location: 'FE.PhotoGallery/dist/fe.photo-gallery/browser'
+          app_location: 'deploy'
           output_location: ''
           skip_app_build: true
           skip_api_build: true

@@ -329,7 +329,7 @@ module "compute" {
 
   extra_env = merge({
     # Provider selectors
-    "Storage__Provider"  = "AzureBlob"
+    "Storage__Provider" = "AzureBlob"
 
     # The API container app is ingress-only. It NEVER processes photos —
     # ImageSharp + the 0.5 vCPU container starves Kestrel's request thread
@@ -350,15 +350,19 @@ module "compute" {
     # CORS allowlist — origin(s) the API will permit cross-origin requests
     # from. Indexed (`__0`, `__1`, ...) so .NET binds them into the
     # `Cors:AllowedOrigins` List<string>. Slot 0 is the SWA default
-    # hostname; slots 1..N come from var.frontend_origin_extra (e.g.
-    # http://localhost:4200 when running the FE locally against the cloud
-    # API). Frontend.Url is also pointed at the SWA so OAuth return URLs
-    # land back on the deployed SPA.
+    # hostname; slot 1 (when configured) is the custom-domain URL; further
+    # slots come from var.frontend_origin_extra (e.g. http://localhost:4200
+    # when running the FE locally against the cloud API). Frontend.Url
+    # points at the custom domain when set (so OAuth return URLs land on
+    # the production hostname) and otherwise falls back to the SWA default.
     "Cors__AllowedOrigins__0" = module.staticwebapp.default_host_url
-    "Frontend__Url"           = module.staticwebapp.default_host_url
-    }, {
+    "Frontend__Url"           = local.custom_domain_enabled ? "https://${var.custom_domain_name}" : module.staticwebapp.default_host_url
+    }, local.custom_domain_enabled ? {
+    "Cors__AllowedOrigins__1" = "https://${var.custom_domain_name}"
+    "Cors__AllowedOrigins__2" = "https://www.${var.custom_domain_name}"
+    } : {}, {
     for idx, origin in var.frontend_origin_extra :
-    "Cors__AllowedOrigins__${idx + 1}" => origin
+    "Cors__AllowedOrigins__${idx + (local.custom_domain_enabled ? 3 : 1)}" => origin
   })
 
   app_insights_connection_string = module.observability.app_insights_connection_string
@@ -524,5 +528,27 @@ module "staticwebapp" {
   # The FE GH Actions deploy step sets BACKEND_API_URL out of band after
   # both resources exist (`az staticwebapp appsettings set ...`).
 
+  # NOTE: custom_domain_name is intentionally NOT passed. The appeid.app
+  # apex binds to the nginx-edge ACA container app (see the nginx repo's
+  # terraform/prod/), which path-routes /photogallery/* to this SWA at its
+  # default *.azurestaticapps.net hostname. SWA's Host check is satisfied
+  # because nginx rewrites the Host header on proxy_pass.
+
   tags = local.common_tags
+}
+
+###############################################################################
+# DNS — owned by the nginx-edge stack (https://github.com/ArmyGuy255A/nginx,
+# terraform/prod/). That stack provisions the appeid.app DNS zone and binds
+# the apex A-alias to its ACA container app, which path-routes
+# /photogallery/* over to this SWA at its default *.azurestaticapps.net
+# hostname.
+#
+# Consumers of the SWA hostname (the nginx stack) read it via the existing
+# `static_web_app_default_host_name` output below. No DNS resources live in
+# the PhotoGallery footprint.
+###############################################################################
+
+locals {
+  custom_domain_enabled = var.custom_domain_name != ""
 }

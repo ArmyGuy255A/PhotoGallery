@@ -264,7 +264,8 @@ export class UserDropdownComponent implements OnInit, OnDestroy {
   signOut(): void {
     this.close();
     this.authService.logout();
-    window.location.href = '/login';
+    // Respect <base href> (production deploys under /photogallery/).
+    window.location.href = new URL('login', document.baseURI).href;
   }
 
   onAvatarError(): void {
