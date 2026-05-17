@@ -224,3 +224,6 @@ tfplan*
 .vscode/extensions.json
 .vscode/*.md
 FE.PhotoGallery/.vscode/extensions.json
+
+# EF tooling and scratch artifacts
+temp/
