@@ -201,7 +201,30 @@ jobs:
           mkdir -p deploy/photogallery
           cp -r FE.PhotoGallery/dist/fe.photo-gallery/browser/. deploy/photogallery/
           cp FE.PhotoGallery/staticwebapp.config.json deploy/staticwebapp.config.json
+
+          # The Azure/static-web-apps-deploy@v1 action with skip_app_build=true
+          # validates that index.html (or Index.html) exists directly at
+          # app_location, otherwise it bails with "Failed to find a default
+          # file in the app artifacts folder". Drop a tiny stub at deploy/
+          # root that 0-second redirects to /photogallery/ — staticwebapp.
+          # config.json already 301s "/" -> "/photogallery" at the edge so
+          # this stub is never served in practice; it exists purely to
+          # satisfy the SWA action's local validation step.
+          cat > deploy/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <title>appeid.app</title>
+              <meta http-equiv="refresh" content="0; url=/photogallery/">
+              <link rel="canonical" href="/photogallery/">
+            </head>
+            <body><a href="/photogallery/">Continue to PhotoGallery</a></body>
+          </html>
+          HTML
+
           # Sanity check.
+          test -f deploy/index.html
           test -f deploy/photogallery/index.html
           test -f deploy/staticwebapp.config.json
           ls -la deploy deploy/photogallery | head -50
