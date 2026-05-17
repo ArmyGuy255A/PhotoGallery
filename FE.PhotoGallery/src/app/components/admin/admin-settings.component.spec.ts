@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
@@ -46,23 +46,34 @@ describe('AdminSettingsComponent', () => {
     expect(host.querySelector('[data-testid="admin-reconcile-storage-button"]')).toBeTruthy();
   });
 
-  it('reap-orphans button POSTs to the admin endpoint and renders the summary', () => {
+  it('reap-orphans button enqueues a worker job and renders the summary on completion', fakeAsync(() => {
     const btn = fixture.nativeElement.querySelector('[data-testid="admin-reap-orphans-button"]') as HTMLButtonElement;
     btn.click();
 
-    const req = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/reap-orphans`);
-    expect(req.request.method).toBe('POST');
-    req.flush({
-      scanned: 12, orphanedAlbums: 1, orphanedPhotos: 4, blobsDeleted: 20,
-      bytesReclaimed: 5_242_880, skippedByGracePeriod: 0, elapsedMs: 123
+    // POST returns 202 Accepted with a jobId (admin endpoint enqueues; worker runs).
+    const enqueueReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/reap-orphans`);
+    expect(enqueueReq.request.method).toBe('POST');
+    enqueueReq.flush({ jobId: 'job-1', status: 'pending' }, { status: 202, statusText: 'Accepted' });
+
+    // FE then polls the status endpoint; advance the timer to fire the GET.
+    tick(2100);
+    const pollReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/jobs/job-1`);
+    expect(pollReq.request.method).toBe('GET');
+    pollReq.flush({
+      jobId: 'job-1',
+      status: 'complete',
+      result: {
+        scanned: 12, orphanedAlbums: 1, orphanedPhotos: 4, blobsDeleted: 20,
+        bytesReclaimed: 5_242_880, skippedByGracePeriod: 0, elapsedMs: 123
+      }
     });
     fixture.detectChanges();
 
     const report = fixture.nativeElement.querySelector('[data-testid="admin-reap-orphans-report"]');
     expect(report).toBeTruthy();
     expect(report.textContent).toContain('20');
-    expect(report.textContent).toContain('5.0 MB');
-  });
+    expect(report.textContent).toContain('5.00 MB');
+  }));
 
   it('reap-orphans surfaces a friendly forbidden error for 403', () => {
     const btn = fixture.nativeElement.querySelector('[data-testid="admin-reap-orphans-button"]') as HTMLButtonElement;
@@ -76,17 +87,25 @@ describe('AdminSettingsComponent', () => {
     expect(err.textContent).toContain('admin account');
   });
 
-  it('reconcile-storage button POSTs and renders summary', () => {
+  it('reconcile-storage button enqueues a worker job and renders the summary on completion', fakeAsync(() => {
     const btn = fixture.nativeElement.querySelector('[data-testid="admin-reconcile-storage-button"]') as HTMLButtonElement;
     btn.click();
-    const req = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/reconcile-storage`);
-    expect(req.request.method).toBe('POST');
-    req.flush({ scanned: 200, reconciled: 198, errors: 2, elapsedMs: 456 });
+    const enqueueReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/reconcile-storage`);
+    expect(enqueueReq.request.method).toBe('POST');
+    enqueueReq.flush({ jobId: 'job-2', status: 'pending' }, { status: 202, statusText: 'Accepted' });
+
+    tick(2100);
+    const pollReq = httpMock.expectOne(`${environment.apiUrl}/api/photos/admin/jobs/job-2`);
+    pollReq.flush({
+      jobId: 'job-2',
+      status: 'complete',
+      result: { scanned: 200, reconciled: 198, errors: 2, elapsedMs: 456 }
+    });
     fixture.detectChanges();
 
     const report = fixture.nativeElement.querySelector('[data-testid="admin-reconcile-report"]');
     expect(report).toBeTruthy();
     expect(report.textContent).toContain('200');
     expect(report.textContent).toContain('456');
-  });
+  }));
 });

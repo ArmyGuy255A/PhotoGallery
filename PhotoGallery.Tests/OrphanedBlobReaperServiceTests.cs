@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using PhotoGallery.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -284,7 +286,7 @@ public class OrphanedBlobReaperServiceTests
     }
 
     [Fact]
-    public async Task ReapOrphans_Endpoint_ReturnsOkWithReport()
+    public async Task ReapOrphans_Endpoint_Returns202Accepted_WithJobId()
     {
         // Drive the controller method directly with mocks. Wiring through the
         // auth pipeline is covered by the attribute-presence test above; here
@@ -309,6 +311,7 @@ public class OrphanedBlobReaperServiceTests
             storageConsistencyService: BuildPlaceholderConsistencyService(),
             orphanedBlobReaperService: reaper,
             progressHub: Mock.Of<IHubContext<PhotoProgressHub>>(),
+            ctx: BuildInMemoryDbContext(),
             logger: NullLogger<PhotosController>.Instance);
         controller.ControllerContext = new Microsoft.AspNetCore.Mvc.ControllerContext
         {
@@ -322,18 +325,26 @@ public class OrphanedBlobReaperServiceTests
             }
         };
 
-        var result = await controller.ReapOrphans(CancellationToken.None);
+        var result = await controller.ReapOrphans();
 
-        var ok = result as OkObjectResult;
-        if (ok is null)
-        {
-            var obj = Assert.IsType<ObjectResult>(result);
-            throw new Xunit.Sdk.XunitException($"Expected 200 OK, got {obj.StatusCode}: {System.Text.Json.JsonSerializer.Serialize(obj.Value)}");
-        }
-        var report = Assert.IsType<OrphanReapReport>(ok.Value);
-        Assert.Equal(1, report.BlobsDeleted);
-        Assert.Single(report.OrphanedAlbums, orphanAlbumId);
-        Assert.Equal(123L, report.BytesReclaimed);
+        // ReapOrphans now returns 202 Accepted — the actual reap runs on a worker
+        // via AdminJobDispatcher. The synchronous run is covered by separate unit
+        // tests on the service; this test just verifies the controller enqueues.
+        var accepted = Assert.IsType<AcceptedResult>(result);
+        Assert.NotNull(accepted.Value);
+    }
+
+    /// <summary>
+    /// Lightweight EF Core in-memory DbContext for tests that only need to
+    /// satisfy the PhotosController constructor (which now requires an
+    /// ApplicationDbContext for the AdminJob queue).
+    /// </summary>
+    private static ApplicationDbContext BuildInMemoryDbContext()
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseInMemoryDatabase("admin-job-test-" + Guid.NewGuid())
+            .Options;
+        return new ApplicationDbContext(options);
     }
 
     /// <summary>

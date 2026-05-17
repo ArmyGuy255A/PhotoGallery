@@ -48,7 +48,7 @@ A modern web application for photographers to upload, organize, and securely sha
 
 ### Backend
 - **Framework**: ASP.NET 9.0
-- **Database**: SQLite (dev), SQL Server (prod)
+- **Database**: SQL Server (Docker locally via `docker compose up -d mssql`, Azure SQL in prod)
 - **ORM**: Entity Framework Core
 - **Image Processing**: SixLabors.ImageSharp
 - **Authentication**: Google OAuth 2.0, JWT, ASP.NET Identity
@@ -144,7 +144,7 @@ PhotoGallery supports two local-dev modes. Pick the one that matches what you're
 Everything runs in Docker on your laptop. No cloud dependencies. This is what you want for everyday feature work.
 
 - **Storage:** MinIO (S3-compatible) at `localhost:9000`
-- **Database:** Sqlite file (`app.db`)
+- **Database:** SQL Server 2022 in Docker (`docker compose up -d mssql`, port 1433)
 - **Auth:** typically `DISABLE_AUTH=true` for fast iteration; flip off to test real OAuth
 - **Launch profile:** `http` or `https` (sets `ASPNETCORE_ENVIRONMENT=Development`)
 
@@ -159,7 +159,7 @@ cd FE.PhotoGallery; npm start        # frontend on :4300
 Backend runs on your laptop but reads secrets from **Azure Key Vault** and talks to **real Azure Blob Storage** + **Azure SQL Database**. Used to validate the production wire without deploying. Real Google OAuth + JWT stay on (no `DISABLE_AUTH`).
 
 - **Storage:** Azure Blob (`Storage:Provider=AzureBlob`, `Storage:AzureBlob:AccountUrl=https://<acct>.blob.core.windows.net/`)
-- **Database:** Azure SQL (`Database:Provider=SqlServer`, connection string resolved from Key Vault)
+- **Database:** Azure SQL (connection string resolved from Key Vault). Local dev uses Docker SQL Server (see `docker-compose.yml`).
 - **Secrets:** Key Vault, accessed via `DefaultAzureCredential` — `az login` locally, Managed Identity in Azure
 - **Launch profile:** `Trial` (sets `ASPNETCORE_ENVIRONMENT=Trial`, which auto-loads `appsettings.Trial.json`)
 
@@ -329,7 +329,7 @@ dotnet ef database update -p PhotoGallery
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Data Source=app.db"
+    "DefaultConnection": "Server=localhost,1433;Database=PhotoGalleryDev;User Id=sa;Password=PhotoGallery!Dev123;TrustServerCertificate=true;MultipleActiveResultSets=true"
   },
   "Storage": {
     "Provider": "Minio",
@@ -400,7 +400,8 @@ For production deployment, ensure:
 - ImageProcessingService creates new scopes per iteration
 
 **Database migration errors**
-- Delete `app.db` and restart to reset: `rm PhotoGallery/app.db`
+- Reset the local DB by dropping + recreating the container volume:
+  `docker compose down -v mssql && docker compose up -d mssql`
 
 ### Frontend Issues
 

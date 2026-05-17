@@ -457,17 +457,17 @@ public class AlbumService : IAlbumService
 
 *→ consult `efcore-migration-safer` for the canonical migration workflow.*
 
-> ⚠️ **Any time a model class, `DbContext` config, or entity property changes — even just an annotation — you MUST scaffold a new EF migration.** EF Core 9 makes `Microsoft.EntityFrameworkCore.Migrations.PendingModelChangesWarning` a runtime error, so `MigrateAsync()` will throw and `Program.cs` aborts startup if the snapshot drifts from the live model. The migration's `Up()`/`Down()` may be empty — what matters is the refreshed Designer.cs snapshot. PhotoGallery runs **two** providers (Sqlite + SqlServer); scaffold against **both** contexts whenever the shared model changes:
+> ⚠️ **Any time a model class, `DbContext` config, or entity property changes — even just an annotation — you MUST scaffold a new EF migration.** EF Core 9 makes `Microsoft.EntityFrameworkCore.Migrations.PendingModelChangesWarning` a runtime error, so `MigrateAsync()` will throw and `Program.cs` aborts startup if the snapshot drifts from the live model. The migration's `Up()`/`Down()` may be empty — what matters is the refreshed Designer.cs snapshot. PhotoGallery runs **two** providers (SQL Server + SqlServer); scaffold against **both** contexts whenever the shared model changes:
 >
 > ```bash
-> # Sqlite (default local dev)
+> # SQL Server (default local dev)
 > dotnet ef migrations add <DescriptiveName> \
 >   --context ApplicationDbContext \
 >   --output-dir Data/Migrations
 >
 > # SqlServer (Azure-backed dev / production)
 > dotnet ef migrations add <DescriptiveName>SqlServer \
->   --context ApplicationDbContextSqlServer \
+>   --context ApplicationDbContext \
 >   --output-dir Data/Migrations/SqlServer
 > ```
 >

@@ -58,6 +58,16 @@ public class PhotoVersionUrlRefreshWorker : BackgroundService
             interval: TimeSpan.FromHours(_defaultIntervalHours),
             triggerHook: () => _triggerSignal.Set());
 
+        // Stamp an initial heartbeat so the dashboard sees this worker the
+        // moment it boots, instead of waiting up to one tick interval.
+        try
+        {
+            var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+            await hb.StampAsync(WorkerName, "Pre-signed URL refresh",
+                TimeSpan.FromHours(_defaultIntervalHours), lastRanAt: null, stoppingToken);
+        }
+        catch { /* heartbeat is best-effort */ }
+
         try
         {
             while (!stoppingToken.IsCancellationRequested)

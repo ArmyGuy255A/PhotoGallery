@@ -1,6 +1,40 @@
 version: '3.8'
 
 services:
+  # MS SQL Server 2022 (Linux container, runs natively on WSL2 / Linux Docker).
+  # Production runs Azure SQL Server, so this gives true dev/prod parity for
+  # the data layer — same provider, same migration set, same transactional
+  # semantics. Required: there is no Sqlite or InMemory runtime path.
+  #
+  # Bring up before the API:
+  #   docker compose up -d mssql
+  # First start takes ~10s to initialize. Healthcheck waits for sqlcmd to
+  # answer; depends_on: condition: service_healthy is sufficient.
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      # Developer edition is free, has full feature parity with Enterprise
+      # for non-production use, and matches what Azure SQL Server runs.
+      MSSQL_PID: "Developer"
+      # The 'sa' password must satisfy SQL Server's complexity policy
+      # (8+ chars, 3 of {upper, lower, digit, symbol}). This is a local-only
+      # dev credential — never replicated to Trial/Prod (those use Azure SQL
+      # with Workload Identity, no sa password at all).
+      MSSQL_SA_PASSWORD: "PhotoGallery!Dev123"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      # /opt/mssql-tools18/bin/sqlcmd is the SQL Server 2022 image's bundled
+      # client. -C trusts the self-signed cert; -Q runs the no-op query.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'PhotoGallery!Dev123' -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   # PostgreSQL for Keycloak
   postgres:
     image: postgres:16-alpine
@@ -75,7 +109,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: 5105
       ASPNETCORE_HTTPS_PORTS: 7105
-      ConnectionStrings__DefaultConnection: "Data Source=app.db"
+      ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=PhotoGalleryDev;User Id=sa;Password=PhotoGallery!Dev123;TrustServerCertificate=true;MultipleActiveResultSets=true"
       Storage__Provider: "Minio"
       Storage__Minio__Endpoint: "minio:9000"
       Storage__Minio__AccessKey: "minioadmin"
@@ -86,6 +120,8 @@ services:
       - "5105:5105"
       - "7105:7105"
     depends_on:
+      mssql:
+        condition: service_healthy
       minio:
         condition: service_healthy
 
@@ -106,6 +142,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  mssql_data:
 
 networks:
   default:

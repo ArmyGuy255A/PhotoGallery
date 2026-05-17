@@ -147,7 +147,7 @@ public class GdprService
 
         var userEmail = user.Email ?? string.Empty;
 
-        // Use a relational transaction when the provider supports it (SQLite/SqlServer);
+        // Use a relational transaction when the provider supports it (SqlServer);
         // skip for the in-memory provider used in tests.
         var useTx = _db.Database.IsRelational();
         var tx = useTx ? await _db.Database.BeginTransactionAsync() : null;

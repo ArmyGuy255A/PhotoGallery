@@ -5,19 +5,18 @@ using Microsoft.Extensions.Configuration;
 namespace PhotoGallery.Data;
 
 /// <summary>
-/// Runtime selector for the EF Core database provider.
+/// EF Core provider wiring. SQL Server only — both dev (Docker SQL Server)
+/// and prod (Azure SQL Server) use the same provider so the codebase has
+/// just one migration set and a single set of provider-specific SQL idioms.
 ///
-/// Configuration keys:
+/// Configuration:
 /// <list type="bullet">
-///   <item><c>Database:Provider</c> — <c>Sqlite</c> (default, all-local) | <c>SqlServer</c> (Azure-backed dev / future Azure SQL).</item>
-///   <item><c>ConnectionStrings:DefaultConnection</c> — required, resolved from Key Vault in the Azure-backed profile.</item>
+///   <item><c>ConnectionStrings:DefaultConnection</c> — required.
+///         Local dev defaults to the Docker SQL Server in
+///         <c>appsettings.Development.json</c>; Trial/Prod load from Key Vault.</item>
 /// </list>
 ///
-/// Note: SqlServer migrations live under Data/Migrations/SqlServer/ and are
-/// scaffolded against <see cref="ApplicationDbContextSqlServer"/>. The Sqlite
-/// migrations under Data/Migrations/ are the default and bind to the base
-/// <see cref="ApplicationDbContext"/>. Program.cs picks which context to
-/// register based on the same <c>Database:Provider</c> key consumed here.
+/// To run locally: <c>docker compose up -d mssql</c> (see docker-compose.yml).
 /// </summary>
 public static class DatabaseProviderSelector
 {
@@ -25,35 +24,23 @@ public static class DatabaseProviderSelector
         DbContextOptionsBuilder options,
         IConfiguration configuration)
     {
-        var providerName = configuration["Database:Provider"] ?? "Sqlite";
         var connectionString = configuration.GetConnectionString("DefaultConnection");
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
                 "Connection string 'DefaultConnection' not found. " +
-                "For Trial, ensure Key Vault contains the secret " +
-                "'ConnectionStrings--DefaultConnection' and KeyVault:Uri is set.");
+                "Locally: ensure appsettings.Development.json provides one or set ConnectionStrings__DefaultConnection. " +
+                "Trial/Prod: ensure Key Vault contains 'ConnectionStrings--DefaultConnection' and KeyVault:Uri is set.");
         }
 
-        switch (providerName.ToLowerInvariant())
+        options.UseSqlServer(connectionString, sql =>
         {
-            case "sqlite":
-                options.UseSqlite(connectionString, sqlite => sqlite.CommandTimeout(5));
-                break;
-            case "sqlserver":
-                // Azure-backed dev / future Azure SQL Database. EnableRetryOnFailure
-                // because Azure SQL's transient errors are routine.
-                options.UseSqlServer(connectionString, sql =>
-                {
-                    sql.CommandTimeout(30);
-                    sql.EnableRetryOnFailure(maxRetryCount: 3);
-                });
-                break;
-            default:
-                throw new InvalidOperationException(
-                    $"Unknown database provider: {providerName}. Supported: Sqlite, SqlServer.");
-        }
+            sql.CommandTimeout(30);
+            // Azure SQL's transient errors are routine; let EF retry. Also
+            // helps locally when the SQL Server container is mid-start.
+            sql.EnableRetryOnFailure(maxRetryCount: 3);
+        });
 
         options.UseQueryTrackingBehavior(QueryTrackingBehavior.TrackAll);
 
@@ -76,3 +63,4 @@ public static class DatabaseProviderSelector
         options.ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
     }
 }
+

@@ -31,7 +31,10 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 .vs/
-.vscode/
+# .vscode/ — intentionally NOT gitignored: tasks.json + launch.json + the
+# composite "Full Stack: API + Worker + Frontend" task are shared dev infra,
+# not personal preferences. Per-user editor settings (themes, font size)
+# live in the user-level settings.json, not the workspace one.
 .rider/
 *.DotSettings.user
 .idea/
@@ -53,14 +56,11 @@ lerna-debug.log*
 # ============================================
 # DATABASE FILES
 # ============================================
-*.db
-*.sqlite
-*.sqlite3
-app.db
-identifier.sqlite
+# SQL Server local container volumes are managed by Docker (mssql_data),
+# not committed. No on-disk DB files in the repo anymore.
+*.dacpac
 database.mdf
 *.ldf
-*.dacpac
 
 # ============================================
 # TESTING & DEBUGGING
@@ -88,13 +88,9 @@ build/
 # ============================================
 # Visual Studio
 .vs/
-.vscode/
 *.sln.iml
 *.VC.db
-.vscode/settings.json
-.vscode/tasks.json
-.vscode/launch.json
-.vscode/extensions.json
+# .vscode is tracked — see comment above. Don't re-add it here.
 
 # JetBrains IDEs
 .idea/
@@ -222,3 +218,12 @@ PhotoGallery.code-workspace
 # Terraform plan artifacts
 tfplan*
 *.tfplan*
+
+# Personal VS Code preferences (workspace tasks.json + launch.json are tracked above)
+.vscode/settings.json
+.vscode/extensions.json
+.vscode/*.md
+FE.PhotoGallery/.vscode/extensions.json
+
+# EF tooling and scratch artifacts
+temp/

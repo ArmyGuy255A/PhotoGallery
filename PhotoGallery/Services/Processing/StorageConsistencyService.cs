@@ -37,6 +37,13 @@ public class StorageConsistencyService
         QualityType.Low,
         QualityType.Medium,
         QualityType.High,
+        // Watermark MUST be here so the per-quality reconcile loop iterates
+        // it. The previous list omitted it which meant photos missing their
+        // watermarked variants stayed Pending forever — the reconciler never
+        // checked. The Watermark queue item produces TWO blobs
+        // (thumbnail-watermarked.jpg + medium-watermarked.jpg); the loop
+        // handles that special case inline.
+        QualityType.Watermark,
     };
 
     private readonly IPhotoRepository _photoRepository;
@@ -105,9 +112,10 @@ public class StorageConsistencyService
             }
 
             _logger.LogInformation(
-                "StorageConsistencyService cycle complete: scanned={Scanned} pending={Pending} backFilled={BackFilled} requeued={Requeued} originalsMissing={OriginalsMissing} queuesCreated={QueuesCreated} urlsInvalidated={UrlsInvalidated}",
+                "StorageConsistencyService cycle complete: scanned={Scanned} pending={Pending} backFilled={BackFilled} requeued={Requeued} originalsMissing={OriginalsMissing} queuesCreated={QueuesCreated} urlsInvalidated={UrlsInvalidated} uploadingPromoted={UploadingPromoted} uploadingFailed={UploadingFailed}",
                 report.PhotosScanned, report.ItemsCreatedPending, report.ItemsBackFilledComplete,
-                report.ItemsRequeued, report.OriginalsMissing, report.QueuesCreated, report.UrlsInvalidated);
+                report.ItemsRequeued, report.OriginalsMissing, report.QueuesCreated, report.UrlsInvalidated,
+                report.UploadingPromotedToPending, report.UploadingMarkedFailed);
 
             return report;
         }
@@ -127,20 +135,83 @@ public class StorageConsistencyService
         public bool ItemsChanged;
         public bool QueuesChanged;
         public bool UrlsChanged;
+        public bool PhotoChanged;
     }
 
     private async Task ReconcilePhotoAsync(Photo photo, ConsistencyReport report, MutationFlags mutations, CancellationToken cancellationToken)
     {
         var prefix = BuildPrefix(photo);
         var presentKeys = (await _storageProvider.ListAsync(prefix)).ToHashSet(StringComparer.Ordinal);
+        var originalPresent = presentKeys.Contains(BuildKey(photo, "original"));
+
+        // Uploading-photo reconciliation. Two outcomes:
+        //   - Blob landed but the SPA never called /upload-complete (user closed the tab, network blip, etc.)
+        //     -> transition to Pending and let the per-quality logic below enqueue the 4 base items.
+        //   - Blob didn't land within 1 hour of UploadDate -> mark Failed so the row stops cluttering the UI.
+        //     The OrphanedBlobReaper handles the storage-side cleanup independently.
+        if (photo.ProcessingStatus == PhotoProcessingStatus.Uploading)
+        {
+            if (originalPresent)
+            {
+                _logger.LogInformation(
+                    "Photo {PhotoId} stuck in Uploading but original.jpg is present in storage — promoting to Pending",
+                    photo.Id);
+                photo.ProcessingStatus = PhotoProcessingStatus.Pending;
+                await _photoRepository.UpdateAsync(photo);
+                await _photoRepository.SaveChangesAsync();
+                report.UploadingPromotedToPending++;
+                // Fall through — the per-quality reconciliation below will enqueue the 4 base items.
+            }
+            else
+            {
+                var staleAfter = TimeSpan.FromHours(1);
+                if (DateTime.UtcNow - photo.UploadDate > staleAfter)
+                {
+                    _logger.LogWarning(
+                        "Photo {PhotoId} stuck in Uploading for {Elapsed} with no blob — marking Failed",
+                        photo.Id, DateTime.UtcNow - photo.UploadDate);
+                    photo.ProcessingStatus = PhotoProcessingStatus.Failed;
+                    await _photoRepository.UpdateAsync(photo);
+                    await _photoRepository.SaveChangesAsync();
+                    report.UploadingMarkedFailed++;
+                }
+                // Within the grace window: probably an upload still in progress. Leave alone.
+                return;
+            }
+        }
 
         // Original-missing short-circuit: regeneration would have nothing to read from,
         // so do not touch any queue/item/url state. Just log and count.
-        if (!presentKeys.Contains(BuildKey(photo, "original")))
+        // Original-missing handling. Two outcomes depending on age:
+        //   * Photo uploaded > 1h ago: the original is genuinely gone (chaos,
+        //     manual storage cleanup, or partial-restore). Mark Failed so the
+        //     UI stops showing it as Pending forever. Worker cannot re-derive
+        //     thumbnails without a source. Cleanup of the dead Photo row is a
+        //     separate decision the admin can make on the Photos table.
+        //   * Photo within the last hour: probably still mid-upload via the
+        //     Phase 2 direct-to-blob flow. Leave alone.
+        if (!originalPresent)
         {
-            _logger.LogWarning(
-                "Photo {PhotoId} (album {AlbumId}) missing original.jpg in storage — skipping per-quality reconciliation",
-                photo.Id, photo.AlbumId);
+            var age = DateTime.UtcNow - photo.UploadDate;
+            if (age > TimeSpan.FromHours(1)
+                && photo.ProcessingStatus != PhotoProcessingStatus.Failed
+                && photo.ProcessingStatus != PhotoProcessingStatus.Uploading)
+            {
+                _logger.LogWarning(
+                    "Photo {PhotoId} (album {AlbumId}) missing original.jpg and uploaded {Age} ago — marking Failed",
+                    photo.Id, photo.AlbumId, age);
+                photo.ProcessingStatus = PhotoProcessingStatus.Failed;
+                photo.ProcessingComplete = false;
+                await _photoRepository.UpdateAsync(photo);
+                await _photoRepository.SaveChangesAsync();
+                mutations.PhotoChanged = true;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Photo {PhotoId} (album {AlbumId}) missing original.jpg in storage — skipping per-quality reconciliation (age={Age})",
+                    photo.Id, photo.AlbumId, age);
+            }
             report.OriginalsMissing++;
             return;
         }
@@ -168,10 +239,91 @@ public class StorageConsistencyService
         foreach (var quality in AllQualities)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var key = BuildKey(photo, quality.ToString().ToLowerInvariant());
-            var present = presentKeys.Contains(key);
+            // Quality.Watermark is special — the queue item produces TWO blobs
+            // (thumbnail-watermarked.jpg + medium-watermarked.jpg), NOT a single
+            // watermark.jpg. Treat the item as present only if BOTH watermarked
+            // blobs exist; if either is missing we need to re-run the watermark
+            // step. Other qualities use the straight quality-name filename.
+            bool present;
+            if (quality == QualityType.Watermark)
+            {
+                present = presentKeys.Contains(BuildKey(photo, "thumbnail-watermarked"))
+                       && presentKeys.Contains(BuildKey(photo, "medium-watermarked"));
+            }
+            else
+            {
+                present = presentKeys.Contains(BuildKey(photo, quality.ToString().ToLowerInvariant()));
+            }
             var item = existingItems.FirstOrDefault(i => i.Quality == quality);
             await ReconcileQualityAsync(photo, queue, quality, present, item, report, mutations);
+        }
+
+        // Final pass: advance Photo.ProcessingStatus + Has* flags to match the
+        // reality on disk. No active code path sets ProcessingStatus=Complete
+        // anywhere, so without this step photos stay in Pending forever even
+        // when their blobs all land. A photo is Complete when all 7 expected
+        // blobs are on disk: original + thumbnail/low/medium/high +
+        // thumbnail-watermarked + medium-watermarked.
+        await ReconcilePhotoStatusAsync(photo, presentKeys, mutations);
+    }
+
+    /// <summary>
+    /// Sync <see cref="Photo.ProcessingStatus"/> + per-quality Has* flags to
+    /// what is actually present in storage. A photo is Complete iff ALL 7 of
+    /// these blobs exist: original.jpg, thumbnail.jpg, low.jpg, medium.jpg,
+    /// high.jpg, thumbnail-watermarked.jpg, medium-watermarked.jpg.
+    /// The QualityType.Watermark queue item produces the two watermarked
+    /// variants, so missing either means the watermark step has not run yet.
+    /// </summary>
+    private async Task ReconcilePhotoStatusAsync(
+        Photo photo, HashSet<string> presentKeys, MutationFlags mutations)
+    {
+        bool hasOriginal = presentKeys.Contains(BuildKey(photo, "original"));
+        bool hasThumb    = presentKeys.Contains(BuildKey(photo, "thumbnail"));
+        bool hasLow      = presentKeys.Contains(BuildKey(photo, "low"));
+        bool hasMedium   = presentKeys.Contains(BuildKey(photo, "medium"));
+        bool hasHigh     = presentKeys.Contains(BuildKey(photo, "high"));
+        bool hasThumbWm  = presentKeys.Contains(BuildKey(photo, "thumbnail-watermarked"));
+        bool hasMediumWm = presentKeys.Contains(BuildKey(photo, "medium-watermarked"));
+        bool allRequired = hasOriginal && hasThumb && hasLow && hasMedium
+                           && hasHigh && hasThumbWm && hasMediumWm;
+
+        var changed = false;
+        if (photo.HasThumbnail != hasThumb)  { photo.HasThumbnail = hasThumb;  changed = true; }
+        if (photo.HasLow       != hasLow)    { photo.HasLow       = hasLow;    changed = true; }
+        if (photo.HasMedium    != hasMedium) { photo.HasMedium    = hasMedium; changed = true; }
+        if (photo.HasHigh      != hasHigh)   { photo.HasHigh      = hasHigh;   changed = true; }
+
+        var desired = allRequired ? PhotoProcessingStatus.Complete : PhotoProcessingStatus.Pending;
+        // Do not touch Uploading or Failed states; earlier code in the same
+        // method owns those transitions.
+        if (photo.ProcessingStatus != PhotoProcessingStatus.Uploading
+            && photo.ProcessingStatus != PhotoProcessingStatus.Failed
+            && photo.ProcessingStatus != desired)
+        {
+            _logger.LogInformation(
+                "Photo {PhotoId}: advancing ProcessingStatus {From} -> {To} (orig={O} T={T} L={L} M={M} H={H} Twm={TW} Mwm={MW})",
+                photo.Id, photo.ProcessingStatus, desired,
+                hasOriginal, hasThumb, hasLow, hasMedium, hasHigh, hasThumbWm, hasMediumWm);
+            photo.ProcessingStatus = desired;
+            if (desired == PhotoProcessingStatus.Complete)
+            {
+                photo.ProcessingComplete = true;
+                photo.ProcessingCompletedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                photo.ProcessingComplete = false;
+                photo.ProcessingCompletedAt = null;
+            }
+            changed = true;
+        }
+
+        if (changed)
+        {
+            await _photoRepository.UpdateAsync(photo);
+            await _photoRepository.SaveChangesAsync();
+            mutations.PhotoChanged = true;
         }
     }
 
@@ -226,17 +378,23 @@ public class StorageConsistencyService
             return;
         }
 
-        // Items in Processing: in-flight items are protected by the lease.
-        // If LeaseExpiresAt has passed, the worker that owned this row crashed
-        // (OOM in trial was the cause) and the row is now orphaned. Reset it
-        // to Pending so the next worker tick re-leases and reprocesses.
+        // Items in Processing: in-flight items are protected by an active lease.
+        // A row is orphaned when either:
+        //   - LeaseExpiresAt is in the past (the worker crashed mid-tick), OR
+        //   - LeaseExpiresAt is NULL (a worker hit OperationCanceledException and
+        //     called ReleaseLeaseAsync, which nulls the lease but doesn't reset
+        //     the status — 41 stuck items in trial traced to this path).
+        // Either way we reset to Pending so the next worker tick re-leases.
         if (item.Status == ProcessingStatus.Processing)
         {
-            if (item.LeaseExpiresAt.HasValue && item.LeaseExpiresAt.Value < DateTime.UtcNow)
+            var leaseExpired = item.LeaseExpiresAt.HasValue && item.LeaseExpiresAt.Value < DateTime.UtcNow;
+            var leaseNull    = !item.LeaseExpiresAt.HasValue;
+            if (leaseExpired || leaseNull)
             {
                 _logger.LogWarning(
-                    "Orphaned Processing item {ItemId} (photo {PhotoId} quality {Quality}) — lease expired {LeaseExpired:o}; resetting to Pending",
-                    item.Id, photo.Id, quality, item.LeaseExpiresAt.Value);
+                    "Orphaned Processing item {ItemId} (photo {PhotoId} quality {Quality}) — lease={LeaseState}; resetting to Pending",
+                    item.Id, photo.Id, quality,
+                    leaseNull ? "null" : item.LeaseExpiresAt!.Value.ToString("o"));
                 ResetItemToPending(item);
                 await _itemRepository.UpdateAsync(item);
                 mutations.ItemsChanged = true;
@@ -271,6 +429,9 @@ public class StorageConsistencyService
         {
             var wasComplete = item.Status == ProcessingStatus.Complete;
 
+            _logger.LogInformation(
+                "Photo {PhotoId} quality {Quality}: blob missing but item is {Status} — resetting to Pending so worker re-derives",
+                photo.Id, quality, item.Status);
             ResetItemToPending(item);
             await _itemRepository.UpdateAsync(item);
             mutations.ItemsChanged = true;
@@ -342,9 +503,10 @@ public class StorageConsistencyService
             if (mutations.UrlsChanged)    await _urlRepository.SaveChangesAsync();
 
             _logger.LogInformation(
-                "StorageConsistencyService album-scoped cycle for {AlbumId}: scanned={Scanned} pending={Pending} backFilled={BackFilled} requeued={Requeued} originalsMissing={OriginalsMissing} queuesCreated={QueuesCreated} urlsInvalidated={UrlsInvalidated}",
+                "StorageConsistencyService album-scoped cycle for {AlbumId}: scanned={Scanned} pending={Pending} backFilled={BackFilled} requeued={Requeued} originalsMissing={OriginalsMissing} queuesCreated={QueuesCreated} urlsInvalidated={UrlsInvalidated} uploadingPromoted={UploadingPromoted} uploadingFailed={UploadingFailed}",
                 albumId, report.PhotosScanned, report.ItemsCreatedPending, report.ItemsBackFilledComplete,
-                report.ItemsRequeued, report.OriginalsMissing, report.QueuesCreated, report.UrlsInvalidated);
+                report.ItemsRequeued, report.OriginalsMissing, report.QueuesCreated, report.UrlsInvalidated,
+                report.UploadingPromotedToPending, report.UploadingMarkedFailed);
 
             return report;
         }
@@ -401,4 +563,8 @@ public class ConsistencyReport
     public int OriginalsMissing { get; set; }
     public int QueuesCreated { get; set; }
     public int UrlsInvalidated { get; set; }
+    /// <summary>Photos that were stuck in Uploading status but had their original.jpg in storage — promoted to Pending.</summary>
+    public int UploadingPromotedToPending { get; set; }
+    /// <summary>Photos stuck in Uploading for over an hour with no blob — marked Failed so the UI stops showing them.</summary>
+    public int UploadingMarkedFailed { get; set; }
 }
