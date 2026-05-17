@@ -928,6 +928,7 @@ type SortDir = 'asc' | 'desc';
               <option value="reconcile-storage">reconcile-storage</option>
               <option value="reconcile-album-storage">reconcile-album-storage</option>
               <option value="reap-orphans">reap-orphans</option>
+              <option value="purge-failed-photos">🗑️ purge-failed-photos (deletes Photo rows)</option>
               <option value="chaos-storage">🔥 chaos-storage (DEV ONLY)</option>
             </select>
           </label>
@@ -1268,7 +1269,7 @@ export class AdminSettingsComponent {
   readonly deletingJobId = signal<string | null>(null);
   readonly enqueuingManual = signal<boolean>(false);
   readonly enqueueResult = signal<{ ok: boolean; message: string } | null>(null);
-  manualJobType: 'reconcile-storage' | 'reconcile-album-storage' | 'reap-orphans' | 'chaos-storage' = 'reconcile-storage';
+  manualJobType: 'reconcile-storage' | 'reconcile-album-storage' | 'reap-orphans' | 'chaos-storage' | 'purge-failed-photos' = 'reconcile-storage';
   manualJobAlbumId = '';
 
   // Paginated / sortable admin job queue (server-side).
@@ -1611,6 +1612,14 @@ export class AdminSettingsComponent {
   /** Enqueue an arbitrary admin job from the Service Health form. */
   enqueueManualJob(): void {
     if (this.enqueuingManual()) return;
+
+    // Destructive job types require an explicit confirmation. The reconcile
+    // and reap jobs are idempotent so they don't need one.
+    if (this.manualJobType === 'purge-failed-photos') {
+      if (!confirm('This will HARD-DELETE every Photo row whose ProcessingStatus is Failed. Continue?')) return;
+    } else if (this.manualJobType === 'chaos-storage') {
+      if (!confirm('Chaos will deliberately delete random blobs to manufacture inconsistency. Continue?')) return;
+    }
 
     const body: { jobType: string; albumId?: string } = { jobType: this.manualJobType };
     if (this.manualJobType === 'reconcile-album-storage') {

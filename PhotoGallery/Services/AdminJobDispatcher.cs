@@ -95,6 +95,7 @@ public class AdminJobDispatcher
                 AdminJobTypes.ReconcileAlbumStorage => await RunReconcileAlbum(job.AlbumId!.Value, cancellationToken),
                 AdminJobTypes.ReapOrphans           => await RunReapOrphans(cancellationToken),
                 AdminJobTypes.ChaosStorage          => await RunChaos(cancellationToken),
+                AdminJobTypes.PurgeFailedPhotos     => await RunPurgeFailed(cancellationToken),
                 _ => throw new InvalidOperationException($"Unknown job type: {job.JobType}")
             };
             await CompleteAsync(job.Id, result, error: null, cancellationToken);
@@ -131,6 +132,13 @@ public class AdminJobDispatcher
     {
         using var scope = _serviceProvider.CreateScope();
         var svc = scope.ServiceProvider.GetRequiredService<ChaosStorageService>();
+        return await svc.RunOnceAsync(ct);
+    }
+
+    private async Task<FailedPhotoPurgeReport> RunPurgeFailed(CancellationToken ct)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var svc = scope.ServiceProvider.GetRequiredService<FailedPhotoPurgeService>();
         return await svc.RunOnceAsync(ct);
     }
 

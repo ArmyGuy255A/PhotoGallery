@@ -80,6 +80,14 @@ public static class AdminJobTypes
     /// Guarded by appsettings: only enabled when Development:ChaosEnabled=true.
     /// </summary>
     public const string ChaosStorage          = "chaos-storage";
+
+    /// <summary>
+    /// Admin-triggered: hard-delete every Photo row whose ProcessingStatus
+    /// is Failed. The orphan blobs that were associated with these rows
+    /// (if any are still in storage) will be cleaned up by the next reap.
+    /// Destructive — FE confirms before enqueuing.
+    /// </summary>
+    public const string PurgeFailedPhotos     = "purge-failed-photos";
 }
 
 public static class AdminJobStatuses

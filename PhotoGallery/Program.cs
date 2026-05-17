@@ -236,6 +236,7 @@ builder.Services.AddScoped<StorageConsistencyService>();
 // idempotency at the storage layer.
 builder.Services.AddScoped<OrphanedBlobReaperService>();
 builder.Services.AddScoped<ChaosStorageService>();
+builder.Services.AddScoped<FailedPhotoPurgeService>();
 
 // Register background services for photo processing and URL refresh.
 //

@@ -78,7 +78,7 @@ public class StorageConsistencyWorker : BackgroundService
                 {
                     var dispatcher = _serviceProvider.GetRequiredService<AdminJobDispatcher>();
                     drained = await dispatcher.DrainAsync(
-                        new[] { AdminJobTypes.ReconcileStorage, AdminJobTypes.ReconcileAlbumStorage, AdminJobTypes.ChaosStorage },
+                        new[] { AdminJobTypes.ReconcileStorage, AdminJobTypes.ReconcileAlbumStorage, AdminJobTypes.ChaosStorage, AdminJobTypes.PurgeFailedPhotos },
                         stoppingToken);
                     if (drained > 0)
                     {

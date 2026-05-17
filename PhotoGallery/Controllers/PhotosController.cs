@@ -1056,7 +1056,8 @@ public class PhotosController : ControllerBase
             AdminJobTypes.ReconcileStorage,
             AdminJobTypes.ReconcileAlbumStorage,
             AdminJobTypes.ReapOrphans,
-            AdminJobTypes.ChaosStorage
+            AdminJobTypes.ChaosStorage,
+            AdminJobTypes.PurgeFailedPhotos
         };
         if (!allowed.Contains(request.JobType, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Unknown jobType '{request.JobType}'. Allowed: {string.Join(", ", allowed)}" });
