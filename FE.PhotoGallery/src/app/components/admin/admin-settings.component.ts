@@ -163,6 +163,21 @@ interface ServiceHealth {
   };
   workers: WorkerStatus[];
   replicas: ReplicaWorkerStatus[];
+  adminJobs: AdminJobSnapshot[];
+}
+
+/** Snapshot of an AdminJob row for the Service Health table. */
+interface AdminJobSnapshot {
+  id: string;
+  jobType: string;
+  albumId?: string | null;
+  status: string;
+  requestedAt: string;
+  requestedBy?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  completedByInstanceId?: string | null;
+  errorMessage?: string | null;
 }
 type UserSortKey = 'email' | 'name' | 'lastLogin' | 'loginCount' | 'downloads' | 'albums' | 'created';
 type SortDir = 'asc' | 'desc';
@@ -737,7 +752,7 @@ type SortDir = 'asc' | 'desc';
                       <div class="job-meta small">
                         every {{ formatInterval(w.interval) }}
                         · last {{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}
-                        · next {{ w.nextRunAt ? (w.nextRunAt | date:'short') : '—' }}
+                        · <strong class="next-tick" [class.imminent]="isImminent(w.nextRunAt)">next {{ formatRelative(w.nextRunAt) }}</strong>
                         <span *ngIf="w.itemsInFlight !== undefined && w.itemsInFlight > 0">
                           · {{ w.itemsInFlight }} in flight
                         </span>
@@ -756,6 +771,54 @@ type SortDir = 'asc' | 'desc';
             </ng-container>
             <tr *ngIf="health() && !h2.replicas?.length">
               <td colspan="4" class="muted">No replicas reporting yet — heartbeat takes ~30s after first start.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 *ngIf="health()">Admin job queue</h3>
+        <p *ngIf="health()" class="muted small" style="margin-top:-4px">
+          Reap / Reconcile clicks enqueue here. Workers drain the queue at the top of every tick.
+          Pending + Running rows always shown; completed/failed rows trimmed to the last 20 from
+          the past 24 hours.
+        </p>
+        <table *ngIf="health() as h3" class="admin-table admin-jobs-table" data-testid="admin-health-jobs">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Requested</th>
+              <th>Started</th>
+              <th>Completed</th>
+              <th>By replica</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let j of h3.adminJobs; trackBy: trackAdminJob"
+                [attr.data-job-id]="j.id"
+                [class.job-active]="j.status === 'pending' || j.status === 'running'"
+                [class.job-failed]="j.status === 'failed'">
+              <td>
+                <code class="job-type">{{ j.jobType }}</code>
+                <div *ngIf="j.albumId" class="muted small">album {{ j.albumId.substring(0, 8) }}…</div>
+              </td>
+              <td>
+                <span class="status-pill" [class]="'status-' + j.status">{{ j.status }}</span>
+              </td>
+              <td class="small">
+                {{ j.requestedAt | date:'short' }}
+                <div *ngIf="j.requestedBy" class="muted">by {{ j.requestedBy }}</div>
+              </td>
+              <td class="small">{{ j.startedAt ? (j.startedAt | date:'mediumTime') : '—' }}</td>
+              <td class="small">
+                {{ j.completedAt ? (j.completedAt | date:'mediumTime') : '—' }}
+                <div *ngIf="j.errorMessage" class="job-error small" [title]="j.errorMessage">
+                  {{ j.errorMessage.length > 60 ? (j.errorMessage.substring(0, 60) + '…') : j.errorMessage }}
+                </div>
+              </td>
+              <td><code class="muted small">{{ j.completedByInstanceId || '—' }}</code></td>
+            </tr>
+            <tr *ngIf="!h3.adminJobs?.length">
+              <td colspan="6" class="muted">No admin jobs in flight or recently completed.</td>
             </tr>
           </tbody>
         </table>
@@ -869,6 +932,25 @@ type SortDir = 'asc' | 'desc';
     .replicas-table .job-meta { color: #6b7280; margin-top: 2px; }
     .replicas-table .job-error { color: #b91c1c; margin-top: 2px; }
     .replicas-table .btn-sm { margin-top: 4px; }
+
+    /* "Next tick" emphasis */
+    .next-tick { color: #1f2937; }
+    .next-tick.imminent { color: #b45309; font-weight: 600; }
+
+    /* Admin job queue */
+    .admin-jobs-table .job-type { font-size: 12px; color: #1f2937; }
+    .admin-jobs-table tr.job-active { background: #fffbeb; }
+    .admin-jobs-table tr.job-active:hover { background: #fef3c7; }
+    .admin-jobs-table tr.job-failed { background: #fef2f2; }
+    .admin-jobs-table .status-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; text-transform: lowercase;
+      background: #e5e7eb; color: #374151;
+    }
+    .admin-jobs-table .status-pill.status-pending  { background: #fef3c7; color: #92400e; }
+    .admin-jobs-table .status-pill.status-running  { background: #dbeafe; color: #1e40af; }
+    .admin-jobs-table .status-pill.status-complete { background: #d1fae5; color: #065f46; }
+    .admin-jobs-table .status-pill.status-failed   { background: #fee2e2; color: #991b1b; }
 
     .role-chip {
       display: inline-block; padding: 2px 8px; margin: 0 4px 2px 0;
@@ -1157,6 +1239,32 @@ export class AdminSettingsComponent {
 
   trackReplica(_index: number, r: ReplicaWorkerStatus): string {
     return r.instanceId;
+  }
+
+  trackAdminJob(_index: number, j: AdminJobSnapshot): string {
+    return j.id;
+  }
+
+  /** Compact relative timestamp ("12s", "3m", "in 5s") for the worker "next tick" cell. */
+  formatRelative(iso: string | null | undefined): string {
+    if (!iso) return '—';
+    const ts = new Date(iso).getTime();
+    if (Number.isNaN(ts)) return '—';
+    const deltaMs = ts - Date.now();
+    const sign = deltaMs >= 0 ? 'in ' : '';
+    const abs = Math.abs(deltaMs);
+    if (abs < 60_000) return `${sign}${Math.round(abs / 1000)}s`;
+    if (abs < 3_600_000) return `${sign}${Math.round(abs / 60_000)}m`;
+    if (abs < 86_400_000) return `${sign}${Math.round(abs / 3_600_000)}h`;
+    return new Date(iso).toLocaleString();
+  }
+
+  /** "Next tick" is imminent when it's already due or within the next 5 seconds. */
+  isImminent(iso: string | null | undefined): boolean {
+    if (!iso) return false;
+    const ts = new Date(iso).getTime();
+    if (Number.isNaN(ts)) return false;
+    return ts - Date.now() <= 5_000;
   }
 
   formatInterval(iso: string | null | undefined): string {

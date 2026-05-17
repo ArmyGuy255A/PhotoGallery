@@ -777,8 +777,48 @@ public class AdminController : ControllerBase
                 ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
             },
             Workers = workers,
-            Replicas = replicas
+            Replicas = replicas,
+            AdminJobs = await GetRecentAdminJobsAsync()
         });
+    }
+
+    /// <summary>
+    /// Returns recent AdminJob rows for the Service Health dashboard:
+    /// every Pending + Running job (regardless of age), plus the last 20
+    /// Completed/Failed jobs from the past 24h. Sized to give admins a
+    /// "what's queued vs. what just ran" view without paginating.
+    /// </summary>
+    private async Task<List<AdminJobStatusDto>> GetRecentAdminJobsAsync()
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        var active = await _ctx.AdminJobs
+            .AsNoTracking()
+            .Where(j => j.Status == AdminJobStatuses.Pending || j.Status == AdminJobStatuses.Running)
+            .OrderBy(j => j.RequestedAt)
+            .ToListAsync();
+        var recentDone = await _ctx.AdminJobs
+            .AsNoTracking()
+            .Where(j => j.Status != AdminJobStatuses.Pending
+                     && j.Status != AdminJobStatuses.Running
+                     && j.RequestedAt >= cutoff)
+            .OrderByDescending(j => j.CompletedAt ?? j.RequestedAt)
+            .Take(20)
+            .ToListAsync();
+        return active.Concat(recentDone)
+            .Select(j => new AdminJobStatusDto
+            {
+                Id = j.Id,
+                JobType = j.JobType,
+                AlbumId = j.AlbumId,
+                Status = j.Status,
+                RequestedAt = j.RequestedAt,
+                RequestedBy = j.RequestedBy,
+                StartedAt = j.StartedAt,
+                CompletedAt = j.CompletedAt,
+                CompletedByInstanceId = j.CompletedByInstanceId,
+                ErrorMessage = j.ErrorMessage
+            })
+            .ToList();
     }
 
     [HttpPost("service-health/workers/{name}/trigger")]
@@ -864,6 +904,27 @@ public class ServiceHealthDto
     public List<WorkerStatusDto> Workers { get; set; } = new();
     /// <summary>Replica-centric view: one entry per physical replica (hostname), with the jobs it's running nested inside.</summary>
     public List<ReplicaWorkerStatusDto> Replicas { get; set; } = new();
+    /// <summary>Recent admin-job queue contents: all pending+running, plus last 20 completed/failed from the past 24h.</summary>
+    public List<AdminJobStatusDto> AdminJobs { get; set; } = new();
+}
+
+/// <summary>
+/// Snapshot of an AdminJob row for the Service Health dashboard. Mirrors
+/// the schema but omits ResultJson (separately fetchable via
+/// GET /api/photos/admin/jobs/{id}).
+/// </summary>
+public class AdminJobStatusDto
+{
+    public Guid Id { get; set; }
+    public string JobType { get; set; } = string.Empty;
+    public Guid? AlbumId { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public DateTime RequestedAt { get; set; }
+    public string? RequestedBy { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public string? CompletedByInstanceId { get; set; }
+    public string? ErrorMessage { get; set; }
 }
 
 public class ReplicaWorkerStatusDto
