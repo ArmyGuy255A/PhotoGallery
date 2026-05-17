@@ -627,12 +627,37 @@ public class AdminController : ControllerBase
     [HttpGet("service-health")]
     public async Task<ActionResult<ServiceHealthDto>> GetServiceHealth()
     {
-        var photoStatuses = await _ctx.Photos
-            .GroupBy(p => p.ProcessingStatus)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
+        // Photo lifecycle counts. Uploading + Failed read straight from the
+        // Photo.ProcessingStatus column (only the reconciler / upload path
+        // mutates those). Processing + Pending + Complete are DERIVED from
+        // the per-quality ProcessingQueueItem table so the dashboard reflects
+        // the live worker state without waiting on a reconcile cycle:
+        //   * Processing = photo has >= 1 queue item with Status=Processing
+        //                  (a worker has leased a quality for this photo).
+        //   * Pending    = photo has >= 1 Pending item AND no Processing items
+        //                  (waiting for a worker to pick up).
+        //   * Complete   = every queue item for the photo is Complete.
+        //                  (Final Status=Complete on the photo column is also
+        //                  set by reconcile but this is a faster signal.)
+        var uploading = await _ctx.Photos.CountAsync(p => p.ProcessingStatus == PhotoProcessingStatus.Uploading);
+        var failed    = await _ctx.Photos.CountAsync(p => p.ProcessingStatus == PhotoProcessingStatus.Failed);
+
+        var live = await _ctx.Photos
+            .Where(p => p.ProcessingStatus != PhotoProcessingStatus.Uploading
+                     && p.ProcessingStatus != PhotoProcessingStatus.Failed)
+            .Select(p => new
+            {
+                HasProcessing = _ctx.ProcessingQueueItems
+                    .Any(i => i.PhotoId == p.Id && i.Status == PhotoGallery.Models.ProcessingStatus.Processing),
+                HasPending = _ctx.ProcessingQueueItems
+                    .Any(i => i.PhotoId == p.Id && i.Status == PhotoGallery.Models.ProcessingStatus.Pending),
+                HasAnyItem = _ctx.ProcessingQueueItems.Any(i => i.PhotoId == p.Id),
+            })
             .ToListAsync();
-        int countFor(PhotoProcessingStatus s) =>
-            photoStatuses.FirstOrDefault(x => x.Status == s)?.Count ?? 0;
+        var processing = live.Count(x => x.HasProcessing);
+        var pending    = live.Count(x => !x.HasProcessing && (x.HasPending || !x.HasAnyItem));
+        var complete   = live.Count(x => !x.HasProcessing && !x.HasPending && x.HasAnyItem);
+        var totalPhotos = uploading + failed + live.Count;
 
         var queueByStatus = await _ctx.ProcessingQueueItems
             .GroupBy(i => i.Status)
@@ -790,12 +815,12 @@ public class AdminController : ControllerBase
             },
             Photos = new PhotoCountsDto
             {
-                Total = photoStatuses.Sum(x => x.Count),
-                Uploading = countFor(PhotoProcessingStatus.Uploading),
-                Pending = countFor(PhotoProcessingStatus.Pending),
-                Processing = countFor(PhotoProcessingStatus.Processing),
-                Complete = countFor(PhotoProcessingStatus.Complete),
-                Failed = countFor(PhotoProcessingStatus.Failed)
+                Total = totalPhotos,
+                Uploading = uploading,
+                Pending = pending,
+                Processing = processing,
+                Complete = complete,
+                Failed = failed
             },
             Queue = new QueueCountsDto
             {
