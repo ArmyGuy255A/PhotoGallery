@@ -7,12 +7,23 @@ namespace PhotoGallery.Services.Processing;
 /// <summary>
 /// Hard-deletes Photo rows that the reconciler has marked Failed. Used to
 /// clean up DB orphans (Photo rows whose original blob is gone — e.g. after
-/// chaos or after a partial upload failure). The accompanying storage
-/// blobs, if any, will be cleaned up by the next reaper pass since the
-/// Photo row no longer exists to anchor them.
+/// chaos or after a partial upload failure).
 ///
-/// Destructive — opt-in via the admin Service Health "Enqueue" form. Not
-/// scheduled automatically; the admin explicitly chooses when to purge.
+/// Cascade is NOT configured on every Photo-referencing FK
+/// (ProcessingQueues.PhotoId is RESTRICT, for example), so we explicitly
+/// drop each dependent set first inside one SaveChanges per batch:
+///
+///   1. ProcessingQueueItems  (-> Photos via PhotoId; also -> ProcessingQueueId)
+///   2. ProcessingQueues      (-> Photos via PhotoId)
+///   3. PhotoVersions         (-> Photos)
+///   4. PhotoVersionUrls      (-> Photos)
+///   5. PhotoFiles            (-> Photos)
+///   6. UserCartItems         (-> Photos)
+///   7. Downloads             (-> Photos)
+///   8. Photos                (the row itself)
+///
+/// Order matters because ProcessingQueueItem has FKs to BOTH Photo and
+/// ProcessingQueue — drop the items first, then the parent queue.
 /// </summary>
 public class FailedPhotoPurgeService
 {
@@ -45,17 +56,23 @@ public class FailedPhotoPurgeService
             "FailedPhotoPurgeService: hard-deleting {Count} Failed Photo rows across {Albums} album(s)",
             failed.Count, failed.Select(f => f.AlbumId).Distinct().Count());
 
-        // Delete in batches to avoid a single huge transaction. EF Core 9
-        // ExecuteDeleteAsync compiles to a single DELETE per call.
         var totalDeleted = 0;
         const int BatchSize = 500;
         for (var offset = 0; offset < failed.Count; offset += BatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var batchIds = failed.Skip(offset).Take(BatchSize).Select(f => f.Id).ToList();
-            // Cascade is configured on the Photo navigations so PhotoVersions,
-            // PhotoVersionUrls, ProcessingQueueItems, and ProcessingQueues are
-            // dropped along with the Photo.
+
+            // Order matters — drop the leaf tables first so the FK chain to
+            // Photos can finally resolve.
+            await db.ProcessingQueueItems.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.ProcessingQueues.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.PhotoVersions.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.PhotoVersionUrls.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.PhotoFiles.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.UserCartItems.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+            await db.Downloads.Where(x => batchIds.Contains(x.PhotoId)).ExecuteDeleteAsync(cancellationToken);
+
             var deleted = await db.Photos.Where(p => batchIds.Contains(p.Id)).ExecuteDeleteAsync(cancellationToken);
             totalDeleted += deleted;
         }
