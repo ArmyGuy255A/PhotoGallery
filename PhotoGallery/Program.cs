@@ -121,28 +121,11 @@ builder.Services.AddApplicationInsightsTelemetry();
 var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
 builder.WebHost.UseUrls(urls);
 
-// Database provider switch — Sqlite (all-local default) | SqlServer (Azure-backed dev).
-// See PhotoGallery/Data/DatabaseProviderSelector.cs for behavior.
-//
-// Migration sets are provider-specific because EF Core ties each migration to
-// a concrete DbContext type:
-//   - Sqlite     → ApplicationDbContext       (Data/Migrations/)
-//   - SqlServer  → ApplicationDbContextSqlServer (Data/Migrations/SqlServer/)
-// Consumers always inject ApplicationDbContext; the SqlServer subclass is
-// reachable through the same base type via a forwarding scoped registration.
-var dbProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
-if (string.Equals(dbProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddDbContext<ApplicationDbContextSqlServer>(options =>
-        DatabaseProviderSelector.Apply(options, builder.Configuration));
-    builder.Services.AddScoped<ApplicationDbContext>(sp =>
-        sp.GetRequiredService<ApplicationDbContextSqlServer>());
-}
-else
-{
-    builder.Services.AddDbContext<ApplicationDbContext>(options =>
-        DatabaseProviderSelector.Apply(options, builder.Configuration));
-}
+// EF Core: single context, SQL Server only. Local dev uses Docker SQL Server
+// (`docker compose up -d mssql`), trial/prod use Azure SQL. See
+// PhotoGallery/Data/DatabaseProviderSelector.cs for connection wiring.
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    DatabaseProviderSelector.Apply(options, builder.Configuration));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 // Configure CORS — AllowFrontendDev unions ConfigurationSettings.Frontend.Url

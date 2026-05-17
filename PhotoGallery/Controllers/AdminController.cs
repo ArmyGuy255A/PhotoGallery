@@ -914,7 +914,7 @@ public class WorkerStatusDto
     public bool CanTrigger { get; set; }
     /// <summary>Replica that owns this entry. Local in-memory entries get filled by the heartbeat merge in GetServiceHealth.</summary>
     public string? InstanceId { get; set; }
-    /// <summary>True if the heartbeat row is fresh (within 2x its interval, min 90s). False = worker has gone silent.</summary>
+    /// <summary>True if the heartbeat row is fresher than <c>WorkerHeartbeatThresholds.OfflineAfter</c>.</summary>
     public bool IsAlive { get; set; } = true;
     /// <summary>Per-replica running total of items processed since startup.</summary>
     public long ItemsProcessedTotal { get; set; }
@@ -922,6 +922,12 @@ public class WorkerStatusDto
     public int ItemsInFlight { get; set; }
     /// <summary>Last error from the worker (sticky until a successful tick).</summary>
     public string? LastError { get; set; }
+    /// <summary>Process CPU% across all cores at the heartbeat instant (0..100). Null on the very first heartbeat from a replica.</summary>
+    public double? CpuPercent { get; set; }
+    /// <summary>Process working-set bytes at the heartbeat instant.</summary>
+    public long? WorkingSetBytes { get; set; }
+    /// <summary>.NET managed heap bytes at the heartbeat instant.</summary>
+    public long? ManagedHeapBytes { get; set; }
 }
 
 public class SetRolesRequest

@@ -221,3 +221,9 @@ PhotoGallery.code-workspace
 # Terraform plan artifacts
 tfplan*
 *.tfplan*
+
+# Personal VS Code preferences (workspace tasks.json + launch.json are tracked above)
+.vscode/settings.json
+.vscode/extensions.json
+.vscode/*.md
+FE.PhotoGallery/.vscode/extensions.json

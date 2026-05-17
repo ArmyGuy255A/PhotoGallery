@@ -666,9 +666,9 @@ type SortDir = 'asc' | 'desc';
               <dt>Workers</dt><dd>{{ h.replica.workersEnabled ? 'enabled' : 'disabled' }}</dd>
             </dl>
             <p class="muted small">
-              When scaled out, refresh repeatedly to see other replicas
-              answer. Workers + queue counts below reflect all replicas
-              (shared DB); the Workers table reflects only this one.
+              Photos + queue counts below reflect all replicas (shared DB).
+              The Replicas table lists every replica that has heartbeated
+              recently, grouped by hostname, with their active jobs nested.
             </p>
           </div>
           <div class="stat-card">
@@ -699,31 +699,63 @@ type SortDir = 'asc' | 'desc';
           </div>
         </div>
 
-        <h3 *ngIf="health()">Workers</h3>
-        <table *ngIf="health() as h2" class="admin-table" data-testid="admin-health-workers">
+        <h3 *ngIf="health()">Replicas</h3>
+        <table *ngIf="health() as h2" class="admin-table replicas-table" data-testid="admin-health-replicas">
           <thead>
             <tr>
-              <th>Worker</th>
-              <th>Interval</th>
-              <th>Last ran</th>
-              <th>Next run</th>
-              <th></th>
+              <th>Hostname</th>
+              <th>Role</th>
+              <th>Alive</th>
+              <th>Active jobs</th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let w of h2.workers" [attr.data-worker]="w.name">
-              <td><strong>{{ w.displayName }}</strong><br /><code class="muted small">{{ w.name }}</code></td>
-              <td>{{ formatInterval(w.interval) }}</td>
-              <td>{{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}</td>
-              <td>{{ w.nextRunAt ? (w.nextRunAt | date:'short') : '—' }}</td>
-              <td>
-                <button type="button" class="btn-primary btn-sm"
-                  [disabled]="!w.canTrigger || triggeringWorker() === w.name"
-                  (click)="triggerWorker(w)"
-                  [attr.data-testid]="'admin-health-trigger-' + w.name">
-                  {{ triggeringWorker() === w.name ? 'Triggering…' : 'Trigger now' }}
-                </button>
-              </td>
+            <ng-container *ngFor="let r of h2.replicas; trackBy: trackReplica">
+              <tr class="replica-row" [attr.data-replica]="r.instanceId">
+                <td>
+                  <code class="hostname">{{ r.instanceId }}</code>
+                </td>
+                <td>
+                  <span class="role-badge" [class.role-worker]="r.role === 'worker'"
+                                            [class.role-api]="r.role === 'api-only'"
+                                            [class.role-both]="r.role === 'api+worker'">
+                    {{ r.role }}
+                  </span>
+                </td>
+                <td>
+                  <span class="alive-dot" [class.alive]="r.isAlive"></span>
+                  {{ r.isAlive ? 'yes' : 'no' }}
+                </td>
+                <td class="jobs-cell">
+                  <span *ngIf="!r.jobs?.length" class="muted small">no active jobs</span>
+                  <ul *ngIf="r.jobs?.length" class="jobs-list">
+                    <li *ngFor="let w of r.jobs" [attr.data-job]="w.name">
+                      <div class="job-line">
+                        <strong>{{ w.displayName }}</strong>
+                        <code class="muted small">{{ w.name }}</code>
+                      </div>
+                      <div class="job-meta small">
+                        every {{ formatInterval(w.interval) }}
+                        · last {{ w.lastRanAt ? (w.lastRanAt | date:'short') : '—' }}
+                        · next {{ w.nextRunAt ? (w.nextRunAt | date:'short') : '—' }}
+                        <span *ngIf="w.itemsInFlight !== undefined && w.itemsInFlight > 0">
+                          · {{ w.itemsInFlight }} in flight
+                        </span>
+                      </div>
+                      <div *ngIf="w.lastError" class="job-error small">{{ w.lastError }}</div>
+                      <button type="button" class="btn-primary btn-sm"
+                        [disabled]="!w.canTrigger || triggeringWorker() === w.name"
+                        (click)="triggerWorker(w)"
+                        [attr.data-testid]="'admin-health-trigger-' + w.name">
+                        {{ triggeringWorker() === w.name ? 'Triggering…' : 'Trigger now' }}
+                      </button>
+                    </li>
+                  </ul>
+                </td>
+              </tr>
+            </ng-container>
+            <tr *ngIf="health() && !h2.replicas?.length">
+              <td colspan="4" class="muted">No replicas reporting yet — heartbeat takes ~30s after first start.</td>
             </tr>
           </tbody>
         </table>
@@ -810,6 +842,33 @@ type SortDir = 'asc' | 'desc';
     .muted { color: #9ca3af; }
     .center { text-align: center; }
     .small { font-size: 12px; }
+
+    /* Replica-centric Service Health table */
+    .replicas-table .hostname { font-size: 12px; color: #374151; word-break: break-all; }
+    .replicas-table .role-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; background: #f3f4f6; color: #374151;
+      text-transform: lowercase;
+    }
+    .replicas-table .role-badge.role-worker { background: #dbeafe; color: #1e40af; }
+    .replicas-table .role-badge.role-api    { background: #f3f4f6; color: #4b5563; }
+    .replicas-table .role-badge.role-both   { background: #fef3c7; color: #92400e; }
+    .replicas-table .alive-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #d1d5db; margin-right: 4px; vertical-align: middle;
+    }
+    .replicas-table .alive-dot.alive { background: #10b981; }
+    .replicas-table .jobs-cell { min-width: 320px; }
+    .replicas-table .jobs-list { list-style: none; padding: 0; margin: 0; }
+    .replicas-table .jobs-list > li {
+      padding: 6px 0; border-bottom: 1px dashed #e5e7eb;
+    }
+    .replicas-table .jobs-list > li:last-child { border-bottom: 0; }
+    .replicas-table .job-line { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .replicas-table .job-line strong { font-size: 13px; }
+    .replicas-table .job-meta { color: #6b7280; margin-top: 2px; }
+    .replicas-table .job-error { color: #b91c1c; margin-top: 2px; }
+    .replicas-table .btn-sm { margin-top: 4px; }
 
     .role-chip {
       display: inline-block; padding: 2px 8px; margin: 0 4px 2px 0;
@@ -1094,6 +1153,10 @@ export class AdminSettingsComponent {
       clearInterval(this.healthTimer);
       this.healthTimer = null;
     }
+  }
+
+  trackReplica(_index: number, r: ReplicaWorkerStatus): string {
+    return r.instanceId;
   }
 
   formatInterval(iso: string | null | undefined): string {

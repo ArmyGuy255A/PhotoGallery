@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PhotoGallery.Data;
 
@@ -11,9 +12,11 @@ using PhotoGallery.Data;
 namespace PhotoGallery.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260516173032_AddRuntimeSettingsSqlServer")]
+    partial class AddRuntimeSettingsSqlServer
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -210,58 +213,6 @@ namespace PhotoGallery.Data.Migrations
                     b.HasIndex("IsDeleted");
 
                     b.ToTable("AccessCodes");
-                });
-
-            modelBuilder.Entity("PhotoGallery.Models.AdminJob", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("AlbumId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("CompletedByInstanceId")
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasMaxLength(2048)
-                        .HasColumnType("nvarchar(2048)");
-
-                    b.Property<string>("JobType")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTime>("RequestedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("RequestedBy")
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
-                    b.Property<string>("ResultJson")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("nvarchar(32)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RequestedAt");
-
-                    b.HasIndex("JobType", "Status");
-
-                    b.ToTable("AdminJobs");
                 });
 
             modelBuilder.Entity("PhotoGallery.Models.Album", b =>
@@ -916,65 +867,6 @@ namespace PhotoGallery.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("UserCartItems");
-                });
-
-            modelBuilder.Entity("PhotoGallery.Models.WorkerHeartbeat", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<double?>("CpuPercent")
-                        .HasColumnType("float");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.Property<string>("InstanceId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("nvarchar(128)");
-
-                    b.Property<int>("IntervalSeconds")
-                        .HasColumnType("int");
-
-                    b.Property<int>("ItemsInFlight")
-                        .HasColumnType("int");
-
-                    b.Property<long>("ItemsProcessedTotal")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("LastError")
-                        .HasMaxLength(512)
-                        .HasColumnType("nvarchar(512)");
-
-                    b.Property<DateTime>("LastHeartbeatAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("LastRanAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<long?>("ManagedHeapBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("WorkerName")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<long?>("WorkingSetBytes")
-                        .HasColumnType("bigint");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("LastHeartbeatAt");
-
-                    b.HasIndex("WorkerName", "InstanceId")
-                        .IsUnique();
-
-                    b.ToTable("WorkerHeartbeats");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

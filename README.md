@@ -159,7 +159,7 @@ cd FE.PhotoGallery; npm start        # frontend on :4300
 Backend runs on your laptop but reads secrets from **Azure Key Vault** and talks to **real Azure Blob Storage** + **Azure SQL Database**. Used to validate the production wire without deploying. Real Google OAuth + JWT stay on (no `DISABLE_AUTH`).
 
 - **Storage:** Azure Blob (`Storage:Provider=AzureBlob`, `Storage:AzureBlob:AccountUrl=https://<acct>.blob.core.windows.net/`)
-- **Database:** Azure SQL (`Database:Provider=SqlServer`, connection string resolved from Key Vault)
+- **Database:** Azure SQL (connection string resolved from Key Vault). Local dev uses Docker SQL Server (see `docker-compose.yml`).
 - **Secrets:** Key Vault, accessed via `DefaultAzureCredential` — `az login` locally, Managed Identity in Azure
 - **Launch profile:** `Trial` (sets `ASPNETCORE_ENVIRONMENT=Trial`, which auto-loads `appsettings.Trial.json`)
 
