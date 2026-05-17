@@ -212,6 +212,74 @@ public class StorageConsistencyService
             var item = existingItems.FirstOrDefault(i => i.Quality == quality);
             await ReconcileQualityAsync(photo, queue, quality, present, item, report, mutations);
         }
+
+        // Final pass: advance Photo.ProcessingStatus + Has* flags to match the
+        // reality on disk. No active code path sets ProcessingStatus=Complete
+        // anywhere, so without this step photos stay in Pending forever even
+        // when their blobs all land. A photo is Complete when all 7 expected
+        // blobs are on disk: original + thumbnail/low/medium/high +
+        // thumbnail-watermarked + medium-watermarked.
+        await ReconcilePhotoStatusAsync(photo, presentKeys, mutations);
+    }
+
+    /// <summary>
+    /// Sync <see cref="Photo.ProcessingStatus"/> + per-quality Has* flags to
+    /// what is actually present in storage. A photo is Complete iff ALL 7 of
+    /// these blobs exist: original.jpg, thumbnail.jpg, low.jpg, medium.jpg,
+    /// high.jpg, thumbnail-watermarked.jpg, medium-watermarked.jpg.
+    /// The QualityType.Watermark queue item produces the two watermarked
+    /// variants, so missing either means the watermark step has not run yet.
+    /// </summary>
+    private async Task ReconcilePhotoStatusAsync(
+        Photo photo, HashSet<string> presentKeys, MutationFlags mutations)
+    {
+        bool hasOriginal = presentKeys.Contains(BuildKey(photo, "original"));
+        bool hasThumb    = presentKeys.Contains(BuildKey(photo, "thumbnail"));
+        bool hasLow      = presentKeys.Contains(BuildKey(photo, "low"));
+        bool hasMedium   = presentKeys.Contains(BuildKey(photo, "medium"));
+        bool hasHigh     = presentKeys.Contains(BuildKey(photo, "high"));
+        bool hasThumbWm  = presentKeys.Contains(BuildKey(photo, "thumbnail-watermarked"));
+        bool hasMediumWm = presentKeys.Contains(BuildKey(photo, "medium-watermarked"));
+        bool allRequired = hasOriginal && hasThumb && hasLow && hasMedium
+                           && hasHigh && hasThumbWm && hasMediumWm;
+
+        var changed = false;
+        if (photo.HasThumbnail != hasThumb)  { photo.HasThumbnail = hasThumb;  changed = true; }
+        if (photo.HasLow       != hasLow)    { photo.HasLow       = hasLow;    changed = true; }
+        if (photo.HasMedium    != hasMedium) { photo.HasMedium    = hasMedium; changed = true; }
+        if (photo.HasHigh      != hasHigh)   { photo.HasHigh      = hasHigh;   changed = true; }
+
+        var desired = allRequired ? PhotoProcessingStatus.Complete : PhotoProcessingStatus.Pending;
+        // Do not touch Uploading or Failed states; earlier code in the same
+        // method owns those transitions.
+        if (photo.ProcessingStatus != PhotoProcessingStatus.Uploading
+            && photo.ProcessingStatus != PhotoProcessingStatus.Failed
+            && photo.ProcessingStatus != desired)
+        {
+            _logger.LogInformation(
+                "Photo {PhotoId}: advancing ProcessingStatus {From} -> {To} (orig={O} T={T} L={L} M={M} H={H} Twm={TW} Mwm={MW})",
+                photo.Id, photo.ProcessingStatus, desired,
+                hasOriginal, hasThumb, hasLow, hasMedium, hasHigh, hasThumbWm, hasMediumWm);
+            photo.ProcessingStatus = desired;
+            if (desired == PhotoProcessingStatus.Complete)
+            {
+                photo.ProcessingComplete = true;
+                photo.ProcessingCompletedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                photo.ProcessingComplete = false;
+                photo.ProcessingCompletedAt = null;
+            }
+            changed = true;
+        }
+
+        if (changed)
+        {
+            await _photoRepository.UpdateAsync(photo);
+            await _photoRepository.SaveChangesAsync();
+            mutations.PhotoChanged = true;
+        }
     }
 
     private async Task ReconcileQualityAsync(
