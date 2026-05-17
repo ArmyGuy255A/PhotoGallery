@@ -140,6 +140,30 @@ public static class SettingsCatalogue
             "Chaos:IncludeDerivedVersions", "Chaos", "bool", "true",
             "If true, derived quality variants (thumbnail/low/medium/high/watermark) are eligible for deletion.",
             RestartRequired: false),
+
+        // ---------------------------------------------------------------
+        // Worker tick intervals — how often each BackgroundService wakes up.
+        // The two admin-job-draining workers (StorageConsistency,
+        // OrphanedBlobReaper) only poll the AdminJob queue, so a longer
+        // interval just means admin clicks take slightly longer to pick up.
+        // The AdminJobScheduler enqueue cadence is separate.
+        // ---------------------------------------------------------------
+        new SettingCatalogueEntry(
+            "Workers:StorageConsistency:TickIntervalSeconds", "Workers", "int", "10",
+            "How often the StorageConsistencyWorker polls the AdminJob queue for reconcile-storage / reconcile-album-storage / chaos-storage jobs. Lower = snappier admin clicks but more DB poll traffic. Default 10s. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:OrphanedBlobReaper:TickIntervalSeconds", "Workers", "int", "10",
+            "How often the OrphanedBlobReaperWorker polls the AdminJob queue for reap-orphans jobs. Reaps are rare; 30-60s is fine in production. Default 10s. Hot-reload — takes effect on the next tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:Scheduler:ReconcileIntervalHours", "Workers", "int", "1",
+            "How often the API-side AdminJobScheduler enqueues a routine reconcile-storage job (idempotently — duplicates are deduped). Hourly is fine for steady-state; lower if you want faster catch of corruption / chaos. Hot-reload — takes effect on the next scheduler tick.",
+            RestartRequired: false),
+        new SettingCatalogueEntry(
+            "Workers:Scheduler:ReapIntervalHours", "Workers", "int", "6",
+            "How often the API-side AdminJobScheduler enqueues a routine reap-orphans job (idempotently). 6-12h is fine; reaps are heavy and rarely-needed at steady state. Hot-reload — takes effect on the next scheduler tick.",
+            RestartRequired: false),
     };
 }
 

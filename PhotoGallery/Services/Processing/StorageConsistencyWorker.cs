@@ -68,6 +68,11 @@ public class StorageConsistencyWorker : BackgroundService
             DateTime lastHeartbeatAt = DateTime.UtcNow;
             while (!stoppingToken.IsCancellationRequested)
             {
+                // Resolve the tick interval live each iteration so admin
+                // changes to Workers:StorageConsistency:TickIntervalSeconds
+                // take effect on the next sleep without restart.
+                var tickInterval = await ResolveTickIntervalAsync(stoppingToken);
+
                 int drained = 0;
                 try
                 {
@@ -96,13 +101,13 @@ public class StorageConsistencyWorker : BackgroundService
                     try
                     {
                         var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
-                        await hb.StampAsync(WorkerName, "Storage ↔ DB consistency", TickInterval, now, stoppingToken);
+                        await hb.StampAsync(WorkerName, "Storage ↔ DB consistency", tickInterval, now, stoppingToken);
                         lastHeartbeatAt = now;
                     }
                     catch { /* heartbeat is best-effort */ }
                 }
 
-                try { await Task.Delay(TickInterval, stoppingToken); }
+                try { await Task.Delay(tickInterval, stoppingToken); }
                 catch (OperationCanceledException) { break; }
             }
         }
@@ -114,6 +119,23 @@ public class StorageConsistencyWorker : BackgroundService
         {
             _logger.LogError(ex, "StorageConsistencyWorker encountered fatal error");
             throw;
+        }
+    }
+
+    private async Task<TimeSpan> ResolveTickIntervalAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+            var seconds = Math.Max(1, await resolver.GetIntAsync(
+                "Workers:StorageConsistency:TickIntervalSeconds",
+                (int)TickInterval.TotalSeconds, ct));
+            return TimeSpan.FromSeconds(seconds);
+        }
+        catch
+        {
+            return TickInterval;
         }
     }
 }

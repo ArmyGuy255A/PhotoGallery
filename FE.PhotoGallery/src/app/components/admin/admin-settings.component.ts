@@ -590,8 +590,9 @@ type SortDir = 'asc' | 'desc';
                   [attr.data-testid]="'admin-setting-input-' + s.key" />
                 <select *ngIf="s.dataType === 'bool'"
                   class="form-input"
-                  [value]="settingValueFor(s)"
-                  (change)="setSettingDraft(s.key, $any($event.target).value)"
+                  [ngModel]="settingValueFor(s)"
+                  (ngModelChange)="setSettingDraft(s.key, $event)"
+                  [ngModelOptions]="{ standalone: true }"
                   [attr.data-testid]="'admin-setting-input-' + s.key">
                   <option value="true">true</option>
                   <option value="false">false</option>

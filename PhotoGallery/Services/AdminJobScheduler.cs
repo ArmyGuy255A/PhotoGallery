@@ -33,8 +33,8 @@ public class AdminJobScheduler : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AdminJobScheduler> _logger;
 
-    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromHours(1);
-    private static readonly TimeSpan ReapInterval = TimeSpan.FromHours(6);
+    private static readonly TimeSpan DefaultReconcileInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DefaultReapInterval = TimeSpan.FromHours(6);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(1);
 
     private DateTime _lastReconcileEnqueued = DateTime.MinValue;
@@ -49,8 +49,8 @@ public class AdminJobScheduler : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "AdminJobScheduler started (reconcile every {Reconcile}, reap every {Reap})",
-            ReconcileInterval, ReapInterval);
+            "AdminJobScheduler started (defaults: reconcile every {Reconcile}, reap every {Reap}; both hot-reloadable via Workers:Scheduler:*)",
+            DefaultReconcileInterval, DefaultReapInterval);
 
         // Small startup delay so the API finishes booting before we touch
         // the DB. Avoids racing the migration step.
@@ -69,13 +69,23 @@ public class AdminJobScheduler : BackgroundService
     {
         try
         {
+            // Resolve intervals live so admin changes to
+            // Workers:Scheduler:Reconcile/ReapIntervalHours take effect on
+            // the next scheduler tick without restart.
+            var reconcileInterval = await ResolveIntervalAsync(
+                "Workers:Scheduler:ReconcileIntervalHours",
+                DefaultReconcileInterval, cancellationToken);
+            var reapInterval = await ResolveIntervalAsync(
+                "Workers:Scheduler:ReapIntervalHours",
+                DefaultReapInterval, cancellationToken);
+
             var now = DateTime.UtcNow;
-            if (now - _lastReconcileEnqueued >= ReconcileInterval)
+            if (now - _lastReconcileEnqueued >= reconcileInterval)
             {
                 await EnqueueIfNotPresentAsync(AdminJobTypes.ReconcileStorage, cancellationToken);
                 _lastReconcileEnqueued = now;
             }
-            if (now - _lastReapEnqueued >= ReapInterval)
+            if (now - _lastReapEnqueued >= reapInterval)
             {
                 await EnqueueIfNotPresentAsync(AdminJobTypes.ReapOrphans, cancellationToken);
                 _lastReapEnqueued = now;
@@ -84,6 +94,21 @@ public class AdminJobScheduler : BackgroundService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "AdminJobScheduler tick failed");
+        }
+    }
+
+    private async Task<TimeSpan> ResolveIntervalAsync(string key, TimeSpan fallback, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+            var hours = Math.Max(1, await resolver.GetIntAsync(key, (int)fallback.TotalHours, ct));
+            return TimeSpan.FromHours(hours);
+        }
+        catch
+        {
+            return fallback;
         }
     }
 
