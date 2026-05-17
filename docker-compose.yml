@@ -4,8 +4,7 @@ services:
   # MS SQL Server 2022 (Linux container, runs natively on WSL2 / Linux Docker).
   # Production runs Azure SQL Server, so this gives true dev/prod parity for
   # the data layer — same provider, same migration set, same transactional
-  # semantics. Replaces the previous Sqlite default which fell over once we
-  # went to the split API + N workers topology (single-writer lock).
+  # semantics. Required: there is no Sqlite or InMemory runtime path.
   #
   # Bring up before the API:
   #   docker compose up -d mssql
@@ -110,7 +109,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: 5105
       ASPNETCORE_HTTPS_PORTS: 7105
-      ConnectionStrings__DefaultConnection: "Data Source=app.db"
+      ConnectionStrings__DefaultConnection: "Server=mssql,1433;Database=PhotoGalleryDev;User Id=sa;Password=PhotoGallery!Dev123;TrustServerCertificate=true;MultipleActiveResultSets=true"
       Storage__Provider: "Minio"
       Storage__Minio__Endpoint: "minio:9000"
       Storage__Minio__AccessKey: "minioadmin"
@@ -121,6 +120,8 @@ services:
       - "5105:5105"
       - "7105:7105"
     depends_on:
+      mssql:
+        condition: service_healthy
       minio:
         condition: service_healthy
 

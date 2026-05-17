@@ -118,8 +118,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
     /// Atomically claim a batch of work via the DB-level lease. On SQL Server uses the
     /// <c>UPDATE TOP (N) ... OUTPUT inserted.Id ...</c> pattern so the SELECT + UPDATE is
     /// one statement and two workers (in-instance or cross-instance) cannot pick the same
-    /// row. On Sqlite / InMemory falls back to a select-then-update (sufficient for tests
-    /// and single-instance dev). Reference: Phase 4 scope §4.
+    /// row. On the InMemory test provider falls back to a select-then-update. Reference: Phase 4 scope §4.
     /// </summary>
     public async Task<IReadOnlyList<ProcessingQueueItem>> LeaseNextBatchAsync(
         int batchSize,
@@ -191,7 +190,7 @@ public class ProcessingQueueItemRepository : Repository<ProcessingQueueItem>, IP
                 .ToListAsync(cancellationToken);
         }
 
-        // Non-SqlServer fallback. Best-effort lease — tests + single-instance Sqlite dev.
+        // InMemory test-provider fallback. Best-effort lease — only used by the test suite.
         var now = DateTime.UtcNow;
         var leaseUntil = now.Add(leaseDuration);
         var candidates = await _dbSet

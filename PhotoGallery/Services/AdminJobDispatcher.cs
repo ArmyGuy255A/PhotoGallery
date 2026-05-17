@@ -13,7 +13,7 @@ namespace PhotoGallery.Services;
 /// normal scheduled work.
 ///
 /// Claim is atomic via an UPDATE-FROM-CTE shape on SqlServer (with a
-/// best-effort Sqlite fallback for tests). Once claimed, status flips
+/// best-effort fallback for the InMemory test provider). Once claimed, status flips
 /// Pending → Running, and the worker has up to 10 minutes before another
 /// replica considers it abandoned (not yet implemented; admin reconciles
 /// today are seconds-to-minutes, not hours).

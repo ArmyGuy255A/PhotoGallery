@@ -128,7 +128,7 @@ All in `D:\repos\PhotoGallery\PhotoGallery\Architecture\`:
 - **ORM:** Entity Framework Core (code-first)
 - **Migration:** Auto-migration on app startup
 - **Pattern:** Generic Repository with Specifications
-- **Database:** SQLite (dev), PostgreSQL (prod)
+- **Database:** SQL Server (dev), PostgreSQL (prod)
 
 ### Service Layer
 - **Pattern:** Three-layer architecture (Domain/Infrastructure/Presentation)

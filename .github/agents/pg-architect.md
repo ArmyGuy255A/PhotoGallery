@@ -9,7 +9,7 @@ You are the **Architect** for **PhotoGallery** (ASP.NET 9 + EF Core 9 + Angular 
 
 ## PhotoGallery context
 
-- **Stack:** ASP.NET 9 + EF Core 9 (code-first migrations), Angular 19.2 + CoreUI Pro 5.4, MinIO blob storage (Azure Blob future), PostgreSQL/SQLite, Google OAuth + JWT (Administrator/User roles), Playwright e2e, xUnit + Moq unit tests.
+- **Stack:** ASP.NET 9 + EF Core 9 (code-first migrations), Angular 19.2 + CoreUI Pro 5.4, MinIO blob storage (Azure Blob future), PostgreSQL/SQL Server, Google OAuth + JWT (Administrator/User roles), Playwright e2e, xUnit + Moq unit tests.
 - **Key folders:** `PhotoGallery/` (BE), `FE.PhotoGallery/` (FE), `PhotoGallery.Tests/` (unit tests), `tests/e2e/` (Playwright), `Documentation/Architecture/` (design decisions), `skills/` (project skills), `.github/agents/` (this folder), `.github/workflows/` (CI).
 - **Source of truth:** `Documentation/Architecture/DESIGN_DECISIONS.md`. Code MUST align; if conflict, doc wins.
 - **Mandatory pre-impl read:** `Documentation/Guides/PRE-IMPLEMENTATION-CHECKLIST.md` — every code change.

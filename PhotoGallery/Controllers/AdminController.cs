@@ -77,9 +77,8 @@ public class AdminController : ControllerBase
         {
             var s = search.Trim();
             // Use ToLower() in EF translation rather than EF.Functions.Like
-            // so the filter works identically on Sqlite (case-insensitive
-            // FOLD via ToLower) and SqlServer (case-insensitive default
-            // collation; ToLower is a no-op there but still correct).
+            // so the filter is portable across collations (case-insensitive
+            // on SqlServer regardless of default collation).
             var sl = s.ToLower();
             query = query.Where(u =>
                 (u.Email != null && u.Email.ToLower().Contains(sl)) ||
@@ -573,9 +572,8 @@ public class AdminController : ControllerBase
 
         // Pull every anonymous access-log row joined to the code it touched
         // (so we can list the codes the visitor has used). Then group in
-        // memory by IP + UA — composite GROUP BY through EF on a string
-        // column is supported on SqlServer but trips up on Sqlite at the
-        // sizes we expect this table to be.
+        // memory by IP + UA — composite GROUP BY through EF on string
+        // columns is cheap at the sizes we expect this table to be.
         var rows = await (
             from log in _ctx.Set<UserAccessLog>()
             where log.UserId == null

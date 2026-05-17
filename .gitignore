@@ -56,14 +56,11 @@ lerna-debug.log*
 # ============================================
 # DATABASE FILES
 # ============================================
-*.db
-*.sqlite
-*.sqlite3
-app.db
-identifier.sqlite
+# SQL Server local container volumes are managed by Docker (mssql_data),
+# not committed. No on-disk DB files in the repo anymore.
+*.dacpac
 database.mdf
 *.ldf
-*.dacpac
 
 # ============================================
 # TESTING & DEBUGGING

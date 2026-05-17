@@ -31,7 +31,7 @@ graph TB
     end
     
     subgraph "Infrastructure"
-        EF["Entity Framework Core<br/>+ SQLite/PostgreSQL"]
+        EF["Entity Framework Core<br/>+ SQL Server/PostgreSQL"]
         Storage["IStorageProvider<br/>- Minio (dev)<br/>- Azure (prod)"]
         Config["Configuration<br/>appsettings.json<br/>Environment-based"]
     end

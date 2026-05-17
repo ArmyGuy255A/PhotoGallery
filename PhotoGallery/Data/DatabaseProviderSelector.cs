@@ -7,8 +7,7 @@ namespace PhotoGallery.Data;
 /// <summary>
 /// EF Core provider wiring. SQL Server only — both dev (Docker SQL Server)
 /// and prod (Azure SQL Server) use the same provider so the codebase has
-/// just one migration set, one set of provider-specific SQL idioms, and
-/// no Sqlite-vs-SqlServer behavioral surprises in dev.
+/// just one migration set and a single set of provider-specific SQL idioms.
 ///
 /// Configuration:
 /// <list type="bullet">
