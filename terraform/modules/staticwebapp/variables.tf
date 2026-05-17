@@ -52,6 +52,21 @@ variable "backend_api_url" {
   default     = ""
 }
 
+variable "custom_domain_name" {
+  description = <<-EOT
+    Apex custom domain to bind to the SWA, e.g. "appeid.app". When set, the
+    module provisions two azurerm_static_web_app_custom_domain resources:
+      * the apex (dns-txt-token validation — caller wires the TXT record)
+      * www.<domain> (cname-delegation validation — caller wires the CNAME)
+    Leave empty to skip custom-domain binding entirely.
+
+    NOTE: Free SKU supports custom domains and Azure-managed SSL (DigiCert,
+    auto-renewed). No BYO cert needed.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

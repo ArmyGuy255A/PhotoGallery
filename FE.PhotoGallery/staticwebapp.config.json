@@ -1,24 +1,28 @@
 {
   "$schema": "https://json.schemastore.org/staticwebapp.config.json",
-  "//": "MVP approach: direct cross-origin calls from SWA -> ACA backend.",
-  "//1": "Backend CORS allows this SWA host. We do NOT use SWA's reverse-proxy",
-  "//2": "for /api/* because auth is JWT-bearer (no cookies) and the simpler",
-  "//3": "path is fewer moving parts. Revisit if we add cookie-based auth.",
-  "navigationFallback": {
-    "rewrite": "/index.html",
-    "exclude": [
-      "/assets/*",
-      "/*.{css,js,ico,png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,map,json,txt}"
-    ]
-  },
+  "//": "Deployed under the /photogallery/ sub-path. The release workflow",
+  "//1": "stages the Angular build under a top-level `photogallery/` folder",
+  "//2": "and emits this config alongside it; SWA serves https://appeid.app/",
+  "//3": "by redirecting to /photogallery, and SPA deep links under",
+  "//4": "/photogallery/* fall back to /photogallery/index.html.",
+  "//5": "Direct cross-origin calls go SWA -> ACA backend (JWT bearer, no",
+  "//6": "cookies) so we do NOT use SWA's /api/* reverse-proxy.",
   "routes": [
+    { "route": "/", "redirect": "/photogallery", "statusCode": 301 },
     {
-      "route": "/index.html",
+      "route": "/photogallery/index.html",
       "headers": {
         "cache-control": "no-cache, no-store, must-revalidate"
       }
     }
   ],
+  "navigationFallback": {
+    "rewrite": "/photogallery/index.html",
+    "exclude": [
+      "/photogallery/assets/*",
+      "/photogallery/*.{css,js,ico,png,jpg,jpeg,gif,svg,webp,woff,woff2,ttf,eot,map,json,txt}"
+    ]
+  },
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -30,7 +34,7 @@
   },
   "responseOverrides": {
     "404": {
-      "rewrite": "/index.html",
+      "rewrite": "/photogallery/index.html",
       "statusCode": 200
     }
   }
