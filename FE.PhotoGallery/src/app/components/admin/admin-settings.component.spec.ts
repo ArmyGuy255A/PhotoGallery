@@ -72,7 +72,7 @@ describe('AdminSettingsComponent', () => {
     const report = fixture.nativeElement.querySelector('[data-testid="admin-reap-orphans-report"]');
     expect(report).toBeTruthy();
     expect(report.textContent).toContain('20');
-    expect(report.textContent).toContain('5.0 MB');
+    expect(report.textContent).toContain('5.00 MB');
   }));
 
   it('reap-orphans surfaces a friendly forbidden error for 403', () => {

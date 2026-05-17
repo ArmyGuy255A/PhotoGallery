@@ -647,6 +647,22 @@ public class AdminController : ControllerBase
             .Select(g => new { Quality = g.Key.ToString(), Count = g.Count() })
             .ToListAsync();
 
+        // Storage footprint computed from PhotoVersion.FileSize (derived
+        // qualities) + PhotoFile.FileSize (the original upload). Cheap query
+        // vs. enumerating the storage backend, and the reconciler keeps
+        // these honest after every processing tick.
+        var versionStats = await _ctx.PhotoVersions
+            .GroupBy(v => v.Quality)
+            .Select(g => new
+            {
+                Quality = g.Key,
+                Count = g.Count(),
+                TotalBytes = (long?)g.Sum(v => (long?)v.FileSize) ?? 0L
+            })
+            .ToListAsync();
+        var originalsCount = await _ctx.Set<PhotoFile>().CountAsync();
+        var originalsBytes = await _ctx.Set<PhotoFile>().SumAsync(f => (long?)f.FileSize) ?? 0L;
+
         // Merge in-memory registry (this replica) + heartbeat rows (other replicas).
         // The in-memory entries take precedence for the local replica (real-time
         // trigger hook availability); rows in the DB for OTHER instances are
@@ -791,6 +807,24 @@ public class AdminController : ControllerBase
                 Error = queueFor(PhotoGallery.Models.ProcessingStatus.Error),
                 ByQuality = queueByQuality.ToDictionary(x => x.Quality, x => x.Count)
             },
+            Storage = new StorageFootprintDto
+            {
+                OriginalsCount = originalsCount,
+                OriginalsBytes = originalsBytes,
+                DerivedCount = versionStats.Sum(s => s.Count),
+                DerivedBytes = versionStats.Sum(s => s.TotalBytes),
+                TotalCount = originalsCount + versionStats.Sum(s => s.Count),
+                TotalBytes = originalsBytes + versionStats.Sum(s => s.TotalBytes),
+                ByQuality = versionStats
+                    .OrderBy(s => s.Quality)
+                    .Select(s => new StorageQualityDto
+                    {
+                        Quality = s.Quality.ToString(),
+                        Count = s.Count,
+                        TotalBytes = s.TotalBytes
+                    })
+                    .ToList()
+            },
             Workers = workers,
             Replicas = replicas,
             AdminJobs = await GetRecentAdminJobsAsync()
@@ -916,6 +950,8 @@ public class ServiceHealthDto
     public ReplicaInfoDto Replica { get; set; } = new();
     public PhotoCountsDto Photos { get; set; } = new();
     public QueueCountsDto Queue { get; set; } = new();
+    /// <summary>How much storage this deployment is using, computed from PhotoVersion + PhotoFile rows.</summary>
+    public StorageFootprintDto Storage { get; set; } = new();
     public List<WorkerStatusDto> Workers { get; set; } = new();
     /// <summary>Replica-centric view: one entry per physical replica (hostname), with the jobs it's running nested inside.</summary>
     public List<ReplicaWorkerStatusDto> Replicas { get; set; } = new();
@@ -978,6 +1014,34 @@ public class QueueCountsDto
     public int Complete { get; set; }
     public int Error { get; set; }
     public Dictionary<string, int> ByQuality { get; set; } = new();
+}
+
+/// <summary>
+/// Storage footprint derived from PhotoVersion.FileSize + PhotoFile.FileSize.
+/// Cheap O(GROUP BY) instead of enumerating the storage backend.
+/// </summary>
+public class StorageFootprintDto
+{
+    /// <summary>Number of original photos (PhotoFile rows).</summary>
+    public int OriginalsCount { get; set; }
+    /// <summary>Total bytes occupied by originals.</summary>
+    public long OriginalsBytes { get; set; }
+    /// <summary>Number of derived quality variants across all photos (thumbnail, low, medium, high, watermark, raw…).</summary>
+    public int DerivedCount { get; set; }
+    /// <summary>Total bytes occupied by derived variants.</summary>
+    public long DerivedBytes { get; set; }
+    /// <summary>Grand total: originals + derived.</summary>
+    public int TotalCount { get; set; }
+    public long TotalBytes { get; set; }
+    /// <summary>Per-quality breakdown of derived variants.</summary>
+    public List<StorageQualityDto> ByQuality { get; set; } = new();
+}
+
+public class StorageQualityDto
+{
+    public string Quality { get; set; } = string.Empty;
+    public int Count { get; set; }
+    public long TotalBytes { get; set; }
 }
 
 public class WorkerStatusDto

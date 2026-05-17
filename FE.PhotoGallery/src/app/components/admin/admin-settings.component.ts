@@ -163,6 +163,15 @@ interface ServiceHealth {
     error: number;
     byQuality: Record<string, number>;
   };
+  storage: {
+    originalsCount: number;
+    originalsBytes: number;
+    derivedCount: number;
+    derivedBytes: number;
+    totalCount: number;
+    totalBytes: number;
+    byQuality: { quality: string; count: number; totalBytes: number }[];
+  };
   workers: WorkerStatus[];
   replicas: ReplicaWorkerStatus[];
   adminJobs: AdminJobSnapshot[];
@@ -711,6 +720,22 @@ type SortDir = 'asc' | 'desc';
             <dl class="stat-list" data-testid="admin-health-queue-by-quality">
               <ng-container *ngFor="let q of healthQueueByQuality()">
                 <dt>{{ q.quality }}</dt><dd>{{ q.count | number }}</dd>
+              </ng-container>
+            </dl>
+          </div>
+          <div class="stat-card">
+            <h3>Storage footprint</h3>
+            <dl class="stat-list" data-testid="admin-health-storage">
+              <dt>Originals</dt><dd>{{ h.storage.originalsCount | number }} ({{ formatBytes(h.storage.originalsBytes) }})</dd>
+              <dt>Versions</dt><dd>{{ h.storage.derivedCount | number }} ({{ formatBytes(h.storage.derivedBytes) }})</dd>
+              <dt><strong>Total files</strong></dt><dd><strong>{{ h.storage.totalCount | number }}</strong></dd>
+              <dt><strong>Total size</strong></dt><dd><strong>{{ formatBytes(h.storage.totalBytes) }}</strong></dd>
+            </dl>
+            <h4 class="sub-h">By quality</h4>
+            <dl class="stat-list" data-testid="admin-health-storage-by-quality">
+              <ng-container *ngFor="let q of h.storage.byQuality">
+                <dt>{{ q.quality }}</dt>
+                <dd>{{ q.count | number }} · {{ formatBytes(q.totalBytes) }}</dd>
               </ng-container>
             </dl>
           </div>
@@ -1838,11 +1863,16 @@ export class AdminSettingsComponent {
     this.drilldownError.set(null);
   }
 
-  formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  /** Compact human-readable byte size: 4.20 GB / 512 MB / 3.14 KB / 256 B.
+   *  Handles null/undefined/negative gracefully for the storage card. */
+  formatBytes(bytes: number | null | undefined): string {
+    if (bytes == null || isNaN(bytes) || bytes < 0) return '—';
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    const value = bytes / Math.pow(1024, i);
+    const decimals = value < 10 ? 2 : value < 100 ? 1 : 0;
+    return `${value.toFixed(decimals)} ${units[i]}`;
   }
 
   private extractErrorMessage(err: unknown): string {
