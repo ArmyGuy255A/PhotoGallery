@@ -980,9 +980,38 @@ public class PhotosController : ControllerBase
     /// Shared helper: insert an AdminJob row + return 202 Accepted with the
     /// row's Id so the FE can poll for completion. The API never runs these
     /// jobs itself — a worker drains them at the top of its next tick (~5s).
+    ///
+    /// Idempotent: if a job with the same (JobType, AlbumId) is already
+    /// Pending or Running, returns 202 with the EXISTING job id rather than
+    /// inserting a duplicate. The AdminJobScheduler relies on this so its
+    /// periodic enqueues don't pile up rows during a worker outage, and
+    /// admins clicking "Reap" twice rapidly get a no-op the second time.
     /// </summary>
     private async Task<IActionResult> EnqueueAdminJobAsync(string jobType, Guid? albumId)
     {
+        var existing = await _ctx.AdminJobs
+            .Where(j => j.JobType == jobType
+                     && j.AlbumId == albumId
+                     && (j.Status == AdminJobStatuses.Pending || j.Status == AdminJobStatuses.Running))
+            .OrderBy(j => j.RequestedAt)
+            .FirstOrDefaultAsync();
+        if (existing != null)
+        {
+            _logger.LogInformation(
+                "AdminJob {JobType} (album={AlbumId}) already queued as {JobId} ({Status}); returning existing",
+                jobType, albumId, existing.Id, existing.Status);
+            return Accepted(new
+            {
+                jobId       = existing.Id,
+                jobType     = existing.JobType,
+                albumId     = existing.AlbumId,
+                status      = existing.Status,
+                requestedAt = existing.RequestedAt,
+                statusUrl   = $"/api/photos/admin/jobs/{existing.Id}",
+                deduped     = true
+            });
+        }
+
         var job = new AdminJob
         {
             Id            = Guid.NewGuid(),
@@ -1008,6 +1037,66 @@ public class PhotosController : ControllerBase
             requestedAt = job.RequestedAt,
             statusUrl   = $"/api/photos/admin/jobs/{job.Id}"
         });
+    }
+
+    /// <summary>
+    /// Generic admin endpoint: enqueue any supported job type. Backs the
+    /// "Enqueue job" form on the Service Health admin page so admins can
+    /// add work to the queue without dedicated FE buttons for each type.
+    /// </summary>
+    [HttpPost("admin/jobs")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> EnqueueGenericAdminJob([FromBody] EnqueueAdminJobRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.JobType))
+            return BadRequest(new { error = "jobType is required" });
+
+        var allowed = new[]
+        {
+            AdminJobTypes.ReconcileStorage,
+            AdminJobTypes.ReconcileAlbumStorage,
+            AdminJobTypes.ReapOrphans,
+            AdminJobTypes.ChaosStorage
+        };
+        if (!allowed.Contains(request.JobType, StringComparer.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Unknown jobType '{request.JobType}'. Allowed: {string.Join(", ", allowed)}" });
+
+        // Album-scoped reconcile MUST have an albumId; the others MUST NOT.
+        if (string.Equals(request.JobType, AdminJobTypes.ReconcileAlbumStorage, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!request.AlbumId.HasValue)
+                return BadRequest(new { error = "albumId is required for reconcile-album-storage" });
+            var album = await _albumRepository.GetByIdAsync(request.AlbumId.Value);
+            if (album == null) return NotFound(new { error = $"Album {request.AlbumId} not found" });
+        }
+        else if (request.AlbumId.HasValue)
+        {
+            return BadRequest(new { error = $"albumId must be null for {request.JobType}" });
+        }
+
+        return await EnqueueAdminJobAsync(request.JobType, request.AlbumId);
+    }
+
+    /// <summary>
+    /// Admin-only: cancel/remove a queued or in-flight admin job. The DB row
+    /// is hard-deleted; the worker tick checks Status before processing so
+    /// a deleted row will simply be a no-op. Useful for clearing duplicates
+    /// or aborting a long-running reconcile.
+    /// </summary>
+    [HttpDelete("admin/jobs/{jobId:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> DeleteAdminJob(Guid jobId)
+    {
+        var job = await _ctx.AdminJobs.FirstOrDefaultAsync(j => j.Id == jobId);
+        if (job == null) return NotFound();
+
+        _ctx.AdminJobs.Remove(job);
+        await _ctx.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Admin {User} deleted AdminJob {JobId} ({JobType}, status was {Status})",
+            User.Identity?.Name, jobId, job.JobType, job.Status);
+        return NoContent();
     }
 
     /// <summary>
@@ -1046,6 +1135,15 @@ public class PhotosController : ControllerBase
             error                 = job.ErrorMessage
         });
     }
+}
+
+/// <summary>
+/// Body for POST /api/photos/admin/jobs.
+/// </summary>
+public class EnqueueAdminJobRequest
+{
+    public string JobType { get; set; } = string.Empty;
+    public Guid? AlbumId { get; set; }
 }
 
 /// <summary>

@@ -235,6 +235,7 @@ builder.Services.AddScoped<StorageConsistencyService>();
 // in-process invocations; multi-replica safety relies on DeleteIfExists
 // idempotency at the storage layer.
 builder.Services.AddScoped<OrphanedBlobReaperService>();
+builder.Services.AddScoped<ChaosStorageService>();
 
 // Register background services for photo processing and URL refresh.
 //
@@ -256,6 +257,16 @@ if (workersEnabled)
     builder.Services.AddHostedService<PhotoVersionUrlRefreshWorker>();
     builder.Services.AddHostedService<StorageConsistencyWorker>();
     builder.Services.AddHostedService<OrphanedBlobReaperWorker>();
+}
+else
+{
+    // API-only replicas run the scheduler that feeds the AdminJob queue.
+    // We deliberately don't register this on worker replicas so the queue
+    // isn't fed from multiple sources (would still be idempotent, but the
+    // log trail stays clean). The scheduler enqueues routine reconcile
+    // and reap jobs that workers pick up the same way as admin-clicked
+    // ones — workers don't run their own timer cycles anymore.
+    builder.Services.AddHostedService<AdminJobScheduler>();
 }
 builder.Services.AddSingleton<WorkerScheduleRegistry>();
 builder.Services.AddSingleton<WorkerHeartbeatWriter>();

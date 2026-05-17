@@ -742,6 +742,10 @@ type SortDir = 'asc' | 'desc';
                   {{ r.isAlive ? 'yes' : 'no' }}
                 </td>
                 <td class="jobs-cell">
+                  <div class="replica-totals small muted">
+                    <span class="totals-pill"><strong>{{ replicaTotals(r).photosProcessed }}</strong> photos</span>
+                    <span class="totals-pill"><strong>{{ replicaTotals(r).adminJobsCompleted }}</strong> admin jobs</span>
+                  </div>
                   <span *ngIf="!r.jobs?.length" class="muted small">no active jobs</span>
                   <ul *ngIf="r.jobs?.length" class="jobs-list">
                     <li *ngFor="let w of r.jobs" [attr.data-job]="w.name">
@@ -756,14 +760,11 @@ type SortDir = 'asc' | 'desc';
                         <span *ngIf="w.itemsInFlight !== undefined && w.itemsInFlight > 0">
                           · {{ w.itemsInFlight }} in flight
                         </span>
+                        <span *ngIf="w.itemsProcessedTotal !== undefined && w.itemsProcessedTotal > 0">
+                          · {{ w.itemsProcessedTotal }} processed
+                        </span>
                       </div>
                       <div *ngIf="w.lastError" class="job-error small">{{ w.lastError }}</div>
-                      <button type="button" class="btn-primary btn-sm"
-                        [disabled]="!w.canTrigger || triggeringWorker() === w.name"
-                        (click)="triggerWorker(w)"
-                        [attr.data-testid]="'admin-health-trigger-' + w.name">
-                        {{ triggeringWorker() === w.name ? 'Triggering…' : 'Trigger now' }}
-                      </button>
                     </li>
                   </ul>
                 </td>
@@ -790,6 +791,7 @@ type SortDir = 'asc' | 'desc';
               <th>Started</th>
               <th>Completed</th>
               <th>By replica</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -816,12 +818,54 @@ type SortDir = 'asc' | 'desc';
                 </div>
               </td>
               <td><code class="muted small">{{ j.completedByInstanceId || '—' }}</code></td>
+              <td>
+                <button type="button" class="btn-danger btn-sm"
+                        [disabled]="deletingJobId() === j.id"
+                        (click)="deleteAdminJob(j)"
+                        [attr.data-testid]="'admin-health-delete-' + j.id"
+                        [title]="j.status === 'pending' ? 'Cancel and remove this queued job' : 'Remove this job from the history'">
+                  {{ deletingJobId() === j.id ? '…' : '✕' }}
+                </button>
+              </td>
             </tr>
             <tr *ngIf="!h3.adminJobs?.length">
-              <td colspan="6" class="muted">No admin jobs in flight or recently completed.</td>
+              <td colspan="7" class="muted">No admin jobs in flight or recently completed.</td>
             </tr>
           </tbody>
         </table>
+
+        <h3 *ngIf="health()">Enqueue admin job</h3>
+        <p *ngIf="health()" class="muted small" style="margin-top:-4px">
+          Add a maintenance job to the queue manually. The worker picks it up on its next tick (~5s).
+          Duplicate jobs of the same type are deduped automatically — re-clicking won't pile up rows.
+        </p>
+        <form *ngIf="health()" class="enqueue-form" (ngSubmit)="enqueueManualJob()">
+          <label>
+            Job type
+            <select [(ngModel)]="manualJobType" name="manualJobType" data-testid="admin-enqueue-type">
+              <option value="reconcile-storage">reconcile-storage</option>
+              <option value="reconcile-album-storage">reconcile-album-storage</option>
+              <option value="reap-orphans">reap-orphans</option>
+              <option value="chaos-storage">🔥 chaos-storage (DEV ONLY)</option>
+            </select>
+          </label>
+          <label *ngIf="manualJobType === 'reconcile-album-storage'">
+            Album ID
+            <input type="text" [(ngModel)]="manualJobAlbumId" name="manualJobAlbumId"
+                   placeholder="00000000-0000-0000-0000-000000000000"
+                   data-testid="admin-enqueue-album-id" />
+          </label>
+          <button type="submit" class="btn-primary btn-sm"
+                  [disabled]="enqueuingManual()"
+                  data-testid="admin-enqueue-submit">
+            {{ enqueuingManual() ? 'Enqueuing…' : 'Enqueue' }}
+          </button>
+          <span *ngIf="enqueueResult()" class="enqueue-result small"
+                [class.success]="enqueueResult()?.ok"
+                [class.error]="!enqueueResult()?.ok">
+            {{ enqueueResult()?.message }}
+          </span>
+        </form>
       </section>
     </section>
   `,
@@ -951,6 +995,36 @@ type SortDir = 'asc' | 'desc';
     .admin-jobs-table .status-pill.status-running  { background: #dbeafe; color: #1e40af; }
     .admin-jobs-table .status-pill.status-complete { background: #d1fae5; color: #065f46; }
     .admin-jobs-table .status-pill.status-failed   { background: #fee2e2; color: #991b1b; }
+
+    /* Per-replica totals chips */
+    .replica-totals { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .replica-totals .totals-pill {
+      background: #f3f4f6; padding: 2px 8px; border-radius: 999px; font-size: 11px; color: #374151;
+    }
+    .replica-totals .totals-pill strong { color: #1f2937; }
+
+    /* Delete-job button */
+    .btn-danger {
+      background: #fee2e2; color: #991b1b; border: 1px solid #fecaca;
+      padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;
+    }
+    .btn-danger:hover:not(:disabled) { background: #fecaca; }
+    .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Manual enqueue form */
+    .enqueue-form {
+      display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+      padding: 12px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;
+    }
+    .enqueue-form label {
+      display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #6b7280;
+    }
+    .enqueue-form select, .enqueue-form input[type=text] {
+      padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 13px;
+      min-width: 240px; background: white;
+    }
+    .enqueue-form .enqueue-result.success { color: #065f46; }
+    .enqueue-form .enqueue-result.error   { color: #991b1b; }
 
     .role-chip {
       display: inline-block; padding: 2px 8px; margin: 0 4px 2px 0;
@@ -1095,6 +1169,11 @@ export class AdminSettingsComponent {
   readonly healthLoading = signal<boolean>(false);
   readonly healthError = signal<string | null>(null);
   readonly triggeringWorker = signal<string | null>(null);
+  readonly deletingJobId = signal<string | null>(null);
+  readonly enqueuingManual = signal<boolean>(false);
+  readonly enqueueResult = signal<{ ok: boolean; message: string } | null>(null);
+  manualJobType: 'reconcile-storage' | 'reconcile-album-storage' | 'reap-orphans' | 'chaos-storage' = 'reconcile-storage';
+  manualJobAlbumId = '';
   private healthTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -1241,6 +1320,22 @@ export class AdminSettingsComponent {
     return r.instanceId;
   }
 
+  /**
+   * Aggregate per-replica counters. PhotoProcessing's ItemsProcessedTotal is
+   * photo-versions completed; everything else is admin-job rows drained from
+   * the queue. Split into separate buckets so the UI shows both at a glance.
+   */
+  replicaTotals(r: ReplicaWorkerStatus): { photosProcessed: number; adminJobsCompleted: number } {
+    let photos = 0;
+    let admins = 0;
+    for (const w of r.jobs ?? []) {
+      const n = w.itemsProcessedTotal ?? 0;
+      if (w.name === 'PhotoProcessing') photos += n;
+      else admins += n;
+    }
+    return { photosProcessed: photos, adminJobsCompleted: admins };
+  }
+
   trackAdminJob(_index: number, j: AdminJobSnapshot): string {
     return j.id;
   }
@@ -1290,6 +1385,58 @@ export class AdminSettingsComponent {
       .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
       .subscribe(() => {
         this.triggeringWorker.set(null);
+        this.loadHealth();
+      });
+  }
+
+  /** Delete (cancel) a queued or completed admin job. */
+  deleteAdminJob(j: AdminJobSnapshot): void {
+    if (this.deletingJobId()) return;
+    const confirmed = (j.status === 'pending' || j.status === 'running')
+      ? confirm(`Cancel and remove the queued ${j.jobType} job?`)
+      : true;
+    if (!confirmed) return;
+
+    this.deletingJobId.set(j.id);
+    this.http.delete(`${environment.apiUrl}/api/photos/admin/jobs/${j.id}`)
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(() => {
+        this.deletingJobId.set(null);
+        this.loadHealth();
+      });
+  }
+
+  /** Enqueue an arbitrary admin job from the Service Health form. */
+  enqueueManualJob(): void {
+    if (this.enqueuingManual()) return;
+
+    const body: { jobType: string; albumId?: string } = { jobType: this.manualJobType };
+    if (this.manualJobType === 'reconcile-album-storage') {
+      const id = this.manualJobAlbumId.trim();
+      if (!id) {
+        this.enqueueResult.set({ ok: false, message: 'Album ID is required for album reconcile.' });
+        return;
+      }
+      body.albumId = id;
+    }
+
+    this.enqueuingManual.set(true);
+    this.enqueueResult.set(null);
+    this.http.post<{ jobId: string; deduped?: boolean }>(`${environment.apiUrl}/api/photos/admin/jobs`, body)
+      .pipe(catchError(err => {
+        this.enqueuingManual.set(false);
+        this.enqueueResult.set({ ok: false, message: this.extractErrorMessage(err) });
+        return of(null);
+      }))
+      .subscribe(res => {
+        this.enqueuingManual.set(false);
+        if (!res) return;
+        this.enqueueResult.set({
+          ok: true,
+          message: res.deduped
+            ? `Already queued — reused existing job ${res.jobId.substring(0, 8)}…`
+            : `Enqueued ${this.manualJobType} as ${res.jobId.substring(0, 8)}…`
+        });
         this.loadHealth();
       });
   }

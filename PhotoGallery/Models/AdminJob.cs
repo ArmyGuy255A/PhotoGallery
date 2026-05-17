@@ -72,6 +72,14 @@ public static class AdminJobTypes
     public const string ReconcileStorage      = "reconcile-storage";
     public const string ReconcileAlbumStorage = "reconcile-album-storage";
     public const string ReapOrphans           = "reap-orphans";
+
+    /// <summary>
+    /// CHAOS / dev-only. Randomly deletes blobs from storage to manufacture
+    /// inconsistency — used to validate that reconcile + reap recover
+    /// correctly. Targets originals AND derived versions indiscriminately.
+    /// Guarded by appsettings: only enabled when Development:ChaosEnabled=true.
+    /// </summary>
+    public const string ChaosStorage          = "chaos-storage";
 }
 
 public static class AdminJobStatuses

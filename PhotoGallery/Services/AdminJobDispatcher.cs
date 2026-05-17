@@ -94,6 +94,7 @@ public class AdminJobDispatcher
                 AdminJobTypes.ReconcileStorage      => await RunReconcileStorage(cancellationToken),
                 AdminJobTypes.ReconcileAlbumStorage => await RunReconcileAlbum(job.AlbumId!.Value, cancellationToken),
                 AdminJobTypes.ReapOrphans           => await RunReapOrphans(cancellationToken),
+                AdminJobTypes.ChaosStorage          => await RunChaos(cancellationToken),
                 _ => throw new InvalidOperationException($"Unknown job type: {job.JobType}")
             };
             await CompleteAsync(job.Id, result, error: null, cancellationToken);
@@ -123,6 +124,13 @@ public class AdminJobDispatcher
     {
         using var scope = _serviceProvider.CreateScope();
         var svc = scope.ServiceProvider.GetRequiredService<OrphanedBlobReaperService>();
+        return await svc.RunOnceAsync(ct);
+    }
+
+    private async Task<ChaosReport> RunChaos(CancellationToken ct)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var svc = scope.ServiceProvider.GetRequiredService<ChaosStorageService>();
         return await svc.RunOnceAsync(ct);
     }
 

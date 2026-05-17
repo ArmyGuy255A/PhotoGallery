@@ -3,125 +3,96 @@ using PhotoGallery.Services;
 namespace PhotoGallery.Services.Processing;
 
 /// <summary>
-/// Background service that periodically reconciles storage objects against
-/// ProcessingQueueItem rows by invoking <see cref="StorageConsistencyService.RunOnceAsync"/>.
+/// Background service that drains <see cref="AdminJobTypes.ReconcileStorage"/>
+/// and <see cref="AdminJobTypes.ReconcileAlbumStorage"/> rows from the
+/// AdminJob queue. Routine maintenance reconciles are enqueued by the API's
+/// <see cref="AdminJobScheduler"/>; admin-clicked ones are enqueued by the
+/// PhotosController. Either way, this worker pulls them and runs the
+/// reconciler.
 ///
 /// Reference: D007 (Storage/Database Consistency Reconciliation).
-///
-/// Mirrors the <see cref="PhotoProcessingWorker"/> / <see cref="PhotoVersionUrlRefreshWorker"/>
-/// pattern: per-tick scope + live setting resolution.
-///
-/// Configuration (hot-reloadable via <see cref="ISettingsResolver"/>):
-/// <list type="bullet">
-///   <item><c>PhotoProcessing:ConsistencyCheckEnabled</c> (default true) — kill switch.</item>
-///   <item><c>PhotoProcessing:ConsistencyCheckIntervalHours</c> (default 1) — tick interval.</item>
-/// </list>
 /// </summary>
 public class StorageConsistencyWorker : BackgroundService
 {
     public const string WorkerName = "StorageConsistency";
 
+    // Tick fast (every 10s) so admin clicks feel snappy. The dispatcher is
+    // a cheap DB query against a tiny table, so polling this often is fine.
+    // Heartbeat writes are throttled separately (see HeartbeatMinInterval)
+    // so idle polling doesn't write to the DB every tick.
+    private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan HeartbeatMinInterval = TimeSpan.FromSeconds(30);
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<StorageConsistencyWorker> _logger;
     private readonly WorkerScheduleRegistry _registry;
-    private readonly bool _defaultEnabled;
-    private readonly int _defaultIntervalHours;
-    private readonly ManualResetEventSlim _triggerSignal = new(initialState: false);
 
     public StorageConsistencyWorker(
         IServiceProvider serviceProvider,
         ILogger<StorageConsistencyWorker> logger,
-        IConfiguration configuration,
         WorkerScheduleRegistry registry)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
         _registry = registry;
-
-        _defaultEnabled = configuration.GetValue("PhotoProcessing:ConsistencyCheckEnabled", true);
-        _defaultIntervalHours = Math.Max(1,
-            configuration.GetValue("PhotoProcessing:ConsistencyCheckIntervalHours", 1));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
-            "StorageConsistencyWorker started (default enabled={Enabled}, default interval={IntervalHours}h, hot-reloadable)",
-            _defaultEnabled, _defaultIntervalHours);
+            "StorageConsistencyWorker started — drains AdminJob queue every {Interval}s",
+            TickInterval.TotalSeconds);
 
+        // Register with no trigger hook — the AdminJob queue IS the trigger.
+        // Anyone wanting an immediate run enqueues a row; no in-process
+        // signaling needed.
         _registry.Register(
             WorkerName,
             displayName: "Storage ↔ DB consistency",
-            interval: TimeSpan.FromHours(_defaultIntervalHours),
-            triggerHook: () => _triggerSignal.Set());
+            interval: TickInterval,
+            triggerHook: null);
 
         try
         {
+            DateTime lastHeartbeatAt = DateTime.MinValue;
             while (!stoppingToken.IsCancellationRequested)
             {
-                bool enabled = _defaultEnabled;
-                int intervalHours = _defaultIntervalHours;
-                try
-                {
-                    using var scope = _serviceProvider.CreateScope();
-                    var resolver = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
-                    enabled = await resolver.GetBoolAsync("PhotoProcessing:ConsistencyCheckEnabled", _defaultEnabled, stoppingToken);
-                    intervalHours = Math.Max(1,
-                        await resolver.GetIntAsync("PhotoProcessing:ConsistencyCheckIntervalHours", _defaultIntervalHours, stoppingToken));
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to resolve live settings; using defaults");
-                }
-
-                // Drain any admin-queued reconcile jobs FIRST so an admin click
-                // gets picked up within seconds rather than waiting for the next
-                // scheduled tick (which is hourly).
+                int drained = 0;
                 try
                 {
                     var dispatcher = _serviceProvider.GetRequiredService<AdminJobDispatcher>();
-                    var drained = await dispatcher.DrainAsync(
-                        new[] { AdminJobTypes.ReconcileStorage, AdminJobTypes.ReconcileAlbumStorage },
+                    drained = await dispatcher.DrainAsync(
+                        new[] { AdminJobTypes.ReconcileStorage, AdminJobTypes.ReconcileAlbumStorage, AdminJobTypes.ChaosStorage },
                         stoppingToken);
                     if (drained > 0)
                     {
+                        var hbWriter = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+                        hbWriter.IncrementProcessed(WorkerName, drained);
                         _logger.LogInformation("StorageConsistencyWorker drained {Count} admin jobs", drained);
                     }
+                    _registry.RecordTick(WorkerName);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { _logger.LogError(ex, "AdminJobDispatcher drain failed"); }
 
-                if (enabled)
+                // Heartbeat throttling: write to the DB only if there was work,
+                // or if the alive-window is approaching expiry. Cuts idle write
+                // load by ~6x while keeping the dashboard's "alive" detection
+                // (90s threshold) reliable.
+                var now = DateTime.UtcNow;
+                if (drained > 0 || (now - lastHeartbeatAt) >= HeartbeatMinInterval)
                 {
-                    try
-                    {
-                        await RunCycleAsync(stoppingToken);
-                        _registry.RecordTick(WorkerName);
                     try
                     {
                         var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
-                        await hb.StampAsync(WorkerName, "Storage ↔ DB consistency", TimeSpan.FromHours(intervalHours), DateTime.UtcNow, stoppingToken);
+                        await hb.StampAsync(WorkerName, "Storage ↔ DB consistency", TickInterval, now, stoppingToken);
+                        lastHeartbeatAt = now;
                     }
                     catch { /* heartbeat is best-effort */ }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error in storage consistency reconciliation cycle");
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug("StorageConsistencyWorker tick skipped — disabled via PhotoProcessing:ConsistencyCheckEnabled");
                 }
 
-                var triggered = await Task.Run(
-                    () => _triggerSignal.Wait(TimeSpan.FromHours(intervalHours), stoppingToken),
-                    stoppingToken);
-                if (triggered) _triggerSignal.Reset();
+                try { await Task.Delay(TickInterval, stoppingToken); }
+                catch (OperationCanceledException) { break; }
             }
         }
         catch (OperationCanceledException)
@@ -133,12 +104,5 @@ public class StorageConsistencyWorker : BackgroundService
             _logger.LogError(ex, "StorageConsistencyWorker encountered fatal error");
             throw;
         }
-    }
-
-    private async Task RunCycleAsync(CancellationToken cancellationToken)
-    {
-        using var scope = _serviceProvider.CreateScope();
-        var service = scope.ServiceProvider.GetRequiredService<StorageConsistencyService>();
-        await service.RunOnceAsync(cancellationToken);
     }
 }
