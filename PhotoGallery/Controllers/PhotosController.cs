@@ -1061,6 +1061,24 @@ public class PhotosController : ControllerBase
         if (!allowed.Contains(request.JobType, StringComparer.OrdinalIgnoreCase))
             return BadRequest(new { error = $"Unknown jobType '{request.JobType}'. Allowed: {string.Join(", ", allowed)}" });
 
+        // Chaos is gated by Development:ChaosEnabled. Refuse upfront in
+        // environments where it's off (e.g. Production) so an enqueue
+        // attempt fails fast with a 403 instead of silently sitting in the
+        // queue as a Blocked no-op. The service also self-guards, but the
+        // controller refusal gives the FE a clean error to render.
+        if (string.Equals(request.JobType, AdminJobTypes.ChaosStorage, StringComparison.OrdinalIgnoreCase))
+        {
+            var chaos = HttpContext.RequestServices.GetRequiredService<ChaosStorageService>();
+            if (!chaos.IsEnabled)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = "Chaos engineering is disabled on this environment. " +
+                            "Set Development:ChaosEnabled=true (Trial only) to enable."
+                });
+            }
+        }
+
         // Album-scoped reconcile MUST have an albumId; the others MUST NOT.
         if (string.Equals(request.JobType, AdminJobTypes.ReconcileAlbumStorage, StringComparison.OrdinalIgnoreCase))
         {
