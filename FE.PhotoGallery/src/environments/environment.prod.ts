@@ -1,10 +1,12 @@
 export const environment = {
   production: true,
-  // Cross-origin call from Azure Static Web App -> Azure Container App API.
-  // Backend CORS is configured to allow the SWA host. We deliberately do
-  // NOT use SWA's /api/* reverse-proxy block to keep auth-cookie handling
-  // simple (JWT in Authorization header, attached by jwtInterceptor).
-  apiUrl: 'https://ca-photogallery-api-dev.purplesea-ba9de704.eastus2.azurecontainerapps.io'
+  // Same-origin from https://appeid.app: the nginx-appeid edge proxy
+  // forwards /api/* to the PhotoGallery API ACA (see API_UPSTREAM in
+  // nginx-appeid Services/appeid/server-appeid.conf). That keeps the
+  // SPA out of CORS-preflight land and removes the backend's need to
+  // allow-list per frontend host. Matches the local dev shape
+  // (Vite proxy.conf.json /api -> http://localhost:5105).
+  apiUrl: ''
   // googleClientId is fetched at runtime from GET /api/config/public.
   // See RuntimeConfigService + provideAppInitializer in app.config.ts.
 };
