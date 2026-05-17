@@ -37,6 +37,13 @@ public class StorageConsistencyService
         QualityType.Low,
         QualityType.Medium,
         QualityType.High,
+        // Watermark MUST be here so the per-quality reconcile loop iterates
+        // it. The previous list omitted it which meant photos missing their
+        // watermarked variants stayed Pending forever — the reconciler never
+        // checked. The Watermark queue item produces TWO blobs
+        // (thumbnail-watermarked.jpg + medium-watermarked.jpg); the loop
+        // handles that special case inline.
+        QualityType.Watermark,
     };
 
     private readonly IPhotoRepository _photoRepository;

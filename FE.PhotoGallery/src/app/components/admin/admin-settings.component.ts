@@ -211,32 +211,32 @@ type SortDir = 'asc' | 'desc';
           [attr.aria-selected]="activeTab() === 'maintenance'"
           [class.active]="activeTab() === 'maintenance'"
           (click)="onSelectTab('maintenance')"
-          data-testid="admin-tab-maintenance">🧹 Maintenance</button>
+          data-testid="admin-tab-maintenance">Maintenance</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'users'"
           [class.active]="activeTab() === 'users'"
           (click)="onSelectTab('users')"
-          data-testid="admin-tab-users">👥 Users</button>
+          data-testid="admin-tab-users">Users</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'stats'"
           [class.active]="activeTab() === 'stats'"
           (click)="onSelectTab('stats')"
-          data-testid="admin-tab-stats">📊 Download stats</button>
+          data-testid="admin-tab-stats">Download stats</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'settings'"
           [class.active]="activeTab() === 'settings'"
           (click)="onSelectTab('settings')"
-          data-testid="admin-tab-settings">⚙️ Settings</button>
+          data-testid="admin-tab-settings">Settings</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'visitors'"
           [class.active]="activeTab() === 'visitors'"
           (click)="onSelectTab('visitors')"
-          data-testid="admin-tab-visitors">👁️ Visitors</button>
+          data-testid="admin-tab-visitors">Visitors</button>
         <button type="button" role="tab"
           [attr.aria-selected]="activeTab() === 'health'"
           [class.active]="activeTab() === 'health'"
           (click)="onSelectTab('health')"
-          data-testid="admin-tab-health">❤️ Service Health</button>
+          data-testid="admin-tab-health">Service Health</button>
       </nav>
 
       <!-- Maintenance tab -->
@@ -253,7 +253,7 @@ type SortDir = 'asc' | 'desc';
             data-testid="admin-reap-orphans-button"
             [disabled]="reapState() === 'running'"
             (click)="runReapOrphans()">
-            <ng-container *ngIf="reapState() !== 'running'; else reapingTpl">🧹 Reap orphaned blobs</ng-container>
+            <ng-container *ngIf="reapState() !== 'running'; else reapingTpl">Reap orphaned blobs</ng-container>
             <ng-template #reapingTpl>Reaping…</ng-template>
           </button>
           <span class="action-hint">
@@ -727,16 +727,29 @@ type SortDir = 'asc' | 'desc';
           <div class="stat-card">
             <h3>Storage footprint</h3>
             <dl class="stat-list" data-testid="admin-health-storage">
-              <dt>Originals</dt><dd>{{ h.storage.originalsCount | number }} ({{ formatBytes(h.storage.originalsBytes) }})</dd>
-              <dt>Versions</dt><dd>{{ h.storage.derivedCount | number }} ({{ formatBytes(h.storage.derivedBytes) }})</dd>
-              <dt><strong>Total files</strong></dt><dd><strong>{{ h.storage.totalCount | number }}</strong></dd>
-              <dt><strong>Total size</strong></dt><dd><strong>{{ formatBytes(h.storage.totalBytes) }}</strong></dd>
+              <dt>Originals</dt>
+              <dd>
+                <span class="num">{{ h.storage.originalsCount | number }}</span>
+                <span class="muted small">{{ formatBytes(h.storage.originalsBytes) }}</span>
+              </dd>
+              <dt>Versions</dt>
+              <dd>
+                <span class="num">{{ h.storage.derivedCount | number }}</span>
+                <span class="muted small">{{ formatBytes(h.storage.derivedBytes) }}</span>
+              </dd>
+              <dt class="total-row">Total files</dt>
+              <dd class="total-row"><span class="num">{{ h.storage.totalCount | number }}</span></dd>
+              <dt class="total-row">Total size</dt>
+              <dd class="total-row"><span class="num">{{ formatBytes(h.storage.totalBytes) }}</span></dd>
             </dl>
             <h4 class="sub-h">By quality</h4>
             <dl class="stat-list" data-testid="admin-health-storage-by-quality">
               <ng-container *ngFor="let q of h.storage.byQuality">
                 <dt>{{ q.quality }}</dt>
-                <dd>{{ q.count | number }} · {{ formatBytes(q.totalBytes) }}</dd>
+                <dd>
+                  <span class="num">{{ q.count | number }}</span>
+                  <span class="muted small">{{ formatBytes(q.totalBytes) }}</span>
+                </dd>
               </ng-container>
             </dl>
           </div>
@@ -928,8 +941,8 @@ type SortDir = 'asc' | 'desc';
               <option value="reconcile-storage">reconcile-storage</option>
               <option value="reconcile-album-storage">reconcile-album-storage</option>
               <option value="reap-orphans">reap-orphans</option>
-              <option value="purge-failed-photos">🗑️ purge-failed-photos (deletes Photo rows)</option>
-              <option value="chaos-storage">🔥 chaos-storage (DEV ONLY)</option>
+              <option value="purge-failed-photos">purge-failed-photos (deletes Photo rows)</option>
+              <option value="chaos-storage">chaos-storage (DEV ONLY)</option>
             </select>
           </label>
           <label *ngIf="manualJobType === 'reconcile-album-storage'">
@@ -1181,12 +1194,17 @@ type SortDir = 'asc' | 'desc';
     .drilldown-row td { background: #f9fafb; padding: 8px 16px; }
     .admin-table.inner { box-shadow: none; border: 1px solid #e5e7eb; }
     .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 8px 0 16px; }
-    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; background: #fafbfd; }
-    .stat-card h3 { margin: 0 0 6px; font-size: 13px; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; }
-    .stat-card .sub-h { margin: 12px 0 4px; font-size: 12px; color: #6b7280; }
-    .stat-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; }
+    .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 16px; background: #fafbfd; font-size: 13px; }
+    .stat-card h3 { margin: 0 0 6px; font-size: 12px; color: #374151; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+    .stat-card .sub-h { margin: 14px 0 4px; font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; border-top: 1px solid #e5e7eb; padding-top: 8px; }
+    .stat-list { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 0; align-items: baseline; }
     .stat-list dt { color: #6b7280; font-size: 12px; }
-    .stat-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .stat-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; text-align: right; }
+    .stat-list dd .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .stat-list dd .muted.small { display: inline-block; margin-left: 6px; font-weight: 400; color: #9ca3af; }
+    .stat-list dt.total-row, .stat-list dd.total-row { padding-top: 6px; margin-top: 4px; border-top: 1px solid #e5e7eb; }
+    .stat-list dt.total-row { color: #1f2937; font-weight: 600; }
+    .stat-list dd.total-row { color: #1f2937; }
   `]
 })
 export class AdminSettingsComponent {

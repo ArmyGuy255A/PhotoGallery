@@ -81,6 +81,11 @@ public class StorageConsistencyServiceTests
             KeyFor(photo, "low"),
             KeyFor(photo, "medium"),
             KeyFor(photo, "high"),
+            // Watermark queue item produces both watermarked variants — include
+            // them in the "fully processed" key set so tests that assume a
+            // photo is complete actually mark it complete.
+            KeyFor(photo, "thumbnail-watermarked"),
+            KeyFor(photo, "medium-watermarked"),
         };
     }
 
@@ -122,6 +127,7 @@ public class StorageConsistencyServiceTests
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Low,       Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Medium,    Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.High,      Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Watermark, Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
         });
 
         var report = await BuildService().RunOnceAsync(CancellationToken.None);
@@ -162,13 +168,13 @@ public class StorageConsistencyServiceTests
 
         var report = await BuildService().RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(4, report.ItemsCreatedPending);
-        Assert.Equal(4, captured.Count);
+        Assert.Equal(5, report.ItemsCreatedPending);
+        Assert.Equal(5, captured.Count);
         Assert.All(captured, i => Assert.Equal(ProcessingStatus.Pending, i.Status));
         Assert.All(captured, i => Assert.Equal(photo.Id, i.PhotoId));
         Assert.All(captured, i => Assert.Equal(queue.Id, i.ProcessingQueueId));
         var qualities = captured.Select(i => i.Quality).OrderBy(q => q).ToArray();
-        Assert.Equal(new[] { QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High }.OrderBy(q => q).ToArray(), qualities);
+        Assert.Equal(new[] { QualityType.Thumbnail, QualityType.Low, QualityType.Medium, QualityType.High, QualityType.Watermark }.OrderBy(q => q).ToArray(), qualities);
     }
 
     [Fact]
@@ -330,8 +336,8 @@ public class StorageConsistencyServiceTests
 
         var report = await BuildService().RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(4, report.ItemsBackFilledComplete);
-        Assert.Equal(4, captured.Count);
+        Assert.Equal(5, report.ItemsBackFilledComplete);
+        Assert.Equal(5, captured.Count);
         Assert.All(captured, i => Assert.Equal(ProcessingStatus.Complete, i.Status));
         Assert.All(captured, i => Assert.NotNull(i.CompletedAt));
         Assert.All(captured, i => Assert.Equal(queue.Id, i.ProcessingQueueId));
@@ -584,6 +590,7 @@ public class StorageConsistencyServiceTests
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Low,       Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Medium,    Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.High,      Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Watermark, Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
         };
         _mockPhotoRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new[] { photo });
         _mockQueueRepository.Setup(r => r.GetByPhotoIdAsync(photo.Id)).ReturnsAsync(queue);
@@ -747,6 +754,7 @@ public class StorageConsistencyServiceTests
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Low,       Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Medium,    Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
             new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.High,      Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
+            new ProcessingQueueItem { PhotoId = photo.Id, Quality = QualityType.Watermark, Status = ProcessingStatus.Complete, ProcessingQueueId = queue.Id },
         });
 
         await BuildService().RunOnceAsync(CancellationToken.None);

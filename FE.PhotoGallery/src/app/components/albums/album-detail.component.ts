@@ -83,7 +83,7 @@ interface Album {
                 (click)="runReconcile()"
                 data-testid="album-reconcile-button"
                 title="Re-scan storage for missing thumbnails / variants and re-queue any that need to be regenerated.">
-                {{ reconcileState === 'running' ? 'Reconciling…' : '🔄 Reconcile' }}
+                {{ reconcileState === 'running' ? 'Reconciling…' : 'Reconcile' }}
               </button>
             </div>
             <div *ngIf="reconcileMessage" class="reconcile-summary" data-testid="album-reconcile-summary">
@@ -237,7 +237,7 @@ interface Album {
                     <td class="code-cell">
                       <code>{{ code.code }}</code>
                       <button class="copy-btn" (click)="copyToClipboard(code.code)" title="Copy code">
-                        <span *ngIf="copiedCode !== code.code">📋</span>
+                        <span *ngIf="copiedCode !== code.code">Copy</span>
                         <span *ngIf="copiedCode === code.code" class="copied-feedback">✓ Copied!</span>
                       </button>
                     </td>
