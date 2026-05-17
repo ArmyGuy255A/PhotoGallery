@@ -1,12 +1,11 @@
 export const environment = {
   production: true,
-  // Same-origin from https://appeid.app: the nginx-appeid edge proxy
-  // forwards /api/* to the PhotoGallery API ACA (see API_UPSTREAM in
-  // nginx-appeid Services/appeid/server-appeid.conf). That keeps the
-  // SPA out of CORS-preflight land and removes the backend's need to
-  // allow-list per frontend host. Matches the local dev shape
-  // (Vite proxy.conf.json /api -> http://localhost:5105).
-  apiUrl: ''
+  // The SPA is served at /photogallery/ behind the nginx-appeid edge.
+  // RuntimeConfigService builds `${apiUrl}/api/config/public`, so set
+  // apiUrl to /photogallery → /photogallery/api/config/public, which
+  // matches the nginx location that strips /photogallery/api/ -> /api/
+  // and forwards to the backend ACA (API_UPSTREAM).
+  apiUrl: '/photogallery'
   // googleClientId is fetched at runtime from GET /api/config/public.
   // See RuntimeConfigService + provideAppInitializer in app.config.ts.
 };
