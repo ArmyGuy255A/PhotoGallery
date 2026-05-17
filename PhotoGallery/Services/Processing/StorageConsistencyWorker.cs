@@ -52,9 +52,20 @@ public class StorageConsistencyWorker : BackgroundService
             interval: TickInterval,
             triggerHook: null);
 
+        // Stamp a heartbeat IMMEDIATELY so the Service Health dashboard sees
+        // this worker the moment it boots, instead of waiting up to TickInterval
+        // for the first regular stamp. Without this, freshly-started replicas
+        // appear as "no heartbeat yet" until the first tick.
         try
         {
-            DateTime lastHeartbeatAt = DateTime.MinValue;
+            var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+            await hb.StampAsync(WorkerName, "Storage ↔ DB consistency", TickInterval, lastRanAt: null, stoppingToken);
+        }
+        catch { /* heartbeat is best-effort */ }
+
+        try
+        {
+            DateTime lastHeartbeatAt = DateTime.UtcNow;
             while (!stoppingToken.IsCancellationRequested)
             {
                 int drained = 0;

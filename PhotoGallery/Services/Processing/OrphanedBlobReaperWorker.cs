@@ -43,9 +43,18 @@ public sealed class OrphanedBlobReaperWorker : BackgroundService
             interval: TickInterval,
             triggerHook: null);
 
+        // Stamp a heartbeat IMMEDIATELY on startup so the dashboard sees this
+        // worker the moment it boots, instead of waiting up to TickInterval.
         try
         {
-            DateTime lastHeartbeatAt = DateTime.MinValue;
+            var hb = _serviceProvider.GetRequiredService<WorkerHeartbeatWriter>();
+            await hb.StampAsync(WorkerName, "Orphaned-blob reaper", TickInterval, lastRanAt: null, stoppingToken);
+        }
+        catch { /* heartbeat is best-effort */ }
+
+        try
+        {
+            DateTime lastHeartbeatAt = DateTime.UtcNow;
             while (!stoppingToken.IsCancellationRequested)
             {
                 int drained = 0;

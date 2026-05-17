@@ -1096,6 +1096,83 @@ public class PhotosController : ControllerBase
     }
 
     /// <summary>
+    /// Admin-only: paginated + server-sortable list of admin jobs for the
+    /// Service Health table. Server-side sort means the FE doesn't have to
+    /// fetch the whole table to sort by a column — each click POSTs a new
+    /// query with the desired (sortBy, sortDir, page, pageSize).
+    ///
+    /// Supported sort fields: requestedAt (default), startedAt, completedAt,
+    /// jobType, status. Direction: asc | desc (default desc on time fields,
+    /// asc on string fields).
+    /// </summary>
+    [HttpGet("admin/jobs")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> ListAdminJobs(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string sortBy = "requestedAt",
+        [FromQuery] string sortDir = "desc",
+        [FromQuery] string? status = null,
+        [FromQuery] string? jobType = null)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100;
+
+        var q = _ctx.AdminJobs.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            // Allow comma-separated list: ?status=pending,running
+            var allowed = status.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            q = q.Where(j => allowed.Contains(j.Status));
+        }
+        if (!string.IsNullOrWhiteSpace(jobType))
+        {
+            q = q.Where(j => j.JobType == jobType);
+        }
+
+        var desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
+        q = (sortBy?.ToLowerInvariant()) switch
+        {
+            "startedat"   => desc ? q.OrderByDescending(j => j.StartedAt)   : q.OrderBy(j => j.StartedAt),
+            "completedat" => desc ? q.OrderByDescending(j => j.CompletedAt) : q.OrderBy(j => j.CompletedAt),
+            "jobtype"     => desc ? q.OrderByDescending(j => j.JobType)     : q.OrderBy(j => j.JobType),
+            "status"      => desc ? q.OrderByDescending(j => j.Status)      : q.OrderBy(j => j.Status),
+            _             => desc ? q.OrderByDescending(j => j.RequestedAt) : q.OrderBy(j => j.RequestedAt),
+        };
+
+        var total = await q.CountAsync();
+        var items = await q
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(j => new AdminJobStatusDto
+            {
+                Id                    = j.Id,
+                JobType               = j.JobType,
+                AlbumId               = j.AlbumId,
+                Status                = j.Status,
+                RequestedAt           = j.RequestedAt,
+                RequestedBy           = j.RequestedBy,
+                StartedAt             = j.StartedAt,
+                CompletedAt           = j.CompletedAt,
+                CompletedByInstanceId = j.CompletedByInstanceId,
+                ErrorMessage          = j.ErrorMessage
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            total,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling((double)total / pageSize),
+            sortBy,
+            sortDir
+        });
+    }
+
+    /// <summary>
     /// Admin-only: cancel/remove a queued or in-flight admin job. The DB row
     /// is hard-deleted; the worker tick checks Status before processing so
     /// a deleted row will simply be a no-op. Useful for clearing duplicates

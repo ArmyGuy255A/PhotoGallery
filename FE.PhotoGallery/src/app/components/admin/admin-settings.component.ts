@@ -2,7 +2,7 @@ import { Component, inject, signal } from '@angular/core';
 import { CommonModule, DecimalPipe, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { catchError, of, Subject, debounceTime, distinctUntilChanged } from 'rxjs';
 import { BackToDashboardComponent } from '../back-to-dashboard/back-to-dashboard.component';
 import { environment } from '../../../environments/environment';
@@ -131,6 +131,8 @@ interface WorkerStatus {
 interface ReplicaWorkerStatus {
   instanceId: string;
   isAlive: boolean;
+  /** Most recent heartbeat across all of this replica's workers. Null for synthetic API entries. */
+  lastHeartbeatAt?: string | null;
   /** 'api-only', 'worker', or 'api+worker'. */
   role: string;
   jobs: WorkerStatus[];
@@ -726,7 +728,7 @@ type SortDir = 'asc' | 'desc';
           </thead>
           <tbody>
             <ng-container *ngFor="let r of h2.replicas; trackBy: trackReplica">
-              <tr class="replica-row" [attr.data-replica]="r.instanceId">
+              <tr class="replica-row" [class.replica-offline]="!r.isAlive" [attr.data-replica]="r.instanceId">
                 <td>
                   <code class="hostname">{{ r.instanceId }}</code>
                 </td>
@@ -739,7 +741,14 @@ type SortDir = 'asc' | 'desc';
                 </td>
                 <td>
                   <span class="alive-dot" [class.alive]="r.isAlive"></span>
-                  {{ r.isAlive ? 'yes' : 'no' }}
+                  <strong>{{ r.isAlive ? 'alive' : 'offline' }}</strong>
+                  <div class="muted small" *ngIf="r.lastHeartbeatAt">
+                    last heartbeat {{ formatRelative(r.lastHeartbeatAt) }} ago
+                    <div class="muted" style="font-size:10px">{{ r.lastHeartbeatAt | date:'mediumTime' }}</div>
+                  </div>
+                  <div class="muted small" *ngIf="!r.lastHeartbeatAt">
+                    no heartbeat yet
+                  </div>
                 </td>
                 <td class="jobs-cell">
                   <div class="replica-totals small muted">
@@ -779,23 +788,57 @@ type SortDir = 'asc' | 'desc';
         <h3 *ngIf="health()">Admin job queue</h3>
         <p *ngIf="health()" class="muted small" style="margin-top:-4px">
           Reap / Reconcile clicks enqueue here. Workers drain the queue at the top of every tick.
-          Pending + Running rows always shown; completed/failed rows trimmed to the last 20 from
-          the past 24 hours.
+          Click a column header to sort; server-side sort fetches only the page you're viewing.
         </p>
-        <table *ngIf="health() as h3" class="admin-table admin-jobs-table" data-testid="admin-health-jobs">
+        <div *ngIf="health()" class="jobs-toolbar small">
+          <label>
+            Status filter
+            <select [(ngModel)]="jobsStatusFilter" name="jobsStatusFilter" (change)="onJobsFilterChange()">
+              <option value="">All</option>
+              <option value="pending,running">Pending + Running</option>
+              <option value="pending">Pending</option>
+              <option value="running">Running</option>
+              <option value="complete">Complete</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <label>
+            Page size
+            <select [(ngModel)]="jobsPageSize" name="jobsPageSize" (change)="onJobsFilterChange()">
+              <option [ngValue]="10">10</option>
+              <option [ngValue]="25">25</option>
+              <option [ngValue]="50">50</option>
+              <option [ngValue]="100">100</option>
+            </select>
+          </label>
+          <button type="button" class="btn-secondary btn-sm" (click)="loadAdminJobs()" [disabled]="jobsLoading()">
+            {{ jobsLoading() ? 'Loading…' : 'Refresh' }}
+          </button>
+        </div>
+        <table *ngIf="health()" class="admin-table admin-jobs-table sortable" data-testid="admin-health-jobs">
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Status</th>
-              <th>Requested</th>
-              <th>Started</th>
-              <th>Completed</th>
+              <th class="sortable-th" (click)="sortJobs('jobType')">
+                Type <span class="sort-indicator">{{ jobsSortIndicator('jobType') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('status')">
+                Status <span class="sort-indicator">{{ jobsSortIndicator('status') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('requestedAt')">
+                Requested <span class="sort-indicator">{{ jobsSortIndicator('requestedAt') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('startedAt')">
+                Started <span class="sort-indicator">{{ jobsSortIndicator('startedAt') }}</span>
+              </th>
+              <th class="sortable-th" (click)="sortJobs('completedAt')">
+                Completed <span class="sort-indicator">{{ jobsSortIndicator('completedAt') }}</span>
+              </th>
               <th>By replica</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            <tr *ngFor="let j of h3.adminJobs; trackBy: trackAdminJob"
+            <tr *ngFor="let j of adminJobs(); trackBy: trackAdminJob"
                 [attr.data-job-id]="j.id"
                 [class.job-active]="j.status === 'pending' || j.status === 'running'"
                 [class.job-failed]="j.status === 'failed'">
@@ -828,11 +871,24 @@ type SortDir = 'asc' | 'desc';
                 </button>
               </td>
             </tr>
-            <tr *ngIf="!h3.adminJobs?.length">
-              <td colspan="7" class="muted">No admin jobs in flight or recently completed.</td>
+            <tr *ngIf="!adminJobs().length && !jobsLoading()">
+              <td colspan="7" class="muted">No admin jobs match the current filter.</td>
             </tr>
           </tbody>
         </table>
+        <div *ngIf="health()" class="jobs-pager small muted">
+          <span>
+            Showing <strong>{{ jobsPageStart() }}</strong>–<strong>{{ jobsPageEnd() }}</strong>
+            of <strong>{{ jobsTotal() }}</strong>
+            (page {{ jobsPage() }} of {{ jobsTotalPages() || 1 }})
+          </span>
+          <button type="button" class="btn-secondary btn-sm"
+                  [disabled]="jobsPage() <= 1 || jobsLoading()"
+                  (click)="gotoJobsPage(jobsPage() - 1)">‹ Prev</button>
+          <button type="button" class="btn-secondary btn-sm"
+                  [disabled]="jobsPage() >= jobsTotalPages() || jobsLoading()"
+                  (click)="gotoJobsPage(jobsPage() + 1)">Next ›</button>
+        </div>
 
         <h3 *ngIf="health()">Enqueue admin job</h3>
         <p *ngIf="health()" class="muted small" style="margin-top:-4px">
@@ -965,6 +1021,8 @@ type SortDir = 'asc' | 'desc';
       background: #d1d5db; margin-right: 4px; vertical-align: middle;
     }
     .replicas-table .alive-dot.alive { background: #10b981; }
+    .replicas-table tr.replica-row.replica-offline { opacity: 0.7; }
+    .replicas-table tr.replica-row.replica-offline .hostname { text-decoration: line-through; }
     .replicas-table .jobs-cell { min-width: 320px; }
     .replicas-table .jobs-list { list-style: none; padding: 0; margin: 0; }
     .replicas-table .jobs-list > li {
@@ -995,6 +1053,16 @@ type SortDir = 'asc' | 'desc';
     .admin-jobs-table .status-pill.status-running  { background: #dbeafe; color: #1e40af; }
     .admin-jobs-table .status-pill.status-complete { background: #d1fae5; color: #065f46; }
     .admin-jobs-table .status-pill.status-failed   { background: #fee2e2; color: #991b1b; }
+
+    /* Admin jobs toolbar + pager */
+    .jobs-toolbar { display: flex; gap: 12px; align-items: center; margin: 6px 0 4px; }
+    .jobs-toolbar label { display: inline-flex; align-items: center; gap: 6px; color: #6b7280; }
+    .jobs-toolbar select { padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px; }
+    .jobs-pager { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+    .jobs-pager > span { margin-right: auto; }
+    .btn-secondary { background: #f3f4f6; color: #1f2937; border: 1px solid #d1d5db; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    .btn-secondary:hover:not(:disabled) { background: #e5e7eb; }
+    .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Per-replica totals chips */
     .replica-totals { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
@@ -1174,6 +1242,17 @@ export class AdminSettingsComponent {
   readonly enqueueResult = signal<{ ok: boolean; message: string } | null>(null);
   manualJobType: 'reconcile-storage' | 'reconcile-album-storage' | 'reap-orphans' | 'chaos-storage' = 'reconcile-storage';
   manualJobAlbumId = '';
+
+  // Paginated / sortable admin job queue (server-side).
+  readonly adminJobs = signal<AdminJobSnapshot[]>([]);
+  readonly jobsLoading = signal<boolean>(false);
+  readonly jobsTotal = signal<number>(0);
+  readonly jobsPage = signal<number>(1);
+  readonly jobsTotalPages = signal<number>(0);
+  jobsPageSize = 10;
+  jobsSortBy: 'requestedAt' | 'startedAt' | 'completedAt' | 'jobType' | 'status' = 'requestedAt';
+  jobsSortDir: 'asc' | 'desc' = 'desc';
+  jobsStatusFilter = '';
   private healthTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -1296,6 +1375,72 @@ export class AdminSettingsComponent {
         }
         this.healthLoading.set(false);
       });
+    // Admin job table is a separate, server-paginated/sorted query so the
+    // user can click headers without re-fetching everything else.
+    this.loadAdminJobs();
+  }
+
+  /** Fetches the current page of admin jobs with the chosen sort + filter. */
+  loadAdminJobs(): void {
+    this.jobsLoading.set(true);
+    let params = new HttpParams()
+      .set('page', String(this.jobsPage()))
+      .set('pageSize', String(this.jobsPageSize))
+      .set('sortBy', this.jobsSortBy)
+      .set('sortDir', this.jobsSortDir);
+    if (this.jobsStatusFilter) {
+      params = params.set('status', this.jobsStatusFilter);
+    }
+    this.http.get<{
+      items: AdminJobSnapshot[]; total: number; page: number; totalPages: number;
+    }>(`${environment.apiUrl}/api/photos/admin/jobs`, { params })
+      .pipe(catchError(err => { this.healthError.set(this.extractErrorMessage(err)); return of(null); }))
+      .subscribe(res => {
+        this.jobsLoading.set(false);
+        if (!res) return;
+        this.adminJobs.set(res.items);
+        this.jobsTotal.set(res.total);
+        this.jobsPage.set(res.page);
+        this.jobsTotalPages.set(res.totalPages);
+      });
+  }
+
+  sortJobs(column: 'requestedAt' | 'startedAt' | 'completedAt' | 'jobType' | 'status'): void {
+    if (this.jobsSortBy === column) {
+      this.jobsSortDir = this.jobsSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.jobsSortBy = column;
+      // Default direction per column: dates desc, strings asc.
+      this.jobsSortDir = (column === 'jobType' || column === 'status') ? 'asc' : 'desc';
+    }
+    this.jobsPage.set(1);
+    this.loadAdminJobs();
+  }
+
+  /** Sort indicator for the admin-jobs table. Named distinctly from the
+   *  users-table sortIndicator(UserSortKey) so the two don't conflict. */
+  jobsSortIndicator(column: string): string {
+    if (this.jobsSortBy !== column) return '↕';
+    return this.jobsSortDir === 'asc' ? '↑' : '↓';
+  }
+
+  onJobsFilterChange(): void {
+    this.jobsPage.set(1);
+    this.loadAdminJobs();
+  }
+
+  gotoJobsPage(page: number): void {
+    if (page < 1 || page > this.jobsTotalPages()) return;
+    this.jobsPage.set(page);
+    this.loadAdminJobs();
+  }
+
+  jobsPageStart(): number {
+    return this.jobsTotal() === 0 ? 0 : (this.jobsPage() - 1) * this.jobsPageSize + 1;
+  }
+
+  jobsPageEnd(): number {
+    return Math.min(this.jobsPage() * this.jobsPageSize, this.jobsTotal());
   }
 
   healthQueueByQuality(): Array<{ quality: string; count: number }> {

@@ -44,4 +44,12 @@ public class SettingsResolver : ISettingsResolver
         var raw = await GetAsync(key, ct);
         return bool.TryParse(raw, out var v) ? v : fallback;
     }
+
+    public async Task<double> GetDoubleAsync(string key, double fallback, CancellationToken ct = default)
+    {
+        var raw = await GetAsync(key, ct);
+        return double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                               System.Globalization.CultureInfo.InvariantCulture, out var v)
+               ? v : fallback;
+    }
 }

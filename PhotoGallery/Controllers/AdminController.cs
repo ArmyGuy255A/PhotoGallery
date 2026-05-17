@@ -656,17 +656,16 @@ public class AdminController : ControllerBase
         var workers = registry.Snapshot();
         var localKeys = workers.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var heartbeats = await _ctx.WorkerHeartbeats.AsNoTracking().ToListAsync();
-        // Liveness: heartbeat is fresh if newer than (now - max(2*interval, 90s)).
-        // 90s floor keeps a 5-second interval from being declared dead after a
-        // single missed tick.
+        // Liveness: heartbeat is fresh if newer than the OfflineAfter threshold.
+        // Using the shared WorkerHeartbeatThresholds keeps writer + reader in sync.
         var now = DateTime.UtcNow;
+        var aliveCutoff = now - WorkerHeartbeatThresholds.OfflineAfter;
         foreach (var hb in heartbeats)
         {
             // Find the matching local worker entry (same name) and decorate it
             // with the metrics from the heartbeat. If absent locally, add a
             // synthetic entry.
-            var liveness = TimeSpan.FromSeconds(Math.Max(90, hb.IntervalSeconds * 2));
-            var isAlive = (now - hb.LastHeartbeatAt) <= liveness;
+            var isAlive = hb.LastHeartbeatAt >= aliveCutoff;
             var dto = new WorkerStatusDto
             {
                 Name             = hb.WorkerName,
@@ -677,6 +676,7 @@ public class AdminController : ControllerBase
                 CanTrigger       = false, // remote replica — trigger hook not reachable from here
                 InstanceId       = hb.InstanceId,
                 IsAlive          = isAlive,
+                LastHeartbeatAt  = hb.LastHeartbeatAt,
                 ItemsProcessedTotal = hb.ItemsProcessedTotal,
                 ItemsInFlight    = hb.ItemsInFlight,
                 LastError        = hb.LastError
@@ -690,6 +690,7 @@ public class AdminController : ControllerBase
                 var local = workers.First(w => string.Equals(w.Name, hb.WorkerName, StringComparison.OrdinalIgnoreCase));
                 local.InstanceId          = hb.InstanceId;
                 local.IsAlive             = isAlive;
+                local.LastHeartbeatAt     = hb.LastHeartbeatAt;
                 local.ItemsProcessedTotal = hb.ItemsProcessedTotal;
                 local.ItemsInFlight       = hb.ItemsInFlight;
                 local.LastError           = hb.LastError;
@@ -712,8 +713,19 @@ public class AdminController : ControllerBase
             .Select(g =>
             {
                 var jobs = g.OrderBy(j => j.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
-                var anyAlive = jobs.Any(j => j.IsAlive);
                 var isLocal = string.Equals(g.Key, localInstanceForReplicas, StringComparison.OrdinalIgnoreCase);
+                // Use the freshest heartbeat across all workers on this replica
+                // as the replica-level alive signal. A local replica with no
+                // workers (api-only) and no heartbeat row yet still counts as
+                // alive — it's literally the process answering the request.
+                var freshestHeartbeat = jobs
+                    .Select(j => j.LastHeartbeatAt)
+                    .Where(t => t.HasValue)
+                    .DefaultIfEmpty(null)
+                    .Max();
+                var isAlive = freshestHeartbeat.HasValue
+                    ? (now - freshestHeartbeat.Value) <= WorkerHeartbeatThresholds.OfflineAfter
+                    : (jobs.Count == 0 && isLocal); // synthetic API-only entry
                 // Heuristic role label: a replica that's running PhotoProcessing
                 // alongside the others is the worker app; a replica with no
                 // workers at all is api-only. Mixed (legacy single-replica) shows
@@ -726,13 +738,15 @@ public class AdminController : ControllerBase
                         : "api+worker";
                 return new ReplicaWorkerStatusDto
                 {
-                    InstanceId = g.Key,
-                    IsAlive    = anyAlive || jobs.Count == 0 && isLocal, // local replica is "alive" even with no workers
-                    Role       = role,
-                    Jobs       = jobs
+                    InstanceId      = g.Key,
+                    IsAlive         = isAlive,
+                    LastHeartbeatAt = freshestHeartbeat,
+                    Role            = role,
+                    Jobs            = jobs
                 };
             })
             .OrderByDescending(r => r.IsAlive)
+            .ThenByDescending(r => r.LastHeartbeatAt)
             .ThenBy(r => r.InstanceId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -742,10 +756,11 @@ public class AdminController : ControllerBase
         {
             replicas.Insert(0, new ReplicaWorkerStatusDto
             {
-                InstanceId = localInstanceForReplicas,
-                IsAlive    = true,
-                Role       = workersEnabled ? "api+worker" : "api-only",
-                Jobs       = new List<WorkerStatusDto>()
+                InstanceId      = localInstanceForReplicas,
+                IsAlive         = true,
+                LastHeartbeatAt = null,
+                Role            = workersEnabled ? "api+worker" : "api-only",
+                Jobs            = new List<WorkerStatusDto>()
             });
         }
 
@@ -931,6 +946,8 @@ public class ReplicaWorkerStatusDto
 {
     public string InstanceId { get; set; } = string.Empty;
     public bool IsAlive { get; set; }
+    /// <summary>Most recent heartbeat across all of this replica's workers. Null for synthetic API entries that never wrote one.</summary>
+    public DateTime? LastHeartbeatAt { get; set; }
     /// <summary>Role label: `api-only`, `worker`, or `api+worker`.</summary>
     public string Role { get; set; } = string.Empty;
     public List<WorkerStatusDto> Jobs { get; set; } = new();
@@ -975,6 +992,8 @@ public class WorkerStatusDto
     public string? InstanceId { get; set; }
     /// <summary>True if the heartbeat row is fresher than <c>WorkerHeartbeatThresholds.OfflineAfter</c>.</summary>
     public bool IsAlive { get; set; } = true;
+    /// <summary>UTC timestamp of the last heartbeat write from this worker (NULL for the synthetic API-only entry).</summary>
+    public DateTime? LastHeartbeatAt { get; set; }
     /// <summary>Per-replica running total of items processed since startup.</summary>
     public long ItemsProcessedTotal { get; set; }
     /// <summary>Size of the batch the worker is currently chewing on, 0 between ticks.</summary>
