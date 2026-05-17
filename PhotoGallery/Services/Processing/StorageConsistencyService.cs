@@ -232,8 +232,21 @@ public class StorageConsistencyService
         foreach (var quality in AllQualities)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var key = BuildKey(photo, quality.ToString().ToLowerInvariant());
-            var present = presentKeys.Contains(key);
+            // Quality.Watermark is special — the queue item produces TWO blobs
+            // (thumbnail-watermarked.jpg + medium-watermarked.jpg), NOT a single
+            // watermark.jpg. Treat the item as present only if BOTH watermarked
+            // blobs exist; if either is missing we need to re-run the watermark
+            // step. Other qualities use the straight quality-name filename.
+            bool present;
+            if (quality == QualityType.Watermark)
+            {
+                present = presentKeys.Contains(BuildKey(photo, "thumbnail-watermarked"))
+                       && presentKeys.Contains(BuildKey(photo, "medium-watermarked"));
+            }
+            else
+            {
+                present = presentKeys.Contains(BuildKey(photo, quality.ToString().ToLowerInvariant()));
+            }
             var item = existingItems.FirstOrDefault(i => i.Quality == quality);
             await ReconcileQualityAsync(photo, queue, quality, present, item, report, mutations);
         }
@@ -409,6 +422,9 @@ public class StorageConsistencyService
         {
             var wasComplete = item.Status == ProcessingStatus.Complete;
 
+            _logger.LogInformation(
+                "Photo {PhotoId} quality {Quality}: blob missing but item is {Status} — resetting to Pending so worker re-derives",
+                photo.Id, quality, item.Status);
             ResetItemToPending(item);
             await _itemRepository.UpdateAsync(item);
             mutations.ItemsChanged = true;
