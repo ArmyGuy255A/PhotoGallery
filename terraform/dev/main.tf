@@ -528,72 +528,27 @@ module "staticwebapp" {
   # The FE GH Actions deploy step sets BACKEND_API_URL out of band after
   # both resources exist (`az staticwebapp appsettings set ...`).
 
-  custom_domain_name = var.custom_domain_name
+  # NOTE: custom_domain_name is intentionally NOT passed. The appeid.app
+  # apex binds to the nginx-edge ACA container app (see the nginx repo's
+  # terraform/prod/), which path-routes /photogallery/* to this SWA at its
+  # default *.azurestaticapps.net hostname. SWA's Host check is satisfied
+  # because nginx rewrites the Host header on proxy_pass.
 
   tags = local.common_tags
 }
 
 ###############################################################################
-# DNS — Azure DNS zone for the custom domain (when configured).
+# DNS — owned by the nginx-edge stack (https://github.com/ArmyGuy255A/nginx,
+# terraform/prod/). That stack provisions the appeid.app DNS zone and binds
+# the apex A-alias to its ACA container app, which path-routes
+# /photogallery/* over to this SWA at its default *.azurestaticapps.net
+# hostname.
 #
-# Flow (one-time):
-#   1. terraform apply with custom_domain_name set. The zone is created and
-#      its nameservers are surfaced via the `dns_zone_nameservers` output.
-#   2. At the registrar (GoDaddy), replace the default nameservers with the
-#      four returned by Azure. Wait 15 min – 1 hr for propagation.
-#   3. Re-run terraform apply. The SWA custom-domain validations succeed
-#      and managed SSL certs (DigiCert) are issued automatically.
-#
-# All future DNS records for appeid.app MUST live in this zone — the
-# registrar's DNS UI becomes a no-op once nameservers are delegated.
+# Consumers of the SWA hostname (the nginx stack) read it via the existing
+# `static_web_app_default_host_name` output below. No DNS resources live in
+# the PhotoGallery footprint.
 ###############################################################################
 
 locals {
   custom_domain_enabled = var.custom_domain_name != ""
-}
-
-resource "azurerm_dns_zone" "custom_domain" {
-  count               = local.custom_domain_enabled ? 1 : 0
-  name                = var.custom_domain_name
-  resource_group_name = data.azurerm_resource_group.this.name
-  tags                = local.common_tags
-}
-
-# Apex A-alias → SWA. Azure DNS alias records support Static Web Apps as a
-# target, which is the trick that lets us bind a SWA to the zone apex
-# (GoDaddy and most registrars don't support ALIAS at apex).
-resource "azurerm_dns_a_record" "swa_apex" {
-  count               = local.custom_domain_enabled ? 1 : 0
-  name                = "@"
-  zone_name           = azurerm_dns_zone.custom_domain[0].name
-  resource_group_name = data.azurerm_resource_group.this.name
-  ttl                 = 300
-  target_resource_id  = module.staticwebapp.id
-}
-
-# www.<domain> CNAME → SWA default hostname. Used for cname-delegation
-# validation of the www binding and as the actual answer for www traffic.
-resource "azurerm_dns_cname_record" "swa_www" {
-  count               = local.custom_domain_enabled ? 1 : 0
-  name                = "www"
-  zone_name           = azurerm_dns_zone.custom_domain[0].name
-  resource_group_name = data.azurerm_resource_group.this.name
-  ttl                 = 300
-  record              = module.staticwebapp.default_host_name
-}
-
-# Apex validation TXT — the SWA module emits the token after the apex
-# custom-domain resource starts creation. The TXT must be live before
-# Azure's validator polls; the 30m create timeout on the SWA custom-domain
-# resource gives Terraform room to schedule and propagate the TXT first.
-resource "azurerm_dns_txt_record" "swa_apex_validation" {
-  count               = local.custom_domain_enabled ? 1 : 0
-  name                = "@"
-  zone_name           = azurerm_dns_zone.custom_domain[0].name
-  resource_group_name = data.azurerm_resource_group.this.name
-  ttl                 = 300
-
-  record {
-    value = module.staticwebapp.apex_validation_token
-  }
 }

@@ -127,20 +127,20 @@ variable "container_app_target_port" {
 
 variable "custom_domain_name" {
   description = <<-EOT
-    Apex custom domain to bind to the Static Web App, e.g. "appeid.app".
-    When set:
-      * An Azure DNS zone of the same name is provisioned (the zone's NS
-        records must be delegated at the registrar — e.g. GoDaddy).
-      * The SWA gets two custom-domain bindings: the apex (dns-txt-token)
-        and www.<domain> (cname-delegation). Azure issues and auto-renews
-        managed SSL certs (DigiCert) for both — no BYO cert needed.
-      * The apex A-alias + www CNAME + validation TXT records are populated
-        automatically.
-      * The API's CORS allowlist and Frontend__Url are updated to include
-        the custom-domain URL alongside the default *.azurestaticapps.net.
+    Public apex domain that browsers see when reaching the SPA (e.g.
+    "appeid.app"). Used ONLY to seed the API's CORS allowlist and
+    Frontend__Url so OAuth return URLs land on the production hostname.
 
-    Leave empty to skip custom-domain provisioning entirely (default; the
-    SWA remains reachable at its *.azurestaticapps.net hostname).
+    The actual public-edge binding for this hostname lives in the
+    separate nginx-edge stack (https://github.com/ArmyGuy255A/nginx,
+    terraform/prod/). That stack provisions the Azure DNS zone, the ACA
+    container app fronting appeid.app, and the TLS cert (from Key Vault).
+    This SWA stays on its *.azurestaticapps.net hostname; nginx proxies
+    /photogallery/* to it and rewrites the Host header so SWA's host
+    check is happy.
+
+    Leave empty to keep CORS limited to the SWA default hostname (default
+    when running this stack standalone without the nginx edge).
   EOT
   type        = string
   default     = ""
