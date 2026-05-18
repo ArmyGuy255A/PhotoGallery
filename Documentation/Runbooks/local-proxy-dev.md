@@ -268,4 +268,17 @@ connection-refused (proves nginx is gone).
 
 ## Troubleshooting
 
-_TODO — added in follow-up commit._
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| nginx returns **502 Bad Gateway** on `/photogallery/...` | Upstream (host process) isn't reachable from inside the container | Confirm the backend is bound to `0.0.0.0` (not `127.0.0.1`); confirm `extra_hosts: host.docker.internal:host-gateway` is in `docker-compose.yml` (it is in S5); on Linux verify `host.docker.internal` resolves inside the container (`docker exec nginx-appeid-local getent hosts host.docker.internal`). |
+| **404** on `/photogallery/api/healthz` through the proxy, but the same path works directly against the backend | Backend didn't pick up `BasePath`; `UsePathBase` is a no-op so the prefix isn't stripped | Confirm `ConfigurationSettings__BasePath=/photogallery` is set in the **same** shell that ran `dotnet run`; check the startup log for the diagnostic `Using PathBase` line. |
+| **404** on `/photogallery/api/...` through the proxy, but **`/api/...` through the proxy works** | The FE dev server's `proxy.conf.json` lacks the `/photogallery/api/*` rule and nginx is correctly preserving the prefix | Track #167. Until it lands, use the raw dev loop (shape #1) for API work, or temporarily edit `proxy.conf.json` in your S3 worktree. |
+| SPA assets 404 (e.g. `/photogallery/main.js` → 404) | Dev server is serving with `<base href="/">` because `npm start` was used instead of `npm run start:proxy` | Stop the dev server, re-run with `npm run start:proxy`, hard-refresh the browser. |
+| SPA loads but `<base href>` shows as `/` | `start:proxy` script silently fell back to `ng serve` defaults | Check the dev-server log for `Unknown argument: base-href`. Angular 19's `ng serve` may need the base href set via `angular.json` `architect.serve.options.baseHref` rather than the CLI flag — flag to FE if reproduced. |
+| `dotnet run` aborts with `Connection string 'DefaultConnection' not found` | No `appsettings.Development.json` provides one and no env var is set | Either start the SQL Server Docker container per the repo's standard dev setup and configure `ConnectionStrings__DefaultConnection`, or create a gitignored `appsettings.Development.Local.json` with the connection string. |
+| `dotnet run` aborts with `Authentication:Jwt:Key is not configured` | Same as above for the JWT signing key | Set `$env:Authentication__Jwt__Key = "<≥32-byte secret>"` for smoke-only. Real flows need the Google OAuth client + the production-shape Key Vault overlay. |
+| Browser shows `NET::ERR_CERT_AUTHORITY_INVALID` and won't let you bypass | Strict HSTS / corporate policy | Import `D:\repos\nginx-appeid-s5\local\certs\server.crt` into your OS trust root, or use a non-HSTS profile. |
+| nginx healthz curl hangs | Container started but TLS handshake failing — usually a missing or 0-byte cert | Re-run `generate-certs.ps1`, then `docker compose up -d --build` (the `--build` is important; the cert is COPYed into the image). |
+
+---
+
