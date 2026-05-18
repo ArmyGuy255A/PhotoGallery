@@ -232,6 +232,36 @@
       }
     },
     {
+      "label": "Frontend: Run (Proxy mode, /photogallery base href)",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "start:proxy"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/FE.PhotoGallery"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*",
+          "endsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": false
+      },
+      "detail": "Runs 'ng serve --base-href=/photogallery/' for local reverse-proxy parity (mirrors the /photogallery/ ingress path used in container deployments). Pair with 'Backend: Run (Port 5105)'."
+    },
+    {
       "label": "Frontend: Lint",
       "type": "shell",
       "command": "npm",

@@ -1,0 +1,348 @@
+# Local docker proxy dev stack — runbook
+
+> Story **S6** of epic "Configurable base path for reverse-proxy deployment"
+> (#159). Closes #164.
+
+This runbook brings up the full PhotoGallery dev loop **behind nginx-appeid**
+on a single workstation, so we can validate the prod-shaped path
+`https://localhost:8000/photogallery/...` end to end before merging the
+S1–S5 work to `trial`. This is the "Local docker stack" dev shape #2 from
+[`FE.PhotoGallery/README.md` — Three dev shapes][1].
+
+[1]: ../../FE.PhotoGallery/README.md#three-dev-shapes
+
+---
+
+## Prereqs
+
+- **Docker Desktop** running. The nginx-appeid container terminates TLS on
+  host port `8000` and proxies to the host loopback via
+  `host.docker.internal`.
+- **Node 20+** (Angular 19.2 dev server).
+- **.NET 9 SDK** (ASP.NET 9 backend).
+- **PowerShell 7+** (`pwsh`). This runbook's commands are PowerShell.
+- **SQL Server reachable from the backend.** Per repo memory, SQL Server
+  runs in Docker for local dev. The S1 backend needs
+  `ConnectionStrings:DefaultConnection` resolved either via
+  `appsettings.Development.json`, an `appsettings.Development.Local.json`
+  overlay (gitignored), or `ConnectionStrings__DefaultConnection` env var.
+  Without it `dotnet run` aborts at startup with
+  `Connection string 'DefaultConnection' not found.`
+- **Authentication secrets.** S1's `Authentication:Jwt:Key` must be
+  configured (≥32 bytes for HMAC). For pure smoke testing you can set
+  `DISABLE_AUTH=true` and provide a dummy key via env var, but real OAuth
+  flows obviously need the Google client id/secret.
+- **Repo checkouts at the right branches.** This runbook assumes the
+  worktrees set up by the S1–S5 fleet:
+
+  | Worktree | Branch | Used for |
+  |---|---|---|
+  | `D:\repos\PhotoGallery-s1-basepath` | `u/copilot/feature/backend-basepath` | Backend with `UsePathBase` |
+  | `D:\repos\PhotoGallery-s3-basehref` | `u/copilot/feature/fe-base-href` | FE `npm run start:proxy` |
+  | `D:\repos\nginx-appeid-s5` | `u/copilot/feature/preserve-prefix-add-hub` | nginx with `/photogallery/api/*` + `/photogallery/hubs/*` locations |
+
+  Once the predecessor PRs merge to `trial`, swap the worktrees for a
+  single `trial`-tracking checkout per repo and update the paths below.
+
+### Self-signed certs
+
+nginx-appeid's local stack terminates TLS with a self-signed RSA cert that
+matches what Azure Container Apps fronts in prod (CN `localhost`, SANs
+`localhost` / `appeid.app` / `local.appeid.app` / `127.0.0.1`). Generate
+the pair once per checkout:
+
+```powershell
+cd D:\repos\nginx-appeid-s5\local
+pwsh -File .\generate-certs.ps1
+# Emits local\certs\server.crt and local\certs\server.key (gitignored).
+```
+
+The cert is **not** added to the OS / browser trust store. Expect:
+- Browsers will warn ("Your connection is not private") — click through.
+- `curl` needs `-k` (or `--insecure`) to skip verification.
+
+If you want the warning to disappear permanently in your browser, import
+`local\certs\server.crt` into the OS root store yourself; we deliberately
+don't do that in script form.
+
+---
+
+## Start sequence
+
+Order matters: nginx will start regardless, but the FE and BE must be
+listening when traffic hits or you'll see 502 from nginx. Bring them up
+**backend → frontend → nginx**.
+
+### 1. Backend — ASP.NET 9 with `BasePath=/photogallery`
+
+```powershell
+cd D:\repos\PhotoGallery-s1-basepath
+
+$env:ASPNETCORE_ENVIRONMENT          = "Development"
+$env:ASPNETCORE_URLS                 = "http://0.0.0.0:5105"
+$env:ConfigurationSettings__BasePath = "/photogallery"
+# Plus whatever your Development overlay doesn't already provide:
+#   $env:ConnectionStrings__DefaultConnection = "Server=localhost,1433;..."
+#   $env:Authentication__Jwt__Key             = "<≥32-byte secret>"
+#   $env:DISABLE_AUTH                         = "true"   # smoke-only
+
+dotnet run --project PhotoGallery\PhotoGallery.csproj
+```
+
+What "good" looks like in the log:
+
+```
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://0.0.0.0:5105
+```
+
+`0.0.0.0` is required — `localhost`-only binding is unreachable from
+`host.docker.internal` inside the nginx container. S1's `Program.cs`
+already defaults to `http://0.0.0.0:5105`; the override above is belt-
+and-braces.
+
+The `ConfigurationSettings__BasePath=/photogallery` env var feeds S1's
+`UsePathBase(...)` middleware, which:
+- **strips** the `/photogallery` prefix into `Request.PathBase`, so
+  `[Route("api/healthz")]` still matches when the URL is
+  `/photogallery/api/healthz`, and
+- **rejects** requests that arrived without the prefix (returns 404). So
+  hitting `http://localhost:5105/api/healthz` directly should be 404
+  while `http://localhost:5105/photogallery/api/healthz` is 200. This is
+  the S1 acceptance criterion (#160).
+
+### 2. Frontend — Angular dev server in proxy shape
+
+```powershell
+cd D:\repos\PhotoGallery-s3-basehref\FE.PhotoGallery
+npm ci                      # first time only
+npm run start:proxy         # ng serve --base-href=/photogallery/
+```
+
+What "good" looks like:
+
+```
+➜  Local:   http://localhost:4300/photogallery/
+```
+
+The dev server listens at `http://localhost:4300/` and serves
+`index.html` with `<base href="/photogallery/">` rewritten in. nginx
+will then proxy `/photogallery/` → `host.docker.internal:4300/` with the
+prefix stripped, so the dev server sees plain `/`-rooted URLs.
+
+> ⚠️ **Known gap — see ["Known gaps until follow-ups land"](#known-gaps-until-follow-ups-land).**
+> As of S3 the dev server's `proxy.conf.json` only forwards `/api/*` to
+> `http://localhost:5105`; it does **not** yet forward
+> `/photogallery/api/*` or `/photogallery/hubs/*`. That's filed as
+> #167 and means the API + hub curls in step 4 below will fail with
+> SPA-fallback HTML (200 with `<title>Photo Gallery</title>`) instead of
+> a JSON 200 / 401 until #167 lands.
+
+### 3. nginx-appeid — TLS edge on host `:8000`
+
+```powershell
+cd D:\repos\nginx-appeid-s5\local
+docker compose up -d --build
+```
+
+What "good" looks like:
+
+```
+ Container nginx-appeid-local  Started
+```
+
+Verify the container is healthy:
+
+```powershell
+docker ps --filter name=nginx-appeid-local --format '{{.Status}}'
+# -> Up X seconds (healthy)
+```
+
+The container's internal HEALTHCHECK hits `http://127.0.0.1:8080/healthz`
+(plain HTTP server inside the container). Externally we go through
+`https://localhost:8000/...`.
+
+---
+
+## Validation curls
+
+Run from any shell on the host. The smoke script
+[`scripts/smoke-local-proxy.ps1`](../../scripts/smoke-local-proxy.ps1)
+automates these checks.
+
+### A. nginx is up
+
+```powershell
+curl.exe -sk -i https://localhost:8000/healthz
+```
+
+Expected (captured locally 2026-05-17):
+
+```
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: text/plain
+Content-Length: 3
+
+ok
+```
+
+### B. Backend reachable through the proxy
+
+```powershell
+curl.exe -sk -i https://localhost:8000/photogallery/api/healthz
+```
+
+Expected: `HTTP/1.1 200 OK` with the `HealthzController` body.
+
+### C. Public config endpoint (epic's canonical AC)
+
+```powershell
+curl.exe -sk https://localhost:8000/photogallery/api/config/public
+```
+
+Expected: `200` JSON containing at minimum `googleClientId`. This is the
+endpoint the user called out as the canonical failure in #164.
+
+### D. SignalR hub negotiate
+
+```powershell
+curl.exe -sk -i -X POST `
+  'https://localhost:8000/photogallery/hubs/photo-progress/negotiate?negotiateVersion=1'
+```
+
+Expected: `200` with a `connectionId` (when DISABLE_AUTH=true or the
+request is authenticated), **or** `401` (auth required). Either is fine
+— the smoke is "did the request reach the hub". A `404` here means
+S2 + S5 routing is broken or the FE proxy is missing the
+`/photogallery/hubs/*` rule (see #167).
+
+### E. SPA loads in a browser
+
+Open `https://localhost:8000/photogallery/` in Chrome / Edge:
+
+1. Accept the self-signed cert warning.
+2. SPA shell renders.
+3. DevTools → Network: every asset returns 200 with the same origin
+   `https://localhost:8000`; no 404s; no `/photogallery/photogallery/`
+   double-prefix paths; no CORS errors. The HTML's `<base href>` should
+   be `/photogallery/`.
+
+The smoke script **skips** the browser check (it's a script, not a
+human). Verify manually after the script reports PASS for A–D.
+
+### F. SignalR end-to-end (full epic AC)
+
+Once authenticated, upload a photo through the SPA. The photo-progress
+hub should stream `progress` events that render in the UI. This proves
+WebSockets survived three reverse-proxy hops:
+
+```
+browser ──wss──> nginx :8000 ──ws──> ng serve :4300 ──ws──> kestrel :5105
+                                     (proxy.conf.json forwards /photogallery/hubs/*)
+```
+
+This step is out of scope for the smoke script (requires login + a real
+photo); it's still on the human runbook checklist.
+
+---
+
+## Teardown
+
+```powershell
+# nginx
+cd D:\repos\nginx-appeid-s5\local
+docker compose down
+
+# Frontend + backend: Ctrl+C in each shell.
+# Or kill by PID if they were started detached:
+Get-NetTCPConnection -LocalPort 5105,4300 |
+  Select-Object -ExpandProperty OwningProcess -Unique |
+  ForEach-Object { Stop-Process -Id $_ -Force }
+```
+
+Re-running the smoke after teardown should fail check **A** with a
+connection-refused (proves nginx is gone).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| nginx returns **502 Bad Gateway** on `/photogallery/...` | Upstream (host process) isn't reachable from inside the container | Confirm the backend is bound to `0.0.0.0` (not `127.0.0.1`); confirm `extra_hosts: host.docker.internal:host-gateway` is in `docker-compose.yml` (it is in S5); on Linux verify `host.docker.internal` resolves inside the container (`docker exec nginx-appeid-local getent hosts host.docker.internal`). |
+| **404** on `/photogallery/api/healthz` through the proxy, but the same path works directly against the backend | Backend didn't pick up `BasePath`; `UsePathBase` is a no-op so the prefix isn't stripped | Confirm `ConfigurationSettings__BasePath=/photogallery` is set in the **same** shell that ran `dotnet run`; check the startup log for the diagnostic `Using PathBase` line. |
+| **404** on `/photogallery/api/...` through the proxy, but **`/api/...` through the proxy works** | The FE dev server's `proxy.conf.json` lacks the `/photogallery/api/*` rule and nginx is correctly preserving the prefix | Track #167. Until it lands, use the raw dev loop (shape #1) for API work, or temporarily edit `proxy.conf.json` in your S3 worktree. |
+| SPA assets 404 (e.g. `/photogallery/main.js` → 404) | Dev server is serving with `<base href="/">` because `npm start` was used instead of `npm run start:proxy` | Stop the dev server, re-run with `npm run start:proxy`, hard-refresh the browser. |
+| SPA loads but `<base href>` shows as `/` | `start:proxy` script silently fell back to `ng serve` defaults | Check the dev-server log for `Unknown argument: base-href`. Angular 19's `ng serve` may need the base href set via `angular.json` `architect.serve.options.baseHref` rather than the CLI flag — flag to FE if reproduced. |
+| `dotnet run` aborts with `Connection string 'DefaultConnection' not found` | No `appsettings.Development.json` provides one and no env var is set | Either start the SQL Server Docker container per the repo's standard dev setup and configure `ConnectionStrings__DefaultConnection`, or create a gitignored `appsettings.Development.Local.json` with the connection string. |
+| `dotnet run` aborts with `Authentication:Jwt:Key is not configured` | Same as above for the JWT signing key | Set `$env:Authentication__Jwt__Key = "<≥32-byte secret>"` for smoke-only. Real flows need the Google OAuth client + the production-shape Key Vault overlay. |
+| Browser shows `NET::ERR_CERT_AUTHORITY_INVALID` and won't let you bypass | Strict HSTS / corporate policy | Import `D:\repos\nginx-appeid-s5\local\certs\server.crt` into your OS trust root, or use a non-HSTS profile. |
+| nginx healthz curl hangs | Container started but TLS handshake failing — usually a missing or 0-byte cert | Re-run `generate-certs.ps1`, then `docker compose up -d --build` (the `--build` is important; the cert is COPYed into the image). |
+
+---
+
+## Known gaps until follow-ups land
+
+This runbook documents the **target** local-proxy dev loop. As of the
+S6 PR being opened, two follow-ups are still open and partly block the
+acceptance bar:
+
+- **#167 — FE `proxy.conf.json` add `/photogallery/api/*` and
+  `/photogallery/hubs/*` routes.** Until merged, validation steps **C**
+  and **D** above will not return the expected backend response;
+  they'll return the SPA's `index.html` fallback (HTTP 200 with HTML
+  body). The smoke script flags this case explicitly.
+
+- **#170 — VSCode task to launch proxy-mode dev server.** Quality-of-
+  life only. Until merged, the three start-sequence shells are
+  driven by hand.
+
+In addition, when validating this runbook locally on 2026-05-17 we hit
+two backend-startup blockers that are **not new** to this story but are
+worth recording so the next runner doesn't trip on them:
+
+- `dotnet run` requires `ConnectionStrings:DefaultConnection` and
+  `Authentication:Jwt:Key` to be resolvable. Neither is part of the
+  committed `appsettings.Development.json` (the file isn't even
+  present in S1's worktree). Stand up SQL Server in Docker per the
+  repo memory note and provide both values via env var or a
+  gitignored overlay before running the smoke.
+
+- S3's `npm run start:proxy` script (`ng serve --base-href=/photogallery/`)
+  surfaced `Error: Unknown argument: base-href` on Angular 19.2 in
+  this environment. If you see this, raise it against the S3 PR — the
+  base href on `ng serve` may need to move to
+  `angular.json → projects.<>.architect.serve.options.baseHref`.
+  Don't fix it inside the S6 PR; it's S3's lane.
+
+---
+
+## Validation status
+
+> 🟡 **Partially validated live; remainder theoretical based on
+> S1/S3/S5 designs.**
+
+| Check | Status | Notes |
+|---|---|---|
+| A. `https://localhost:8000/healthz` → 200 `ok` | ✅ live, 2026-05-17 | nginx layer confirmed working with S5 build (`smoke-local-proxy.ps1` step A PASS). |
+| B. `https://localhost:8000/photogallery/api/healthz` → 200 | ⚪ theoretical | Backend startup blocked by missing local dev secrets (see Known gaps); design from S1+S5 says 200. With nginx alone the smoke script correctly reports HTTP 502 here, proving nginx is forwarding the request to a (non-running) upstream — i.e. routing is right. |
+| C. `https://localhost:8000/photogallery/api/config/public` → 200 JSON | ⚪ theoretical | Same as B, plus blocked by #167 on the FE proxy. |
+| D. `/photogallery/hubs/photo-progress/negotiate` → 200 or 401 | ⚪ theoretical | Same as B, plus blocked by #167. |
+| E. SPA loads in browser | ⚪ theoretical | Blocked by S3's `start:proxy` script error in this environment. |
+| F. Upload SignalR end-to-end | ⚪ theoretical | Out of scope for the smoke script; for the human checklist once auth works. |
+
+The runbook will be re-validated and the table refreshed once S1+S3+S5
+land on `trial` and #167 is fixed. At that point, this same runbook
+should be promoted to a Trial smoke runbook (see follow-up note on the
+S6 PR).
+
+---
+
+## See also
+
+- [`FE.PhotoGallery/README.md` — Three dev shapes](../../FE.PhotoGallery/README.md#three-dev-shapes)
+- [`Documentation/Architecture/DESIGN_DECISIONS.md` — D016 branching contract](../Architecture/DESIGN_DECISIONS.md)
+- Epic #159 — Configurable base path for reverse-proxy deployment
+- Story PRs: #168 (S1), #171 (S2), #169 (S3), #172 (S4), nginx-appeid#9 (S5)
+- Follow-ups: #167 (FE proxy routes), #170 (VSCode task)

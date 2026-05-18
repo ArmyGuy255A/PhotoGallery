@@ -260,3 +260,13 @@ Before committing any code:
 **Last Updated**: 2026-05-03 (D006/D007/D008 added — Playwright testing strategy, storage reconciliation, cached URL verification)
 **Status**: Operational (6 folders, 20+ documents)
 **Maintained By**: Architect Skill + Development Team
+
+
+### 📘 **[Runbooks/](./Runbooks/)** — Operational runbooks
+
+Step-by-step procedures for repeatable operational tasks.
+
+| Document | Purpose |
+|----------|---------|
+| **[local-proxy-dev.md](./Runbooks/local-proxy-dev.md)** | Bring up the full PhotoGallery dev loop behind nginx-appeid on a single workstation and smoke it. Closes #164. |
+| **[local-azure-dev.md](./Runbooks/local-azure-dev.md)** | Run PhotoGallery against the Trial Azure backplane (existing). |

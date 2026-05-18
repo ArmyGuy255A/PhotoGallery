@@ -24,6 +24,23 @@ public class ConfigurationSettings
     public List<string> AdminUsers { get; set; } = new();
     public bool DISABLE_AUTH { get; set; }
     public string AllowedHosts { get; set; } = "*";
+
+    /// <summary>
+    /// Reverse-proxy mount point this backend serves under. Empty string
+    /// (default) means the app serves at root, which is the local-dev shape
+    /// (raw <c>dotnet run</c>, no proxy). Set to a leading-slash path like
+    /// <c>"/photogallery"</c> when sitting behind <c>nginx-appeid</c> so
+    /// <c>app.UsePathBase(BasePath)</c> strips the prefix into
+    /// <c>HttpContext.Request.PathBase</c> and routing / link generation
+    /// reason about the real mount point.
+    ///
+    /// Bound at JSON root (no nesting section) per the project's
+    /// <c>configuration.Bind(settings)</c> convention — see
+    /// <see cref="DependencyInjection.AddConfigurationServices"/>.
+    /// Reference: epic #159 / story #160 (Configurable base path for
+    /// reverse-proxy deployment).
+    /// </summary>
+    public string BasePath { get; set; } = string.Empty;
 }
 
 public class ConnectionStrings
