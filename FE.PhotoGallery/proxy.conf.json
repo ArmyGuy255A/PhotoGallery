@@ -1,5 +1,26 @@
 {
+  "/photogallery/api": {
+    "target": "http://localhost:5105",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "debug",
+    "ws": true
+  },
+  "/photogallery/hubs": {
+    "target": "http://localhost:5105",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "debug",
+    "ws": true
+  },
   "/api": {
+    "target": "http://localhost:5105",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "debug",
+    "ws": true
+  },
+  "/hubs": {
     "target": "http://localhost:5105",
     "secure": false,
     "changeOrigin": true,
