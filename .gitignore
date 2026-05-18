@@ -227,3 +227,12 @@ FE.PhotoGallery/.vscode/extensions.json
 
 # EF tooling and scratch artifacts
 temp/
+
+# local-proxy dev scratch
+backend.pid
+fe.pid
+backend.log
+backend.err.log
+fe.log
+fe.err.log
+

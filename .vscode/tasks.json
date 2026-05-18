@@ -72,6 +72,46 @@
       "detail": "Starts the API in ingress-only mode (WorkersEnabled=false). Pair with 'Backend: Run as Worker' for the production split topology locally."
     },
     {
+      "label": "Backend: Run (Proxy mode, BasePath=/photogallery)",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "PhotoGallery/PhotoGallery.csproj",
+        "--no-launch-profile"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "ASPNETCORE_ENVIRONMENT": "Development",
+          "ASPNETCORE_URLS": "http://0.0.0.0:5105",
+          "BasePath": "/photogallery",
+          "DISABLE_AUTH": "true",
+          "WorkersEnabled": "false",
+          "CONTAINER_APP_REPLICA_NAME": "local-api"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^.*$",
+          "line": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*Application started.*",
+          "endsPattern": "^.*Application started.*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": false
+      },
+      "detail": "Starts the API with BasePath=/photogallery and binds 0.0.0.0:5105 so the local nginx-appeid docker stack can reach it. Pair with 'Frontend: Run (Proxy mode, /photogallery base href)' and the nginx-appeid local docker compose."
+    },
+    {
       "label": "Backend: Run with Watch",
       "type": "shell",
       "command": "dotnet",
@@ -569,6 +609,17 @@
         "panel": "new",
         "focus": true
       }
+    },
+    {
+      "label": "Stack: Local Proxy",
+      "dependsOn": [
+        "Docker: Start Services (MinIO, PostgreSQL)",
+        "Backend: Run (Proxy mode, BasePath=/photogallery)",
+        "Frontend: Run (Proxy mode, /photogallery base href)"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "detail": "One-click bring-up of the /photogallery proxy dev shape: starts MSSQL + MinIO, then the backend with BasePath=/photogallery on 0.0.0.0:5105, then ng-serve in proxy mode. After this finishes, bring up the nginx-appeid local docker stack in `D:\\repos\\nginx-appeid\\local` and hit https://localhost:8000/photogallery/ . See Documentation/Runbooks/local-proxy-dev.md."
     }
   ]
 }
