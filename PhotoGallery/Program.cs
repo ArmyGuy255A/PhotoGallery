@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using PhotoGallery;
@@ -117,9 +118,42 @@ builder.Host.UseSerilog((context, services, configuration) =>
 // local dev / xUnit are unaffected.
 builder.Services.AddApplicationInsightsTelemetry();
 
-// Configure listening URLs (defaults to 5105, or use ASPNETCORE_URLS env var if set)
-var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5105";
+// Configure listening URLs. Defaults to http://0.0.0.0:5105 (not localhost) so
+// the local docker stack (S6 of epic #159) can reach the backend via
+// host.docker.internal from inside the nginx-appeid container — binding to
+// 127.0.0.1 would refuse those connections. ASPNETCORE_URLS still wins when
+// set (e.g. in containers / Trial / Production). Kestrel rejects
+// http://localhost:0 (dynamic port) so don't go there.
+var urls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5105";
 builder.WebHost.UseUrls(urls);
+
+// Configure ForwardedHeaders so X-Forwarded-Proto / Host / For / Prefix from
+// the upstream reverse proxy (nginx-appeid in front of /photogallery/*) are
+// honored by Kestrel. Without this:
+//   - Request.Scheme stays "http" behind a TLS-terminating proxy, breaking
+//     server-emitted absolute URLs (SignalR negotiate redirects, OAuth
+//     callbacks, generated links) and forcing UseHttpsRedirection into a
+//     redirect loop.
+//   - Request.PathBase never reflects the proxy's mount-prefix even when
+//     X-Forwarded-Prefix is supplied.
+//
+// CRITICAL: clear KnownProxies + KnownNetworks. The ForwardedHeaders middleware
+// silently *no-ops* in containers (where the proxy isn't 127.0.0.0/8) unless
+// you opt out of the default allowlist. Both ACA (Trial/Prod) and the local
+// docker stack put the proxy on a non-loopback bridge address, so the default
+// allowlist would drop every header.
+//
+// Reference: epic #159 / story #160; ASP.NET Core forwarded-headers docs.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost |
+        ForwardedHeaders.XForwardedPrefix;
+    options.KnownProxies.Clear();
+    options.KnownNetworks.Clear();
+});
 
 // EF Core: single context, SQL Server only. Local dev uses Docker SQL Server
 // (`docker compose up -d mssql`), trial/prod use Azure SQL. See
@@ -358,6 +392,42 @@ catch (Exception ex)
 }
 
 // Configure the HTTP request pipeline.
+//
+// ForwardedHeaders MUST run before everything else so the rewritten Scheme,
+// Host, RemoteIpAddress, and PathBase are visible to every downstream
+// middleware (HTTPS redirection, routing, auth, exception handler). PathBase
+// then strips the proxy mount-prefix off Request.Path so MVC routing matches
+// against the bare /api/... template the controllers declare. Both must come
+// before UseRouting (per the order documented on the issue).
+app.UseForwardedHeaders();
+
+if (!string.IsNullOrEmpty(settings.BasePath))
+{
+    app.UsePathBase(settings.BasePath);
+
+    // UsePathBase only *strips* the matching prefix into Request.PathBase; it
+    // doesn't reject requests that arrived without the prefix. Behind nginx
+    // that should never happen, but if the backend is reached directly
+    // (misconfigured upstream, internal probe, attacker bypass), serving the
+    // app at both /api/* AND /photogallery/api/* would mask the misconfig
+    // and produce confusing logs. Return 404 for any request whose effective
+    // PathBase doesn't equal the configured BasePath.
+    //
+    // Acceptance criterion (#160): with BasePath=/photogallery,
+    // GET /api/healthz must return 404, GET /photogallery/api/healthz 200.
+    var configuredBase = settings.BasePath.TrimEnd('/');
+    app.Use(async (ctx, next) =>
+    {
+        if (!string.Equals(ctx.Request.PathBase.Value?.TrimEnd('/'),
+                configuredBase, StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        await next();
+    });
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseMigrationsEndPoint();
@@ -441,3 +511,10 @@ app.MapFallback("/api/{*rest}", PhotoGallery.Middleware.ApiErrorResponseFactory.
 // Removed the second start; PhotoProcessingWorker is the sole driver now.
 
 app.Run();
+
+// Expose the implicit Program type as partial so PhotoGallery.Tests can
+// reference it with WebApplicationFactory<Program>. The xUnit project already
+// has InternalsVisibleTo (see PhotoGallery.csproj) which lets it see the
+// auto-generated internal class. This declaration just gives WAF a concrete
+// type to bind generics against — no runtime behavior added.
+public partial class Program { }
