@@ -166,4 +166,87 @@ The container's internal HEALTHCHECK hits `http://127.0.0.1:8080/healthz`
 
 ## Validation curls
 
+Run from any shell on the host. The smoke script
+[`scripts/smoke-local-proxy.ps1`](../../scripts/smoke-local-proxy.ps1)
+automates these checks.
+
+### A. nginx is up
+
+```powershell
+curl.exe -sk -i https://localhost:8000/healthz
+```
+
+Expected (captured locally 2026-05-17):
+
+```
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: text/plain
+Content-Length: 3
+
+ok
+```
+
+### B. Backend reachable through the proxy
+
+```powershell
+curl.exe -sk -i https://localhost:8000/photogallery/api/healthz
+```
+
+Expected: `HTTP/1.1 200 OK` with the `HealthzController` body.
+
+### C. Public config endpoint (epic's canonical AC)
+
+```powershell
+curl.exe -sk https://localhost:8000/photogallery/api/config/public
+```
+
+Expected: `200` JSON containing at minimum `googleClientId`. This is the
+endpoint the user called out as the canonical failure in #164.
+
+### D. SignalR hub negotiate
+
+```powershell
+curl.exe -sk -i -X POST `
+  'https://localhost:8000/photogallery/hubs/photo-progress/negotiate?negotiateVersion=1'
+```
+
+Expected: `200` with a `connectionId` (when DISABLE_AUTH=true or the
+request is authenticated), **or** `401` (auth required). Either is fine
+— the smoke is "did the request reach the hub". A `404` here means
+S2 + S5 routing is broken or the FE proxy is missing the
+`/photogallery/hubs/*` rule (see #167).
+
+### E. SPA loads in a browser
+
+Open `https://localhost:8000/photogallery/` in Chrome / Edge:
+
+1. Accept the self-signed cert warning.
+2. SPA shell renders.
+3. DevTools → Network: every asset returns 200 with the same origin
+   `https://localhost:8000`; no 404s; no `/photogallery/photogallery/`
+   double-prefix paths; no CORS errors. The HTML's `<base href>` should
+   be `/photogallery/`.
+
+The smoke script **skips** the browser check (it's a script, not a
+human). Verify manually after the script reports PASS for A–D.
+
+### F. SignalR end-to-end (full epic AC)
+
+Once authenticated, upload a photo through the SPA. The photo-progress
+hub should stream `progress` events that render in the UI. This proves
+WebSockets survived three reverse-proxy hops:
+
+```
+browser ──wss──> nginx :8000 ──ws──> ng serve :4300 ──ws──> kestrel :5105
+                                     (proxy.conf.json forwards /photogallery/hubs/*)
+```
+
+This step is out of scope for the smoke script (requires login + a real
+photo); it's still on the human runbook checklist.
+
+---
+
+## Teardown
+
 _TODO — added in follow-up commit._
