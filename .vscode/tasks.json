@@ -261,8 +261,8 @@
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*",
-          "endsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*"
+          "beginsPattern": "^.*Building.*",
+          "endsPattern": "^.*Application bundle generation complete.*"
         }
       },
       "presentation": {
@@ -290,8 +290,8 @@
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*",
-          "endsPattern": "^.*Application bundle generated.*|^.*✔ Compiled successfully.*"
+          "beginsPattern": "^.*Building.*",
+          "endsPattern": "^.*Application bundle generation complete.*"
         }
       },
       "presentation": {
@@ -299,7 +299,7 @@
         "panel": "new",
         "focus": false
       },
-      "detail": "Runs 'ng serve --base-href=/photogallery/' for local reverse-proxy parity (mirrors the /photogallery/ ingress path used in container deployments). Pair with 'Backend: Run (Port 5105)'."
+      "detail": "Runs 'ng serve --configuration=proxy' which bakes <base href=\"/photogallery/\"> into the served index.html and binds 0.0.0.0:4300 so the nginx-appeid container can reach it via host.docker.internal. Pair with 'Backend: Run (Proxy mode, BasePath=/photogallery)' and one of the 'nginx-appeid: ...' tasks."
     },
     {
       "label": "Frontend: Lint",
@@ -447,8 +447,9 @@
     {
       "label": "Docker: Start Services (MinIO, PostgreSQL)",
       "type": "shell",
-      "command": "docker-compose",
+      "command": "docker",
       "args": [
+        "compose",
         "up",
         "-d"
       ],
@@ -463,8 +464,9 @@
     {
       "label": "Docker: Stop Services",
       "type": "shell",
-      "command": "docker-compose",
+      "command": "docker",
       "args": [
+        "compose",
         "down"
       ],
       "options": {
@@ -478,8 +480,9 @@
     {
       "label": "Docker: View Logs",
       "type": "shell",
-      "command": "docker-compose",
+      "command": "docker",
       "args": [
+        "compose",
         "logs",
         "-f"
       ],
@@ -491,6 +494,78 @@
         "reveal": "always",
         "panel": "shared"
       }
+    },
+    {
+      "label": "nginx-appeid: Local proxy stack (https://localhost:8000)",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "compose",
+        "up",
+        "-d",
+        "--build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../nginx-appeid/local"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Brings up the nginx-appeid local docker stack (TLS :8443 -> host :8000). Forwards /photogallery/* to host's ng serve at :4300 and /photogallery/api/*, /photogallery/hubs/* to host's dotnet at :5105 via host.docker.internal. Requires the local cert pair at nginx-appeid/local/certs/ (run nginx-appeid/local/generate-certs.ps1 once). Pair with 'Backend: Run (Proxy mode, BasePath=/photogallery)' + 'Frontend: Run (Proxy mode, /photogallery base href)'."
+    },
+    {
+      "label": "nginx-appeid: Local proxy stack DOWN",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "compose",
+        "down"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/../../nginx-appeid/local"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Stops the local nginx-appeid stack."
+    },
+    {
+      "label": "nginx-appeid: Azure-pointing test stack (http://localhost:8001)",
+      "type": "shell",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "docker build -t nginx-appeid-azure:local ${workspaceFolder}/../../nginx-appeid; docker rm -f nginx-appeid-azure; docker run -d --name nginx-appeid-azure -p 8001:8080 -e SWA_UPSTREAM='agreeable-tree-043fa290f.7.azurestaticapps.net' -e API_UPSTREAM='ca-photogallery-api-dev.purplesea-ba9de704.eastus2.azurecontainerapps.io' nginx-appeid-azure:local"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Builds the prod nginx-appeid Dockerfile and runs the resulting image on host :8001 with SWA_UPSTREAM + API_UPSTREAM pointing at the live Azure ACA + SWA endpoints. Lets you validate the prod conf shape (Services/appeid/server-appeid.conf) without deploying. Smoke: curl http://localhost:8001/photogallery/api/config/public. Upstream values mirror terraform/prod/variables.tf defaults."
+    },
+    {
+      "label": "nginx-appeid: Azure-pointing test stack DOWN",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "rm",
+        "-f",
+        "nginx-appeid-azure"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "detail": "Stops + removes the nginx-appeid-azure test container."
     },
     {
       "label": "Full Stack: API + Worker + Frontend",
