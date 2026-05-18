@@ -29,7 +29,20 @@ public class ApplicationDbContextInitializer(
     {
         try
         {
-            await context.Database.MigrateAsync();
+            // MigrateAsync only works on a relational provider (SqlServer in
+            // dev/Trial/Prod). The xUnit BasePath integration tests swap the
+            // context onto the EF Core InMemory provider, where MigrateAsync
+            // throws InvalidOperationException. Use EnsureCreatedAsync as the
+            // schema-bootstrap path for non-relational providers — this is a
+            // test seam only; production always hits the relational branch.
+            if (context.Database.IsRelational())
+            {
+                await context.Database.MigrateAsync();
+            }
+            else
+            {
+                await context.Database.EnsureCreatedAsync();
+            }
         }
         catch (Exception ex)
         {
