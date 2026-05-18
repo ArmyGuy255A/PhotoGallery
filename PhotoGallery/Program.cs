@@ -404,6 +404,28 @@ app.UseForwardedHeaders();
 if (!string.IsNullOrEmpty(settings.BasePath))
 {
     app.UsePathBase(settings.BasePath);
+
+    // UsePathBase only *strips* the matching prefix into Request.PathBase; it
+    // doesn't reject requests that arrived without the prefix. Behind nginx
+    // that should never happen, but if the backend is reached directly
+    // (misconfigured upstream, internal probe, attacker bypass), serving the
+    // app at both /api/* AND /photogallery/api/* would mask the misconfig
+    // and produce confusing logs. Return 404 for any request whose effective
+    // PathBase doesn't equal the configured BasePath.
+    //
+    // Acceptance criterion (#160): with BasePath=/photogallery,
+    // GET /api/healthz must return 404, GET /photogallery/api/healthz 200.
+    var configuredBase = settings.BasePath.TrimEnd('/');
+    app.Use(async (ctx, next) =>
+    {
+        if (!string.Equals(ctx.Request.PathBase.Value?.TrimEnd('/'),
+                configuredBase, StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        await next();
+    });
 }
 
 if (app.Environment.IsDevelopment())
