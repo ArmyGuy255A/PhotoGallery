@@ -249,4 +249,23 @@ photo); it's still on the human runbook checklist.
 
 ## Teardown
 
+```powershell
+# nginx
+cd D:\repos\nginx-appeid-s5\local
+docker compose down
+
+# Frontend + backend: Ctrl+C in each shell.
+# Or kill by PID if they were started detached:
+Get-NetTCPConnection -LocalPort 5105,4300 |
+  Select-Object -ExpandProperty OwningProcess -Unique |
+  ForEach-Object { Stop-Process -Id $_ -Force }
+```
+
+Re-running the smoke after teardown should fail check **A** with a
+connection-refused (proves nginx is gone).
+
+---
+
+## Troubleshooting
+
 _TODO — added in follow-up commit._
