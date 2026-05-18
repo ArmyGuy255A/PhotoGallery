@@ -45,6 +45,7 @@ namespace PhotoGallery.Tests;
 /// to host the real Program.cs pipeline in-process with an EF Core InMemory
 /// provider swapped in for SqlServer.
 /// </summary>
+[Collection(BasePathEnvVarsCollection.Name)]
 public class SignalRHubPathBaseTests
 {
     /// <summary>
