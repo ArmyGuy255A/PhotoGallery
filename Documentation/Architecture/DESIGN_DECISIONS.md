@@ -1823,3 +1823,89 @@ Separately, the SPA had no real-time visibility into processing. Per-quality pro
 ### SPA follow-up
 
 The Angular client work (`@microsoft/signalr` package, `PhotoProgressService`, `PhotoService.uploadPhoto` rewrite, per-photo progress UI) ships as a separate PR. Until then, the existing multipart endpoint remains in service for end-to-end flows.
+
+
+---
+
+## D018: Reverse-Proxy Sub-Path Mounting via Configurable `BasePath`
+
+**Status:** ✅ Accepted (epic #159, stories S1–S6 shipped to `trial`)
+**Decision owner:** pg-architect
+**Related:** D016 (Release-driven deployment — deploy order matters for prefix changes), D017 (SignalR hub topology — the hub now mounts under `BasePath` automatically)
+
+### Context
+
+PhotoGallery is one of several tenants hosted behind `nginx-appeid` at `https://appeid.app`, each on its own sub-path (PhotoGallery at `/photogallery/`, FoundryVTT at `/foundryvtt/`, future tenants likely at `/<name>/`). The proxy is the single TLS-terminating entry point for the apex; tenants live in Azure Container Apps with private ingress.
+
+Two problems pushed us to formalise the pattern:
+
+1. **`sub_filter` rewriting was brittle.** Until S5, nginx stripped the `/photogallery` prefix on the way in and used `sub_filter '<base href="/">' '<base href="/photogallery/">'` on the way out to relink the SPA. That only works on uncompressed `text/html` responses, mangles intermediate caches, breaks the moment a CDN sits in front of nginx, and produced subtle SignalR URL mismatches on the WebSocket negotiate roundtrip.
+2. **No paved road for new tenants.** Each new tenant was reinventing whether to strip the prefix at nginx, set `--base-href`, set `UsePathBase`, or some combination — usually all three, inconsistently.
+
+### Decision
+
+PhotoGallery (and, by example, future tenants on `nginx-appeid`) mount under a single configurable sub-path with a consistent, four-part shape:
+
+**1. Backend reads `ConfigurationSettings:BasePath`.**
+The setting lives on the shared `ConfigurationSettings` POCO (`Configuration/ConfigurationSettings.cs`), defaults to `""`, and is bound from `appsettings.{Environment}.json`. `Trial` and `Production` ship `"BasePath": "/photogallery"`; local dev leaves it empty.
+
+**2. Backend applies `UseForwardedHeaders()` + `UsePathBase(BasePath)` before routing.**
+In `PhotoGallery/Program.cs`, `ForwardedHeadersOptions` enables `XForwardedFor | XForwardedProto | XForwardedHost | XForwardedPrefix` and **clears `KnownProxies` and `KnownNetworks`**. This is non-obvious: ACA fronts the API on an internal ingress IP that is neither loopback nor any default-known proxy network, so the middleware silently no-ops if the lists aren't cleared. `app.UseForwardedHeaders()` runs first, then `app.UsePathBase(settings.BasePath)`, then routing. Controllers, attribute routes, and `MapHub<PhotoProgressHub>("/hubs/photo-progress")` are all naturally mounted under the prefix with **no per-endpoint code change**.
+
+**3. Frontend ships `<base href="/photogallery/">` at build time.**
+`FE.PhotoGallery/package.json` exposes two relevant scripts:
+
+- `build:prod` — `ng build --configuration production --base-href=/photogallery/` (used by the prod Dockerfile + SWA pipeline).
+- `start:proxy` — `ng serve --base-href=/photogallery/` (used by the local-proxy dev loop where the FE is served through nginx).
+
+Routerless `<base href>` injection means every Angular asset request and router URL is already prefix-aware. No runtime path rewriting is needed in the browser.
+
+**4. nginx PRESERVES the `/photogallery` prefix and signals it via `X-Forwarded-Prefix`.**
+Post-`nginx-appeid#9`, both `nginx-appeid/Services/appeid/server-appeid.conf` (production) and `nginx-appeid/local/server-appeid.conf` (local-proxy dev) proxy_pass the full prefixed URI to upstream and set `proxy_set_header X-Forwarded-Prefix /photogallery`. A dedicated `location /photogallery/hubs/ { ... }` block carries the `Upgrade`/`Connection` headers required for SignalR's WebSocket transport. The `sub_filter` directive is **retired** from both files.
+
+### Diagram — request topology through the proxy
+
+```mermaid
+flowchart LR
+  B[Browser] -->|/photogallery/api/*| N[nginx-appeid]
+  B -->|/photogallery/hubs/*| N
+  B -->|/photogallery/*| N
+  N -->|/photogallery/api/*<br/>X-Forwarded-Prefix: /photogallery| API[PhotoGallery API<br/>Azure Container Apps]
+  N -->|/photogallery/hubs/*<br/>WebSocket upgrade<br/>X-Forwarded-Prefix: /photogallery| API
+  N -->|/photogallery/*<br/>Host rewrite| SWA[SWA static assets]
+  API -->|UsePathBase /photogallery<br/>ForwardedHeaders| Routing[Endpoint routing<br/>Controllers + MapHub]
+```
+
+### Rationale
+
+- **Pattern reuse.** Future tenants on `nginx-appeid` follow the same four parts: set `BasePath` in appsettings, ship the right `--base-href`, add `proxy_pass` + `X-Forwarded-Prefix` + a `/hubs/` location if they use WebSockets. No bespoke rewriting per tenant.
+- **`sub_filter` is fundamentally fragile.** It depends on response bodies being uncompressed and matching a fixed string literal, breaks under any CDN/edge cache, and silently no-ops if a build ever changes the `<base>` element layout. Build-time `--base-href` is deterministic.
+- **Native ASP.NET primitives.** `UsePathBase` + `ForwardedHeaders` are the canonical Microsoft-recommended shape for reverse-proxy mounting. Link generation (`LinkGenerator`, `Url.Action`, OpenAPI `servers[].url`) all become prefix-aware for free.
+
+### Consequences
+
+- **Three valid dev shapes**, documented in `FE.PhotoGallery/README.md`:
+  1. **raw** — `ng serve` at `http://localhost:4200/`, backend at `http://localhost:5000/`, `BasePath=""`. No proxy. Fastest inner loop.
+  2. **local-proxy** — `npm run start:proxy` + docker-compose `nginx-appeid` in front. Mirrors prod URL shape. Tracked follow-up `#167` updates the FE `proxy.conf.json` for SignalR through the proxy.
+  3. **prod** — built via `build:prod`, served by SWA, fronted by `nginx-appeid` at `https://appeid.app/photogallery/`.
+- **Backend `MapHub<...>` and `MapControllers()` need no code change** at the call sites — they mount under the configured `BasePath` automatically. New endpoints inherit the prefix for free.
+- **Future tenants** need only: a `BasePath` in their settings, a build-time `--base-href`, and a nginx block that preserves the prefix + sets `X-Forwarded-Prefix`. No bespoke rewriting.
+- **Deploy order matters.** Per D016, the backend with `UsePathBase` (#168) must ship to `trial` before the nginx prefix-preserve change (`nginx-appeid#9`); otherwise the proxy forwards `/photogallery/api/*` to a backend that 404s the prefix. Tested and observed in the trial rollout.
+- **Local-proxy dev's `proxy.conf.json`** still needs an update so `ng serve --base-href=/photogallery/` proxies `/photogallery/hubs/*` correctly. Tracked as `#167`.
+- **VSCode task** for the local-proxy compose loop is tracked as `#170`.
+
+### Out of scope of this decision
+
+- **Server-side OAuth callback URI shape.** PhotoGallery does not generate server-side OAuth callbacks today (auth is JWT-bearer + Azure AD on the SPA side). If we add a server-side OAuth handler later, the callback URL builder must honor `Request.PathBase` to remain prefix-aware — but that's a future decision.
+- **Generalising the pattern as a reusable skill.** Possible follow-up; not in this epic.
+
+### Citations
+
+- `Configuration/ConfigurationSettings.cs` — `BasePath` property + XML docs (default `""`).
+- `PhotoGallery/Program.cs` — `ForwardedHeadersOptions` configuration (lines ~140–155, `KnownProxies`/`KnownNetworks` cleared) and the `UseForwardedHeaders()` → `UsePathBase(settings.BasePath)` ordering (lines ~396–418).
+- `PhotoGallery/appsettings.Trial.json`, `PhotoGallery/appsettings.Production.json` — `"BasePath": "/photogallery"`.
+- `PhotoGallery.Tests/BasePathRoutingTests.cs`, `PhotoGallery.Tests/SignalRHubPathBaseTests.cs`, `PhotoGallery.Tests/BasePathEnvVarsCollection.cs` — coverage for prefix-aware routing + SignalR hub negotiate under the prefix.
+- `FE.PhotoGallery/package.json` — `build:prod` (`--base-href=/photogallery/`) and `start:proxy` scripts.
+- `nginx-appeid/Services/appeid/server-appeid.conf`, `nginx-appeid/local/server-appeid.conf` — post-`nginx-appeid#9` shape (preserves prefix, dedicated `/photogallery/hubs/` location, `sub_filter` removed).
+- `Documentation/Runbooks/local-proxy-dev.md` — local docker-compose runbook + smoke script (ships with #173).
+- Stories shipped: #168 (S1 backend), #171 (S2 hub tests), #169 (S3 FE base-href), #172 (S4 e2e), `nginx-appeid#9` (S5 nginx), #173 (S6 runbook).
