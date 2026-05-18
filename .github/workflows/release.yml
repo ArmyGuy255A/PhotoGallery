@@ -186,10 +186,28 @@ jobs:
 
       - name: Build (production)
         working-directory: FE.PhotoGallery
-        # --base-href=/photogallery/ rewrites <base href> in the emitted
-        # index.html so Angular routes/assets resolve under the sub-path
-        # bound to the appeid.app custom domain.
-        run: npm run build -- --configuration=production --base-href=/photogallery/
+        # build:prod wraps `ng build --configuration production
+        # --base-href=/photogallery/`. Baking the base href into the
+        # emitted index.html replaces the nginx sub_filter rewrite path
+        # (sub_filter retired in nginx-appeid S5).
+        run: npm run build:prod
+
+      - name: Assert <base href> baked into bundle
+        working-directory: FE.PhotoGallery
+        # Hard guard: if a future Angular CLI / config change ever drops
+        # the --base-href flag, every relative asset under /photogallery/
+        # 404s in prod. Fail the build here instead of at runtime.
+        run: |
+          set -euo pipefail
+          INDEX=dist/fe.photo-gallery/browser/index.html
+          test -f "$INDEX" || { echo "::error::$INDEX not found"; exit 1; }
+          if ! grep -q '<base href="/photogallery/">' "$INDEX"; then
+            echo "::error::expected <base href=\"/photogallery/\"> in $INDEX"
+            echo "----- index.html (head) -----"
+            sed -n '1,20p' "$INDEX"
+            exit 1
+          fi
+          echo "ok: <base href=\"/photogallery/\"> present in $INDEX"
 
       # Stage the deploy payload so SWA serves the app at /photogallery/*:
       #   deploy/photogallery/                  <- Angular bundle
