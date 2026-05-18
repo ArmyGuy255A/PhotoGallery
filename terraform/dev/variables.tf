@@ -60,11 +60,24 @@ variable "cors_allowed_origins" {
   description = "Origins allowed to fetch SAS-signed blob URLs from the browser."
   type        = list(string)
   default = [
+    # nginx-appeid edge (prod)
+    "https://appeid.app",
+    "https://www.appeid.app",
+    # SWA default hostname (direct hit, used in early/manual flows)
     "https://agreeable-tree-043fa290f.7.azurestaticapps.net",
+    # Local dev (raw `ng serve`)
     "http://localhost:4200",
     "https://localhost:4200",
     "http://localhost:4300",
-    "https://localhost:4300"
+    "https://localhost:4300",
+    # Local-proxy dev (nginx-appeid local docker stack)
+    "https://localhost:8000",
+    # Azure-pointing test stack (`nginx-appeid: Azure-pointing test stack`
+    # VSCode task: prod conf in a local container at :8001 pointed at the
+    # real Azure ACA + SWA + blob storage upstreams). Plain http because
+    # the test container listens on the same plain HTTP port ACA edges
+    # terminate TLS at in prod.
+    "http://localhost:8001"
   ]
 }
 
