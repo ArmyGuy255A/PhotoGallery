@@ -281,4 +281,68 @@ connection-refused (proves nginx is gone).
 | nginx healthz curl hangs | Container started but TLS handshake failing — usually a missing or 0-byte cert | Re-run `generate-certs.ps1`, then `docker compose up -d --build` (the `--build` is important; the cert is COPYed into the image). |
 
 ---
-
+
+## Known gaps until follow-ups land
+
+This runbook documents the **target** local-proxy dev loop. As of the
+S6 PR being opened, two follow-ups are still open and partly block the
+acceptance bar:
+
+- **#167 — FE `proxy.conf.json` add `/photogallery/api/*` and
+  `/photogallery/hubs/*` routes.** Until merged, validation steps **C**
+  and **D** above will not return the expected backend response;
+  they'll return the SPA's `index.html` fallback (HTTP 200 with HTML
+  body). The smoke script flags this case explicitly.
+
+- **#170 — VSCode task to launch proxy-mode dev server.** Quality-of-
+  life only. Until merged, the three start-sequence shells are
+  driven by hand.
+
+In addition, when validating this runbook locally on 2026-05-17 we hit
+two backend-startup blockers that are **not new** to this story but are
+worth recording so the next runner doesn't trip on them:
+
+- `dotnet run` requires `ConnectionStrings:DefaultConnection` and
+  `Authentication:Jwt:Key` to be resolvable. Neither is part of the
+  committed `appsettings.Development.json` (the file isn't even
+  present in S1's worktree). Stand up SQL Server in Docker per the
+  repo memory note and provide both values via env var or a
+  gitignored overlay before running the smoke.
+
+- S3's `npm run start:proxy` script (`ng serve --base-href=/photogallery/`)
+  surfaced `Error: Unknown argument: base-href` on Angular 19.2 in
+  this environment. If you see this, raise it against the S3 PR — the
+  base href on `ng serve` may need to move to
+  `angular.json → projects.<>.architect.serve.options.baseHref`.
+  Don't fix it inside the S6 PR; it's S3's lane.
+
+---
+
+## Validation status
+
+> 🟡 **Partially validated live; remainder theoretical based on
+> S1/S3/S5 designs.**
+
+| Check | Status | Notes |
+|---|---|---|
+| A. `https://localhost:8000/healthz` → 200 `ok` | ✅ live, 2026-05-17 | nginx layer confirmed working with S5 build (`smoke-local-proxy.ps1` step A PASS). |
+| B. `https://localhost:8000/photogallery/api/healthz` → 200 | ⚪ theoretical | Backend startup blocked by missing local dev secrets (see Known gaps); design from S1+S5 says 200. With nginx alone the smoke script correctly reports HTTP 502 here, proving nginx is forwarding the request to a (non-running) upstream — i.e. routing is right. |
+| C. `https://localhost:8000/photogallery/api/config/public` → 200 JSON | ⚪ theoretical | Same as B, plus blocked by #167 on the FE proxy. |
+| D. `/photogallery/hubs/photo-progress/negotiate` → 200 or 401 | ⚪ theoretical | Same as B, plus blocked by #167. |
+| E. SPA loads in browser | ⚪ theoretical | Blocked by S3's `start:proxy` script error in this environment. |
+| F. Upload SignalR end-to-end | ⚪ theoretical | Out of scope for the smoke script; for the human checklist once auth works. |
+
+The runbook will be re-validated and the table refreshed once S1+S3+S5
+land on `trial` and #167 is fixed. At that point, this same runbook
+should be promoted to a Trial smoke runbook (see follow-up note on the
+S6 PR).
+
+---
+
+## See also
+
+- [`FE.PhotoGallery/README.md` — Three dev shapes](../../FE.PhotoGallery/README.md#three-dev-shapes)
+- [`Documentation/Architecture/DESIGN_DECISIONS.md` — D016 branching contract](../Architecture/DESIGN_DECISIONS.md)
+- Epic #159 — Configurable base path for reverse-proxy deployment
+- Story PRs: #168 (S1), #171 (S2), #169 (S3), #172 (S4), nginx-appeid#9 (S5)
+- Follow-ups: #167 (FE proxy routes), #170 (VSCode task)
