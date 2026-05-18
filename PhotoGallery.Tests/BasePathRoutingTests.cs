@@ -27,6 +27,7 @@ namespace PhotoGallery.Tests;
 /// database. The HealthController exposes /api/healthz returning the current
 /// request scheme; that endpoint is the probe surface for all three tests.
 /// </summary>
+[Collection(BasePathEnvVarsCollection.Name)]
 public class BasePathRoutingTests
 {
     /// <summary>
