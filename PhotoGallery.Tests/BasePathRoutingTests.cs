@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PhotoGallery.Data;
@@ -28,43 +29,63 @@ namespace PhotoGallery.Tests;
 /// </summary>
 public class BasePathRoutingTests
 {
+    /// <summary>
+    /// The entry-point in <c>Program.cs</c> calls
+    /// <c>builder.Services.AddConfigurationServices(builder.Configuration, ...)</c>
+    /// during the synchronous Main path, which runs BEFORE
+    /// <see cref="IWebHostBuilder.ConfigureAppConfiguration"/> callbacks
+    /// supplied via <see cref="WebApplicationFactory{T}.WithWebHostBuilder"/>
+    /// are invoked. That means an in-memory config source registered via WAF
+    /// never reaches the settings snapshot used to wire JWT, CORS, etc.
+    ///
+    /// Environment variables, however, are part of the default configuration
+    /// chain that <c>WebApplication.CreateBuilder</c> registers up-front, so
+    /// setting them BEFORE constructing the factory is the supported way to
+    /// inject test config. xUnit runs tests inside a single class
+    /// sequentially (parallelism is per-collection), so concurrent tests in
+    /// this class can't trample each other's env vars.
+    /// </summary>
     private static WebApplicationFactory<Program> CreateFactory(string basePath)
     {
+        // Minimum config needed for Program.cs to build successfully under
+        // ASPNETCORE_ENVIRONMENT=Test (no appsettings.Test.json connection
+        // string, no Key Vault, no real OAuth).
+        Environment.SetEnvironmentVariable("BasePath", basePath);
+        Environment.SetEnvironmentVariable("DISABLE_AUTH", "true");
+        Environment.SetEnvironmentVariable("WorkersEnabled", "false");
+        Environment.SetEnvironmentVariable("Authentication__Jwt__Key",
+            "test-key-test-key-test-key-test-key-1234567890");
+        Environment.SetEnvironmentVariable("Authentication__Jwt__Issuer", "PhotoGalleryTest");
+        Environment.SetEnvironmentVariable("Authentication__Jwt__Audience", "PhotoGalleryTestClient");
+        Environment.SetEnvironmentVariable("Google__ClientId", "test-client-id");
+        Environment.SetEnvironmentVariable("Google__ClientSecret", "test-client-secret");
+        Environment.SetEnvironmentVariable("Email__Provider", "mock");
+        Environment.SetEnvironmentVariable("ConnectionStrings__DefaultConnection",
+            "Server=ignored;Database=ignored");
+
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
             {
                 builder.UseEnvironment("Test");
 
-                // Inject test config: BasePath under test, plus the minimum
-                // settings required for Program.cs to build (JWT key, Google
-                // client placeholders, DISABLE_AUTH).
-                builder.ConfigureAppConfiguration((_, config) =>
-                {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["BasePath"] = basePath,
-                        ["DISABLE_AUTH"] = "true",
-                        ["WorkersEnabled"] = "false",
-                        ["Authentication:Jwt:Key"] = "test-key-test-key-test-key-test-key-1234567890",
-                        ["Authentication:Jwt:Issuer"] = "PhotoGalleryTest",
-                        ["Authentication:Jwt:Audience"] = "PhotoGalleryTestClient",
-                        ["Google:ClientId"] = "test-client-id",
-                        ["Google:ClientSecret"] = "test-client-secret",
-                        ["Email:Provider"] = "mock",
-                        ["ConnectionStrings:DefaultConnection"] = "Server=ignored;Database=ignored",
-                    });
-                });
-
-                // Swap SqlServer DbContext for an EF Core InMemory provider —
-                // the production registration's options lambda is never invoked
-                // because we remove it before resolution.
+                // Swap SqlServer DbContext for an EF Core InMemory provider.
+                // We must remove every EF Core registration tied to the
+                // SqlServer provider (DbContextOptions, the open-generic
+                // IDbContextOptionsConfiguration, and the context itself);
+                // otherwise EF detects two providers in the DI container and
+                // throws InvalidOperationException at first context use.
                 builder.ConfigureServices(services =>
                 {
-                    var dbContextDescriptors = services
-                        .Where(d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>)
-                                 || d.ServiceType == typeof(ApplicationDbContext))
+                    var efDescriptors = services
+                        .Where(d =>
+                            d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>)
+                            || d.ServiceType == typeof(DbContextOptions)
+                            || d.ServiceType == typeof(ApplicationDbContext)
+                            || (d.ServiceType.IsGenericType
+                                && d.ServiceType.GetGenericTypeDefinition()
+                                    == typeof(IDbContextOptionsConfiguration<>)))
                         .ToList();
-                    foreach (var d in dbContextDescriptors)
+                    foreach (var d in efDescriptors)
                     {
                         services.Remove(d);
                     }
