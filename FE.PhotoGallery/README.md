@@ -59,14 +59,73 @@ Angular CLI does not come with an end-to-end testing framework by default. You c
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
 
 
+## Three dev shapes
+
+PhotoGallery's FE supports three valid run shapes. Pick the one that
+matches what you're actually testing. The base href and `apiUrl` differ
+in each.
+
+### 1. Raw dev loop — no proxy
+
+For day-to-day component / service work. No nginx, no sub-path.
+
+```bash
+npm start                # ng serve --host 0.0.0.0
+```
+
+- URL: `http://localhost:4300/`
+- `<base href>`: `/` (the source `src/index.html` value, unmodified)
+- `apiUrl`: `''` (from `environment.ts`)
+- Backend: `dotnet watch` at `http://localhost:5000` with `BasePath=''`
+  (no path prefix).
+
+### 2. Local docker stack — behind nginx-appeid
+
+Mirrors the prod topology. Use when you're touching anything that
+involves the proxy (base href, SignalR, CORS, sub-path routing). Bring
+up `nginx-appeid/local/docker-compose.yml` first, then:
+
+```bash
+npm run start:proxy      # ng serve --base-href=/photogallery/
+```
+
+- URL: `https://localhost:8000/photogallery/`
+- `<base href>`: `/photogallery/` (rewritten by `ng serve --base-href`)
+- `apiUrl`: `''` (still `environment.ts`; nginx routes `/photogallery/api/*`
+  to the backend container)
+- Backend: `dotnet watch` (or container) with `BasePath=/photogallery`
+  so `UsePathBase` strips the prefix.
+
+### 3. Production — SWA behind nginx-appeid
+
+What `release.yml` builds and deploys. Not something you run locally.
+
+```bash
+npm run build:prod       # ng build --configuration production --base-href=/photogallery/
+```
+
+- URL: `https://appeid.app/photogallery/`
+- `<base href>`: `/photogallery/` (baked into the emitted
+  `dist/fe.photo-gallery/browser/index.html` at build time)
+- `apiUrl`: `/photogallery` (from `environment.prod.ts`; produces
+  absolute `/photogallery/api/...` URLs that nginx forwards to the
+  backend ACA)
+- Backend: container app with `BasePath=/photogallery`.
+
+> **Note:** until the S5 nginx-appeid PR lands, the prod nginx config
+> still includes a `sub_filter` that tried to rewrite `<base href="/">`
+> to `<base href="/photogallery/">`. With build-time `--base-href` the
+> source string no longer appears in the bundle, so the directive is a
+> harmless no-op until it is removed.
+
+
 ## Production deployment (Azure Static Web Apps)
 
 The frontend is deployed to an Azure Static Web App via GitHub Actions
-(`.github/workflows/deploy-frontend.yml`) on every push to `main` that
-touches `FE.PhotoGallery/**`. The workflow runs `npm ci` + `npm run build
--- --configuration=production` and ships the contents of
-`dist/fe.photo-gallery/browser` to the SWA via the
-`Azure/static-web-apps-deploy@v1` action.
+(`.github/workflows/release.yml`) on every published release. The
+workflow runs `npm ci` + `npm run build:prod` and ships the contents of
+`dist/fe.photo-gallery/browser` (staged under `deploy/photogallery/`)
+to the SWA via the `Azure/static-web-apps-deploy@v1` action.
 
 ### Production runtime topology
 
