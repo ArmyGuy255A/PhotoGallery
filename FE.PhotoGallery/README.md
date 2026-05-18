@@ -31,10 +31,11 @@ ng generate --help
 To build the project run:
 
 ```bash
-ng build
+ng build              # raw build, base href stays '/' (matches `npm start`)
+npm run build:prod    # production build with --base-href=/photogallery/ (used by release.yml)
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
+This will compile your project and store the build artifacts in the `dist/` directory. The production build optimizes your application for performance and speed and bakes `<base href="/photogallery/">` into `dist/fe.photo-gallery/browser/index.html` so the SPA can be served behind the nginx-appeid sub-path. See **Three dev shapes** below for when to use each.
 
 ## Running unit tests
 
